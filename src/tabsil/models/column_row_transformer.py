@@ -86,6 +86,10 @@ MAX_CLASSES = 160
 # row-stage batch of 81,920). Larger batches are split (each batch element is independent, so the
 # values are the same). Training batches are smaller, so training is unchanged
 SDPA_MAX_BATCH = 65_535
+# Cap on the logits built at once when attention with log-sum-exp (`_attention_lse`) is computed
+# off the GPU kernel (CPU): the batch is split above it (each batch element is independent, so the
+# values are the same). 2^28 logits = 1 GiB of float32
+LSE_CHUNK_LOGITS = 1 << 28
 # Whether the classification retrieval decoder skips the score matrix (`fused` of
 # `RetrievalDecoder`) in training forwards with activation checkpointing on
 # (`ColumnRowTransformer.activation_checkpointing_rows`). On a 60,000-row table that matrix is
@@ -454,6 +458,38 @@ class Attention(nn.Module):
             out = torch.cat([train, test], dim=2)
         return self.out(out.transpose(1, 2).reshape(n, length, dim))
 
+    # The three methods below split `forward` (cross-attention, no `n_context`) into queries,
+    # keys/values and output. Inference that accumulates the softmax over chunks of keys
+    # (`_OnlineSummary`) uses them. They compute the same formulas as `forward` (which is left as
+    # it is, so that training and unchunked inference keep their computation order)
+
+    def split_queries(self, x: torch.Tensor, n_keys: int) -> torch.Tensor:
+        """Queries (N, H, L, d): q RMSNorm, temperature (for `n_keys` keys), DiagScale. RoPE is not
+        supported: the key positions would differ per chunk."""
+        if self.rope_base is not None:
+            raise ValueError("RoPE attention cannot be computed over chunks of keys")
+        dim = x.shape[-1]
+        q = self.q_norm(self._heads(F.linear(x, self.qkv.weight[:dim])))
+        q = _scale_query(self, q, n_keys)
+        delta = getattr(self, "diag_scale", None)
+        if delta is not None:
+            h, d = q.shape[1], q.shape[3]
+            q = (q.float() * (1.0 + delta.view(1, h, 1, d))).to(q.dtype)
+        return q
+
+    def split_keys(self, context: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Keys and values (N, H, L, d) of `context` (k RMSNorm)."""
+        w = self.qkv.weight
+        dim = w.shape[1]
+        k = self.k_norm(self._heads(F.linear(context, w[dim : 2 * dim])))
+        v = self._heads(F.linear(context, w[2 * dim :]))
+        return k, v
+
+    def split_output(self, out: torch.Tensor) -> torch.Tensor:
+        """Per-head attention output (N, H, L, d) -> output layer (N, L, D)."""
+        n, heads, length, d = out.shape
+        return self.out(out.transpose(1, 2).reshape(n, length, heads * d))
+
 
 def _batched_sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """Scaled dot-product attention; a batch larger than `SDPA_MAX_BATCH` is split into batches of
@@ -468,6 +504,101 @@ def _batched_sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Te
             for i in range(0, n, step)
         ]
     )
+
+
+def _wide(t: torch.Tensor) -> torch.Tensor:
+    """t in float32, or in its own dtype if that is wider (float64)."""
+    return t.to(torch.promote_types(t.dtype, torch.float32))
+
+
+def _attention_lse(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Softmax attention output (N, H, Lq, d) and the per-query log-sum-exp (N, H, Lq) in float32
+    (float64 for float64 inputs; `_OnlineSummary` merges chunks of keys with it). q and k are cast
+    to v's dtype (as SDPA under autocast).
+
+    On the GPU this is SDPA's memory-efficient kernel (the aten op that also returns the
+    log-sum-exp): logits and softmax are float32 inside the kernel and the output has the input
+    dtype. Elsewhere (CPU, float64) the logits are built in float32 or wider, `LSE_CHUNK_LOGITS` at
+    a time."""
+    q, k = q.to(v.dtype), k.to(v.dtype)
+    n = q.shape[0]
+    if q.is_cuda and v.dtype != torch.float64:
+        if n > SDPA_MAX_BATCH:
+            parts = [
+                _attention_lse(
+                    q[i : i + SDPA_MAX_BATCH], k[i : i + SDPA_MAX_BATCH], v[i : i + SDPA_MAX_BATCH]
+                )
+                for i in range(0, n, SDPA_MAX_BATCH)
+            ]
+            return torch.cat([p[0] for p in parts]), torch.cat([p[1] for p in parts])
+        with torch.autocast("cuda", enabled=False):
+            out, lse = torch.ops.aten._scaled_dot_product_efficient_attention(q, k, v, None, True)[
+                :2
+            ]
+        return out, lse[..., : q.shape[-2]].float()  # the kernel may pad the query length
+    per_item = q[0].numel() // q.shape[-1] * k.shape[-2]  # logits of one batch element
+    step = max(1, LSE_CHUNK_LOGITS // max(1, per_item))
+    outs, lses = [], []
+    with torch.autocast(q.device.type, enabled=False):
+        for i in range(0, n, step):
+            qi, ki, vi = (_wide(t[i : i + step]) for t in (q, k, v))
+            s = (qi @ ki.transpose(-1, -2)) * q.shape[-1] ** -0.5
+            lse = s.logsumexp(-1)
+            outs.append((torch.exp(s - lse[..., None]) @ vi).to(v.dtype))
+            lses.append(lse)
+    return torch.cat(outs), torch.cat(lses)
+
+
+class _OnlineSummary:
+    """`InducedBlock.summary` accumulated over chunks of train rows (online softmax; inference,
+    `ColumnRowTransformer._rows_interleaved_offload`). The queries of the summary attention are the
+    inducing points, the same for every column; the keys and values are the train rows. The
+    attention output and log-sum-exp of each chunk, merged in float32 (`_wide`; weights
+    exp(lse_j - lse)), equal one attention over all train rows (only the computation order
+    differs; in float64 they agree to rounding).
+
+    The temperature depends on the key count, so the train-row count `n_train` is given up front.
+    `add` takes a chunk (N, rows, E), `finish` returns the summary (N, n_inducing, E). N = datasets
+    x columns."""
+
+    def __init__(self, block: InducedBlock, n: int, n_train: int, dtype: torch.dtype) -> None:
+        self.block, self.n = block, n
+        self.ind = block.inducing.to(dtype)[None]  # (1, n_inducing, E): the same for all columns
+        self.q = block.summarize.split_queries(block.norms["ind"](self.ind), n_train)
+        self.q_batch: torch.Tensor | None = None  # q expanded to N (`_wide`, at the first `add`)
+        self.acc: torch.Tensor | None = None  # output so far (N, H, n_inducing, d), `_wide`
+        self.lse: torch.Tensor | None = None  # log-sum-exp so far (N, H, n_inducing)
+        self.value_dtype = dtype  # SDPA output dtype (the dtype of v, set at the first `add`)
+
+    def add(self, h_rows: torch.Tensor) -> None:
+        attention = self.block.summarize
+        k, v = attention.split_keys(self.block.norms["rows"](h_rows))
+        # q, k and v are rounded to the dtype SDPA gets when computed at once (bfloat16 under
+        # autocast) and then computed in float32 (`_wide`), so that the per-chunk outputs are not
+        # rounded to bfloat16 (computed at once, the output is rounded once, at the end)
+        self.value_dtype = v.dtype
+        if self.q_batch is None:
+            q = _wide(self.q.to(v.dtype))
+            self.q_batch = q.expand(self.n, -1, -1, -1).contiguous()
+        k, v = _wide(k.to(v.dtype)), _wide(v)
+        out, lse = _attention_lse(self.q_batch, k, v)
+        if self.acc is None:
+            self.acc, self.lse = out, lse
+            return
+        total = torch.logaddexp(self.lse, lse)
+        self.acc.mul_(torch.exp(self.lse - total)[..., None])
+        self.acc.add_(out * torch.exp(lse - total)[..., None])
+        self.lse = total
+
+    def finish(self) -> torch.Tensor:
+        if self.acc is None:
+            raise ValueError("no train rows were added")
+        block = self.block
+        out = block.summarize.split_output(self.acc.to(self.value_dtype))
+        ind = self.ind.expand(self.n, -1, -1) + out
+        return ind + block.summarize_mlp(block.norms["ind_mlp"](ind))
 
 
 def _call(block: nn.Module, ckpt: bool, *args, **kwargs) -> torch.Tensor:
@@ -752,7 +883,7 @@ def _clear_cuda_error() -> None:
 
 
 def _host_state(shape: tuple[int, ...], dtype: torch.dtype, pin: bool) -> tuple[torch.Tensor, bool]:
-    """The CPU cell state (offload of `ColumnRowTransformer._rows_interleaved_chunked`): a regular
+    """The CPU cell state (offload of `ColumnRowTransformer._rows_interleaved_offload`): a regular
     (pageable) CPU tensor of the exact size, registered as pinned in place (`cudaHostRegister`) if
     `pin`. `torch.empty(..., pin_memory=True)` goes through the caching host allocator, which rounds
     sizes up to a power of two (984 GB -> 1 TiB for BeyondArena's maps_router_eta_1m) and keeps
@@ -802,6 +933,143 @@ def _release_host_state(state: torch.Tensor, registered: bool) -> None:
         )
 
 
+class _HostRows:
+    """Reads the cell state h (B, R, C, E) to the device in row chunks and writes it back
+    (inference, `ColumnRowTransformer._rows_interleaved_offload`). When h is on the CPU and the
+    device is a GPU, the copies overlap the compute:
+
+    - Reads (`rows`): the next chunk is read ahead on its own stream (H2D), alternating between two
+      device buffers. The compute stream waits for that chunk's copy event, and a buffer is
+      refilled only after the compute is done with the chunk it held
+    - Writes (`write`): another stream (D2H) waits for the compute event and copies. At most two
+      chunks are being written at a time (they hold device memory). `flush` waits until every write
+      has reached the CPU
+    - Each direction's copies are issued by its own thread. With pageable (unregistered) state a
+      copy call holds the CPU until it is done, so it must be off the thread that launches the
+      compute to overlap (with registered state the call returns at once)
+
+    The chunk being read (the next one) and the chunks being written (earlier ones) are different
+    rows, so they never overlap. `flush` before moving to the next block. Otherwise (h on the
+    device, or a CPU device in tests) the chunks are copied in turn."""
+
+    WRITES_IN_FLIGHT = 2
+
+    def __init__(self, h: torch.Tensor, step: int, device: torch.device) -> None:
+        import collections
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.h, self.step, self.device = h, step, device
+        self.overlap = device.type == "cuda" and h.device.type == "cpu"
+        # Inference mode is per thread, so the copy threads use the caller's (writing to an
+        # inference tensor must happen inside inference mode)
+        self.inference = torch.is_inference_mode_enabled()
+        self.pending: collections.deque = collections.deque()
+        if self.overlap:
+            self.read_stream = torch.cuda.Stream(device)
+            self.write_stream = torch.cuda.Stream(device)
+            self.reader = ThreadPoolExecutor(1, thread_name_prefix="h2d")
+            self.writer = ThreadPoolExecutor(1, thread_name_prefix="d2h")
+            self.buffers: list[torch.Tensor] | None = None
+            # event of the compute being done with each buffer (carried into the next `rows`)
+            self.free: list[torch.cuda.Event | None] = [None, None]
+
+    def chunks(self) -> list[tuple[int, int]]:
+        r = self.h.shape[1]
+        return [(r0, min(r0 + self.step, r)) for r0 in range(0, r, self.step)]
+
+    def rows(self):
+        """(r0, r1, h[:, r0:r1] on the device) per row chunk. A yielded tensor is valid only until
+        the next chunk is requested."""
+        chunks = self.chunks()
+        if not self.overlap:
+            for r0, r1 in chunks:
+                yield r0, r1, self.h[:, r0:r1].to(self.device)
+            return
+        if self.buffers is None:
+            b, _, c, e = self.h.shape
+            shape = (b, min(self.step, self.h.shape[1]), c, e)
+            self.buffers = [
+                torch.empty(shape, dtype=self.h.dtype, device=self.device) for _ in range(2)
+            ]
+        free, buffers = self.free, self.buffers
+        stream = torch.cuda.current_stream(self.device)
+        # The writes of the previous block have reached the CPU (`flush`)
+        futures = {0: self.reader.submit(self._read, *chunks[0], buffers[0], free[0])}
+        for j, (r0, r1) in enumerate(chunks):
+            if j + 1 < len(chunks):
+                slot = (j + 1) % 2
+                futures[j + 1] = self.reader.submit(
+                    self._read, *chunks[j + 1], buffers[slot], free[slot]
+                )
+            stream.wait_event(futures.pop(j).result())
+            yield r0, r1, buffers[j % 2][:, : r1 - r0]
+            event = torch.cuda.Event()
+            event.record(stream)
+            free[j % 2] = event
+
+    def _read(self, r0: int, r1: int, buffer: torch.Tensor, after) -> torch.cuda.Event:
+        with (
+            torch.inference_mode(self.inference),
+            torch.cuda.device(self.device),
+            torch.cuda.stream(self.read_stream),
+        ):
+            if after is not None:
+                self.read_stream.wait_event(after)
+            for i in range(self.h.shape[0]):
+                buffer[i, : r1 - r0].copy_(self.h[i, r0:r1], non_blocking=True)
+            event = torch.cuda.Event()
+            event.record(self.read_stream)
+        return event
+
+    def write(self, r0: int, r1: int, src: torch.Tensor) -> None:
+        """Write the device tensor src (B, r1 - r0, C, E) to h[:, r0:r1] (after the compute stream
+        has produced src)."""
+        if not self.overlap:
+            self.h[:, r0:r1] = src.to(self.h.dtype)
+            return
+        ready = torch.cuda.Event()
+        ready.record(torch.cuda.current_stream(self.device))
+        while len(self.pending) >= self.WRITES_IN_FLIGHT:
+            self.pending.popleft().result()
+        self.pending.append(self.writer.submit(self._write, r0, r1, src, ready))
+
+    def _write(self, r0: int, r1: int, src: torch.Tensor, ready: torch.cuda.Event) -> None:
+        with (
+            torch.inference_mode(self.inference),
+            torch.cuda.device(self.device),
+            torch.cuda.stream(self.write_stream),
+        ):
+            self.write_stream.wait_event(ready)
+            src = src.to(self.h.dtype)
+            for i in range(self.h.shape[0]):
+                self.h[i, r0:r1].copy_(src[i], non_blocking=True)
+            done = torch.cuda.Event()
+            done.record(self.write_stream)
+        # Keep src alive until it has reached the CPU (after that the compute stream reuses its
+        # memory)
+        done.synchronize()
+
+    def flush(self) -> None:
+        while self.pending:
+            self.pending.popleft().result()
+
+    def close(self) -> None:
+        """Wait for the remaining copies and shut the threads down (also on the way out of an
+        exception, so it raises no new exception)."""
+        if not self.overlap:
+            return
+        while self.pending:
+            try:
+                self.pending.popleft().result()
+            except Exception:  # noqa: BLE001 — the original exception says why
+                pass
+        self.reader.shutdown(wait=True)
+        self.writer.shutdown(wait=True)
+        with contextlib.suppress(RuntimeError):
+            self.read_stream.synchronize()
+            self.write_stream.synchronize()
+
+
 class ColumnRowTransformer(nn.Module):
     # Model type (`tabsil.models.MODEL_TYPES`)
     model_type = "column_row_transformer"
@@ -811,9 +1079,10 @@ class ColumnRowTransformer(nn.Module):
     # the columns summarized at once from the train rows
     inference_chunk_cells = 2048 * 768
     inference_column_chunk = 4
-    # The cell state (B, R, C, E) that chunked inference (`_rows_interleaved_chunked`) carries is
-    # kept on the CPU and moved to the device per chunk when it is larger than this (bounds the GPU
-    # memory on very large tables)
+    # When the cell state (B, R, C, E) of chunked inference (`_rows_interleaved_chunked`) is larger
+    # than this, only the state of the row chunks with train rows is carried, and it is kept on the
+    # CPU and moved to the device per chunk if it is also larger than this
+    # (`_rows_interleaved_offload`; bounds the GPU memory on very large tables)
     interleaved_state_device_bytes = 16 << 30
     # Register the CPU cell state as pinned in place (`_host_state`; with False, copies go from
     # pageable memory. Same values)
@@ -1087,67 +1356,162 @@ class ColumnRowTransformer(nn.Module):
         `inference_column_chunk` at a time and summarized from the current train-row state, then
         (2) the rows are taken `inference_chunk_cells / (B x C)` at a time through the spread and
         the row block, which update the state. All summaries are computed before (2), so they see
-        the train-row state before it changes. The cell encoder also runs in row chunks. A cell
-        state larger than `interleaved_state_device_bytes` is kept on the CPU, allocated at its
-        exact size (bypassing the caching host allocator) and released as soon as the forward ends,
-        even on an exception (`_host_state`)."""
-        cfg = self.config
+        the train-row state before it changes. The cell encoder also runs in row chunks. When the
+        cell state is larger than `interleaved_state_device_bytes`, the computation takes another
+        order that keeps only part of it, on the CPU if needed (`_rows_interleaved_offload`)."""
         b, r, c = x.shape
         n_train = y_train.shape[1]
         embed = self._chunk_embedder(x, y_train, task)
         step = max(1, self.inference_chunk_cells // (b * c))
         device = x.device
-        h, release = None, None
-        try:
+        first = embed(x[:, :step], rows=(0, min(step, r)))
+        shape = (b, r, c, first.shape[-1])
+        if self._offload_interleaved_state(device, math.prod(shape) * first.element_size()):
+            return self._rows_interleaved_offload(x, n_train, embed, step, first)
+        h = torch.empty(shape, dtype=first.dtype, device=device)
+        for r0 in range(0, r, step):
+            r1 = min(r0 + step, r)
+            h[:, r0:r1] = first if r0 == 0 else embed(x[:, r0:r1], rows=(r0, r1))
+        e = h.shape[-1]
+        cls = self.cls_tokens.to(h.dtype).expand(b, r, -1, -1).clone()  # (B, R, n_cls, E)
+        last = len(self.row_blocks) - 1
+        blocks = zip(self.column_blocks, self.row_blocks, strict=True)
+        for i, (column, row) in enumerate(blocks):
+            # (1) Per-column summaries from the current train-row state (B, C, n_inducing, E)
+            summary = None
+            for c0 in range(0, c, self.inference_column_chunk):
+                c1 = min(c0 + self.inference_column_chunk, c)
+                ht = h[:, :n_train, c0:c1].permute(0, 2, 1, 3)
+                ht = ht.reshape(b * (c1 - c0), n_train, e)
+                ind = column.summary(ht)
+                if summary is None:
+                    summary = ind.new_empty(b, c, *ind.shape[1:])
+                summary[:, c0:c1] = ind.view(b, c1 - c0, *ind.shape[1:])
+            summary = summary.reshape(b * c, *summary.shape[2:])
+            # (2) Per row chunk: spread -> row block
             for r0 in range(0, r, step):
                 r1 = min(r0 + step, r)
-                cells = embed(x[:, r0:r1], rows=(r0, r1))
-                if h is None:
-                    shape = (b, r, c, cells.shape[-1])
-                    size = math.prod(shape) * cells.element_size()
-                    if self._offload_interleaved_state(device, size):
-                        h, release = self._acquire_host_state(shape, cells.dtype)
-                    else:
-                        h = torch.empty(shape, dtype=cells.dtype, device=device)
-                h[:, r0:r1] = cells
-            e = h.shape[-1]
-            cls = self.cls_tokens.to(h.dtype).expand(b, r, -1, -1).clone()  # (B, R, n_cls, E)
-            last = len(self.row_blocks) - 1
-            blocks = zip(self.column_blocks, self.row_blocks, strict=True)
+                new = self._interleaved_pair(column, row, h[:, r0:r1], summary, cls, r0, i == last)
+                if new is not None:
+                    h[:, r0:r1] = new.to(h.dtype)
+        return self.row_norm(cls).reshape(b, r, self.config.icl_dim)
+
+    def _interleaved_pair(
+        self,
+        column: InducedBlock,
+        row: Block,
+        h: torch.Tensor,
+        summary: torch.Tensor,
+        cls: torch.Tensor,
+        r0: int,
+        last: bool,
+    ) -> torch.Tensor | None:
+        """One block pair on a row chunk h (B, Rj, C, E) (`_rows_interleaved_chunked`): spread with
+        the summary (B x C, n_inducing, E), then the row block. Updates the CLS state
+        cls[:, r0:r0 + Rj] and returns the new cell state (B, Rj, C, E), or None for the last block
+        (its queries are the CLS tokens only)."""
+        cfg = self.config
+        b, rj, c, e = h.shape
+        hc = h.permute(0, 2, 1, 3).reshape(b * c, rj, e)
+        hc = column.spread(hc, summary)
+        hr = hc.view(b, c, rj, e).transpose(1, 2).reshape(b * rj, c, e)
+        part = cls[:, r0 : r0 + rj].reshape(b * rj, cfg.n_cls, e)
+        tokens = torch.cat([part.to(hr.dtype), hr], dim=1)
+        if last:
+            out = row(tokens, n_queries=cfg.n_cls)
+            cls[:, r0 : r0 + rj] = out.view(b, rj, cfg.n_cls, e).to(cls.dtype)
+            return None
+        tokens = row(tokens)
+        cls[:, r0 : r0 + rj] = tokens[:, : cfg.n_cls].view(b, rj, cfg.n_cls, e).to(cls.dtype)
+        return tokens[:, cfg.n_cls :].view(b, rj, c, e)
+
+    def _rows_interleaved_offload(
+        self, x: torch.Tensor, n_train: int, embed, step: int, first: torch.Tensor
+    ) -> torch.Tensor:
+        """`_rows_interleaved_chunked` when the cell state (B, R, C, E) does not fit on the device.
+        The values are equal within numerical error (only the computation order of the column
+        summaries differs). The row chunks are the same (`step` rows each); `first` is the cell
+        encoder output of the first chunk.
+
+        - The column summaries are accumulated over chunks of train rows (`_OnlineSummary`): the
+          summary of block i + 1 takes each train-row chunk produced by block pair i while it is
+          still on the device (block 0 takes the cell encoder output). So the train rows are never
+          read back from the CPU column by column (strided). All summaries of a block are done
+          before block pair i + 1 starts, so they see the train-row state before it changes
+        - Test rows are not used by the summaries and do not see each other. So only the chunks
+          with train rows (the leading ones) keep a state across block pairs; each chunk without
+          train rows goes through all block pairs on the device at once after the summaries are
+          known (it never goes through the CPU)
+        - The kept state (B, rows of the chunks with train rows, C, E) is kept on the CPU if it is
+          larger than `interleaved_state_device_bytes`, and its reads and writes overlap the compute
+          (`_HostRows`). The CPU state is allocated at its exact size (bypassing the caching host
+          allocator) and released as soon as the forward ends, even on an exception
+          (`_host_state`)
+        - Block 0 does not read the state: it recomputes the cell encoder (same input and chunks, so
+          the same values)"""
+        cfg = self.config
+        b, r, c = x.shape
+        e, dtype, device = first.shape[-1], first.dtype, x.device
+        blocks = list(zip(self.column_blocks, self.row_blocks, strict=True))
+        last = len(blocks) - 1
+        chunks = [(r0, min(r0 + step, r)) for r0 in range(0, r, step)]
+        n_held = min(r, -(-n_train // step) * step)  # rows of the chunks with train rows
+
+        def cells(r0: int, r1: int) -> torch.Tensor:
+            return first if r0 == 0 else embed(x[:, r0:r1], rows=(r0, r1))
+
+        def add(acc: _OnlineSummary, new: torch.Tensor, r0: int) -> None:
+            if r0 < n_train:  # the chunk's train rows (B, k, C, E) -> (B x C, k, E)
+                k = min(r0 + new.shape[1], n_train) - r0
+                acc.add(new[:, :k].to(dtype).permute(0, 2, 1, 3).reshape(b * c, k, e))
+
+        shape = (b, n_held, c, e)
+        release, rows = None, None
+        if self._offload_interleaved_state(device, math.prod(shape) * first.element_size()):
+            h, release = self._acquire_host_state(shape, dtype)
+        else:
+            h = torch.empty(shape, dtype=dtype, device=device)
+        try:
+            rows = _HostRows(h, step, device)
+            cls = self.cls_tokens.to(dtype).expand(b, r, -1, -1).clone()  # (B, R, n_cls, E)
+            acc = _OnlineSummary(blocks[0][0], b * c, n_train, dtype)
+            for r0, r1 in rows.chunks():
+                add(acc, cells(r0, r1), r0)
+            summaries = [acc.finish()]  # per block (B x C, n_inducing, E)
+            # Chunks with train rows: every chunk, block pair by block pair
             for i, (column, row) in enumerate(blocks):
-                # (1) Per-column summaries from the current train-row state
-                # (B, C, n_inducing, E)
-                summary = None
-                for c0 in range(0, c, self.inference_column_chunk):
-                    c1 = min(c0 + self.inference_column_chunk, c)
-                    ht = h[:, :n_train, c0:c1].to(device).permute(0, 2, 1, 3)
-                    ht = ht.reshape(b * (c1 - c0), n_train, e)
-                    ind = column.summary(ht)
-                    if summary is None:
-                        summary = ind.new_empty(b, c, *ind.shape[1:])
-                    summary[:, c0:c1] = ind.view(b, c1 - c0, *ind.shape[1:])
-                summary = summary.reshape(b * c, *summary.shape[2:])
-                # (2) Per row chunk: spread -> row block
-                for r0 in range(0, r, step):
-                    r1 = min(r0 + step, r)
-                    rj = r1 - r0
-                    hc = h[:, r0:r1].to(device).permute(0, 2, 1, 3).reshape(b * c, rj, e)
-                    hc = column.spread(hc, summary)
-                    hr = hc.view(b, c, rj, e).transpose(1, 2).reshape(b * rj, c, e)
-                    part = cls[:, r0:r1].reshape(b * rj, cfg.n_cls, e)
-                    tokens = torch.cat([part.to(hr.dtype), hr], dim=1)
-                    if i == last:
-                        out = row(tokens, n_queries=cfg.n_cls)
-                        cls[:, r0:r1] = out.view(b, rj, cfg.n_cls, e).to(cls.dtype)
-                    else:
-                        tokens = row(tokens)
-                        new_cls = tokens[:, : cfg.n_cls].view(b, rj, cfg.n_cls, e)
-                        cls[:, r0:r1] = new_cls.to(cls.dtype)
-                        h[:, r0:r1] = tokens[:, cfg.n_cls :].view(b, rj, c, e).to(h.dtype)
+                acc = None if i == last else _OnlineSummary(blocks[i + 1][0], b * c, n_train, dtype)
+                source = (
+                    ((r0, r1, cells(r0, r1)) for r0, r1 in rows.chunks()) if i == 0 else rows.rows()
+                )
+                for r0, r1, part in source:
+                    new = self._interleaved_pair(
+                        column, row, part, summaries[i], cls, r0, i == last
+                    )
+                    if new is not None:
+                        add(acc, new, r0)
+                        rows.write(r0, r1, new)
+                rows.flush()
+                if acc is not None:
+                    summaries.append(acc.finish())
+            # Chunks without train rows: every block pair, chunk by chunk. The state between block
+            # pairs is cast to the state dtype, as when it is kept
+            for r0, r1 in chunks:
+                if r0 < n_held:
+                    continue
+                part = cells(r0, r1)
+                for i, (column, row) in enumerate(blocks):
+                    part = self._interleaved_pair(
+                        column, row, part, summaries[i], cls, r0, i == last
+                    )
+                    if part is not None:
+                        part = part.to(dtype)
             return self.row_norm(cls).reshape(b, r, cfg.icl_dim)
         finally:
-            # Unregister the pinned memory even on an exception (while registered, the OS
-            # cannot reclaim it)
+            # Even on an exception, stop the copies and unregister the pinned memory (while
+            # registered, the OS cannot reclaim it)
+            if rows is not None:
+                rows.close()
             if release is not None:
                 release()
 
@@ -1174,7 +1538,7 @@ class ColumnRowTransformer(nn.Module):
     @contextlib.contextmanager
     def hold_host_state(self):
         """Inference forwards inside this context reuse the CPU cell state (offload of
-        `_rows_interleaved_chunked`) instead of releasing it, so that each ensemble member does not
+        `_rows_interleaved_offload`) instead of releasing it, so that each ensemble member does not
         allocate hundreds of GB anew (page faults) and pin/unpin them (`tabsil.inference.ensemble`
         calls the member forwards inside it). Released on exit, even on an exception. Same values.
         When nested, the outermost context releases it."""
@@ -1191,20 +1555,21 @@ class ColumnRowTransformer(nn.Module):
                 _release_host_state(*held)
 
     def _offload_interleaved_state(self, device: torch.device, size: int) -> bool:
-        """Whether to keep the cell state (`size` bytes) of `_rows_interleaved_chunked` on the
-        CPU."""
+        """Whether the cell state (`size` bytes) of `_rows_interleaved_chunked` is too large for the
+        device (then `_rows_interleaved_offload`, which asks again for the state it carries)."""
         return device.type == "cuda" and size > self.interleaved_state_device_bytes
 
     def inference_host_state_bytes(
         self, rows: int, columns: int, *, batch: int = 1, itemsize: int = 4
     ) -> int:
-        """Bytes of cell state that one inference forward (`inference=True`) keeps on the CPU
-        (offload of `_rows_interleaved_chunked`; the eval queue uses it to choose which large tables
-        run concurrently, `training/scripts/eval.py --host-memory-budget-gb`). The cell state
-        (B, R, C, E) has one token per column. 0 when the forward is not chunked or the state stays
-        on the device. `itemsize` is the size of the cell token dtype: 4, because the cell encoder
-        outputs float32 even under bfloat16 autocast (so the state is float32 too; checked on
-        H100)."""
+        """Bytes of cell state that one inference forward (`inference=True`) keeps on the CPU at
+        most (offload of `_rows_interleaved_offload`; the eval queue uses it to choose which large
+        tables run concurrently, `training/scripts/eval.py --host-memory-budget-gb`): the whole
+        cell state (B, R, C, E), one token per column. The offload carries only the row chunks
+        with train rows, so it keeps less (or nothing, if that part fits on the device). 0 when the
+        forward is not chunked or the whole state fits on the device. `itemsize` is the size of the
+        cell token dtype: 4, because the cell encoder outputs float32 even under bfloat16 autocast
+        (so the state is float32 too; checked on H100)."""
         cells = batch * rows * columns
         if cells <= self.inference_chunk_cells:
             return 0
