@@ -12,6 +12,7 @@ standard deviations are omitted.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
@@ -792,6 +793,35 @@ def score_fold(
     return float(roc_auc_score(y_true, proba, multi_class="ovr", labels=classes[present]))
 
 
+# per-fold row counts and fit / prediction seconds (`evaluate_task` rows)
+TIME_KEYS = ("train_rows", "test_rows", "fit_seconds", "predict_seconds")
+
+
+def per_1k(row: dict) -> dict:
+    """One fold's fit time per 1K train rows and prediction time per 1K test rows (s), the unit of
+    the TabArena leaderboard time."""
+    return {
+        "fit_seconds_per_1K": row["fit_seconds"] * 1000.0 / max(row["train_rows"], 1),
+        "predict_seconds_per_1K": row["predict_seconds"] * 1000.0 / max(row["test_rows"], 1),
+    }
+
+
+def time_medians(rows: list[dict]) -> dict[str, float]:
+    """TabArena's leaderboard time over `evaluate_task` rows: per-fold seconds per 1K rows
+    (`per_1k`), averaged over each dataset's folds, then the median over datasets
+    (`time_train_s_per_1K_median`, `time_infer_s_per_1K_median`, as `arena.run_times`). TabArena
+    divides by the dataset's mean split size instead of each fold's; with cross-validation folds
+    of near-equal size the two agree. Empty dict without rows."""
+    if not rows:
+        return {}
+    df = pd.DataFrame([{"task_id": r["task_id"], **per_1k(r)} for r in rows])
+    per_dataset = df.groupby("task_id").mean()
+    return {
+        "time_train_s_per_1K_median": float(per_dataset["fit_seconds_per_1K"].median()),
+        "time_infer_s_per_1K_median": float(per_dataset["predict_seconds_per_1K"].median()),
+    }
+
+
 def evaluate_task(
     task: OpenMLTask,
     make_estimator: Callable[[OpenMLTask], object],
@@ -801,7 +831,11 @@ def evaluate_task(
     """One score per fold. With `uncertainty=True`, predictive-distribution and uncertainty
     metrics (`tabsil_train.benchmarks.uncertainty`) are added to the same row. Regression estimators
     must provide `predict_full` (mean, bin log-probabilities, borders) or `predict_distribution`
-    (log-probabilities, borders)."""
+    (log-probabilities, borders).
+
+    Each row also has `TIME_KEYS`: the fold's train and test row counts, the `fit` time and the
+    prediction time (the one call on the test rows that gives the scored prediction; with
+    `uncertainty` for regression it also returns the distribution) in seconds."""
     from tabsil_train.benchmarks import uncertainty as unc
 
     rows = []
@@ -809,10 +843,14 @@ def evaluate_task(
         estimator = make_estimator(task)
         x_train, x_test = task.X.iloc[train_ix], task.X.iloc[test_ix]
         y_train, y_test = task.y.iloc[train_ix].to_numpy(), task.y.iloc[test_ix].to_numpy()
+        start = time.perf_counter()
         estimator.fit(x_train, y_train)
+        fit_seconds = time.perf_counter() - start
         extra = {}
+        start = time.perf_counter()
         if task.task_type == "classification":
             prediction = estimator.predict_proba(x_test)
+            predict_seconds = time.perf_counter() - start
             score = score_fold("classification", y_test, prediction, estimator.classes_)
             if uncertainty:
                 extra = unc.classification_metrics(
@@ -822,15 +860,30 @@ def evaluate_task(
             y_test = y_test.astype(float)
             if uncertainty:
                 prediction, log_probs, borders = _predict_full(estimator, x_test)
+                predict_seconds = time.perf_counter() - start
                 scale = float(np.std(y_train.astype(float))) or 1.0
                 extra = unc.regression_metrics(np.exp(log_probs), borders, y_test, y_scale=scale)
                 # Also record RMSE divided by the training-target std, for same-unit comparison
                 extra["rmse_scaled"] = float(np.sqrt(np.mean((prediction - y_test) ** 2))) / scale
             else:
                 prediction = estimator.predict(x_test)
+                predict_seconds = time.perf_counter() - start
             score = score_fold("regression", y_test, prediction)
+        times = {
+            "train_rows": len(train_ix),
+            "test_rows": len(test_ix),
+            "fit_seconds": fit_seconds,
+            "predict_seconds": predict_seconds,
+        }
         rows.append(
-            {"task_id": task.task_id, "dataset": task.name, "fold": fold, "score": score, **extra}
+            {
+                "task_id": task.task_id,
+                "dataset": task.name,
+                "fold": fold,
+                "score": score,
+                **times,
+                **extra,
+            }
         )
     return rows
 
