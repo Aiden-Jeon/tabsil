@@ -4,7 +4,9 @@ register just that memory as pinned, and unregister it when forward ends (even o
 
 The offload path (`_rows_interleaved_offload`) accumulates the column summaries over train-row
 chunks (online softmax) and computes the test-row chunks to the end on the device. Its values equal
-those with the state on the device within numerical error (float32, relative 1e-5). The freshly
+those with the state on the device within float32 rounding: the row vectors before the decoder
+within relative 1e-5 (`ROWS_TOL`), the outputs within 1e-4 (`OUTPUT_TOL`: the decoder's log p
+magnifies the rounding), and float64 within 1e-12. The freshly
 initialized model has attention output layers at 0, so the summaries do not reach its values; the
 tests that compare values use a model with perturbed weights (`_model(random=True)`)."""
 
@@ -19,6 +21,12 @@ from tabsil.models.column_row_transformer import ColumnRowTransformer, ColumnRow
 # two interleaved column/row stage pairs at tiny size
 TINY_STAGES = {"column_blocks": 2, "row_blocks": 2}
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+# Offload vs state on the device, float32, relative to the largest value: the row vectors before
+# the decoder (`_rows_interleaved_chunked`), where the summary order differs, and the model output.
+# The classification output is log p, which magnifies float32 rounding near p = 1 (on Linux CPU and
+# H100 the outputs differ by 1.1e-5 to 1.8e-5 while the row vectors agree much more closely)
+ROWS_TOL = 1e-5
+OUTPUT_TOL = 1e-4
 
 
 def _model(random: bool = False, **changes) -> ColumnRowTransformer:
@@ -65,13 +73,21 @@ def _forward(model, x, y, task):
         return model(x, y, task, inference=True)
 
 
+def _rows(model, x, y, task):
+    # The row vectors of the chunked inference, before the row ICL and the decoder
+    with torch.inference_mode():
+        return model._rows_interleaved_chunked(x, y, task)
+
+
 @pytest.mark.parametrize("random", [False, True])
 def test_offloaded_state_matches_device_state(monkeypatch, random):
     # On CPU too, the offload path (`_host_state`, pageable without registration when there is no
     # CUDA) gives the same values within numerical error
     model = _model(random, **TINY_STAGES)
     x, yc, yr = _inputs()
-    want = {t: _forward(model, x, y, t) for t, y in (("classification", yc), ("regression", yr))}
+    tasks = (("classification", yc), ("regression", yr))
+    want = {t: _forward(model, x, y, t) for t, y in tasks}
+    want_rows = {t: _rows(model, x, y, t) for t, y in tasks}
     calls = []
     real = M._host_state
 
@@ -81,12 +97,14 @@ def test_offloaded_state_matches_device_state(monkeypatch, random):
 
     monkeypatch.setattr(M, "_host_state", host_state)
     monkeypatch.setattr(ColumnRowTransformer, "_offload_interleaved_state", lambda *_: True)
-    for task, y in (("classification", yc), ("regression", yr)):
-        assert _rel(_forward(model, x, y, task), want[task]) < 1e-5
+    for task, y in tasks:
+        assert _rel(_forward(model, x, y, task), want[task]) < OUTPUT_TOL
     # Only the chunks with train rows (5 chunks of 7 rows = 35 rows) keep a state
     held = _held_rows(model, x, yc.shape[1])
     assert held == 35
     assert len(calls) == 2 and calls[0][0] == (1, held, 5, model.config.emsize)
+    for task, y in tasks:
+        assert _rel(_rows(model, x, y, task), want_rows[task]) < ROWS_TOL, task
 
 
 def test_offload_matches_device_state_in_float64(monkeypatch):
@@ -113,11 +131,14 @@ def test_offload_without_train_rows_matches_device_state(monkeypatch):
     model = _model(True, **TINY_STAGES)
     x, _, _ = _inputs()
     y = torch.zeros(1, 0)
-    want = {t: _forward(model, x, y, t) for t in ("classification", "regression")}
+    tasks = ("classification", "regression")
+    want = {t: _forward(model, x, y, t) for t in tasks}
+    want_rows = {t: _rows(model, x, y, t) for t in tasks}
     monkeypatch.setattr(ColumnRowTransformer, "_offload_interleaved_state", lambda *_: True)
-    for task in ("classification", "regression"):
+    for task in tasks:
         got = _forward(model, x, y, task)
-        assert torch.isfinite(got).all() and _rel(got, want[task]) < 1e-5, task
+        assert torch.isfinite(got).all() and _rel(got, want[task]) < OUTPUT_TOL, task
+        assert _rel(_rows(model, x, y, task), want_rows[task]) < ROWS_TOL, task
 
 
 def test_held_state_stays_on_device_when_it_fits(monkeypatch):
@@ -126,6 +147,7 @@ def test_held_state_stays_on_device_when_it_fits(monkeypatch):
     model = _model(True, **TINY_STAGES)
     x, yc, _ = _inputs()
     want = _forward(model, x, yc, "classification")
+    want_rows = _rows(model, x, yc, "classification")
     e = model.config.emsize
     model.interleaved_state_device_bytes = 35 * 5 * e * 4  # train-row chunks 35 rows <= this < 40
     monkeypatch.setattr(M, "_host_state", lambda *a: pytest.fail("should not offload"))
@@ -138,8 +160,9 @@ def test_held_state_stays_on_device_when_it_fits(monkeypatch):
         return real(self, *args)
 
     monkeypatch.setattr(ColumnRowTransformer, "_rows_interleaved_offload", spy)
-    assert _rel(_forward(model, x, yc, "classification"), want) < 1e-5
-    assert offload == [True]
+    assert _rel(_forward(model, x, yc, "classification"), want) < OUTPUT_TOL
+    assert _rel(_rows(model, x, yc, "classification"), want_rows) < ROWS_TOL
+    assert offload == [True, True]
 
 
 def _offload_any_device(self, device, size):
@@ -356,26 +379,28 @@ def test_inference_host_state_bytes():
 @cuda
 @pytest.mark.parametrize("pin", [True, False])
 def test_gpu_offload_matches_device_state(monkeypatch, pin):
-    # A small `interleaved_state_device_bytes` keeps the state on the CPU. float32: within relative
-    # 1e-5 of the state on the device. bfloat16 autocast: the offload is not further from the
+    # A small `interleaved_state_device_bytes` keeps the state on the CPU. float32: row vectors
+    # within `ROWS_TOL` and outputs within `OUTPUT_TOL` of the state on the device. bfloat16
+    # autocast: the offload is not further from the
     # float32 values than the bfloat16 computation with the state on the device (the per-chunk
     # summaries are not rounded to bfloat16)
     model = _model(True, **TINY_STAGES).cuda()
     x, yc, yr = _inputs("cuda")
 
-    def offloaded(y, task):
+    def offloaded(y, task, run=_forward):
         with monkeypatch.context() as m:
             m.setattr(model, "interleaved_state_device_bytes", 0)
             m.setattr(model, "interleaved_state_pin", pin)
             stats = torch.cuda.host_memory_stats
             before = stats().get("allocated_bytes.all.peak", 0)
-            got = _forward(model, x, y, task)
+            got = run(model, x, y, task)
             assert stats().get("allocated_bytes.all.peak", 0) == before  # no caching allocator
         return got
 
     for task, y in (("classification", yc), ("regression", yr)):
         want = _forward(model, x, y, task)  # float32, state on the device
-        assert _rel(offloaded(y, task), want) < 1e-5, task
+        assert _rel(offloaded(y, task), want) < OUTPUT_TOL, task
+        assert _rel(offloaded(y, task, _rows), _rows(model, x, y, task)) < ROWS_TOL, task
         with torch.autocast("cuda", dtype=torch.bfloat16):
             device_bf16 = _forward(model, x, y, task)
             got_bf16 = offloaded(y, task)
@@ -400,6 +425,7 @@ def test_gpu_offload_pipeline_many_chunks(monkeypatch, pin):
     x = torch.randn(1, 3000, 24, generator=g).cuda()
     yr = torch.randn(1, 2000, generator=g).cuda()
     want = _forward(model, x, yr, "regression")
+    want_rows = _rows(model, x, yr, "regression")
     monkeypatch.setattr(model, "interleaved_state_device_bytes", 0)
     monkeypatch.setattr(model, "interleaved_state_pin", pin)
     writes = []
@@ -412,10 +438,11 @@ def test_gpu_offload_pipeline_many_chunks(monkeypatch, pin):
     monkeypatch.setattr(M._HostRows, "write", write)
     got = _forward(model, x, yr, "regression")
     again = _forward(model, x, yr, "regression")
-    assert _rel(got, want) < 1e-5
+    assert _rel(got, want) < OUTPUT_TOL
     assert torch.equal(got, again)
     # Block pairs 0 and 1 (the last pair writes nothing) x 20 train-row chunks, two forwards
     assert len(writes) == 2 * 2 * 20 and max(writes) == 1900
+    assert _rel(_rows(model, x, yr, "regression"), want_rows) < ROWS_TOL
 
 
 @cuda
