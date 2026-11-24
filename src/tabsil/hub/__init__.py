@@ -12,7 +12,8 @@ minipfn for the same structure are read as well (`ColumnRowTransformerConfig.fro
     model, borders = from_pretrained("aiden-jeon/tabsil@step-100k")
 
 For inference alone this function is not needed: `TabSilClassifier()`·`TabSilRegressor()`
-(`tabsil.recipe`) download the published weights (`model_or_pretrained`).
+(`tabsil.recipe`) download from the default Hub repo (`HUB_REPO`; weights not published yet)
+(`model_or_pretrained`).
 
 `load_model` reads a Hub repo, a local `save_pretrained` folder or a checkpoint file the same way
 (the evaluation and upload scripts use it through `tabsil_train.hub.load_model`, which also reads
@@ -111,7 +112,7 @@ def model_or_pretrained(
     """Resolve the `model` an inference class receives into (model, regression borders).
 
     A module gives (that module, None); a Hub repo id (`owner/name`, `owner/name@branch`) or a
-    local folder is loaded from there; None loads `default_repo` (the published weights).
+    local folder is loaded from there; None loads `default_repo` (the default Hub repo).
     ValueError if the loaded model does not serve `task`."""
     if isinstance(model, nn.Module):
         return model, None

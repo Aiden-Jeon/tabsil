@@ -17,7 +17,7 @@ name. Only images the card links as `](images/...)` are copied from next to the 
 the Hub's `images/` that the card no longer uses are deleted. `--dry-run` builds the folder without
 uploading.
 
-The repo is TabSil's published repo (`HUB_REPO`, `tabsil.recipe.HUB_REPO`) unless `--repo-id`
+The repo is TabSil's default Hub repo (`HUB_REPO`, `tabsil.recipe.HUB_REPO`) unless `--repo-id`
 gives another one. So that the card's figures and numbers cannot belong to another checkpoint, the
 card must name the weights id of the converted `model.safetensors`
 (`` `sha256:<first 12 hex digits of the SHA-256>` ``) before anything is uploaded. The id is only

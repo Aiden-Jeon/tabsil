@@ -1,2 +1,16 @@
 TabSil
 Copyright 2026 Aiden-Jeon
+
+This product includes software adapted from TabPFN
+(https://github.com/PriorLabs/TabPFN), Copyright (c) 2026 Prior Labs GmbH, licensed under the
+Apache License 2.0:
+- src/tabsil/inference/preprocessing.py `balanced_feature_subsets`: adapted from
+  src/tabpfn/preprocessing/ensemble.py `_subsample_features_balanced` and `_draw_balanced_from_pool`
+- src/tabsil/models/column_row_transformer.py `_retrieve`: adapted from
+  src/tabpfn/architectures/tabpfn_v3_5.py `_class_attention`
+
+This product includes software adapted from NVIDIA structured-data-models
+(https://github.com/NVIDIA/structured-data-models), Copyright (c) 2026 NVIDIA CORPORATION &
+AFFILIATES, licensed under the Apache License 2.0:
+- src/tabsil/models/column_row_transformer.py `LogScale`: adapted from sdm/nn/scaling.py
+  `LogScale` and `GatedLogScale`

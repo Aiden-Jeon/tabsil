@@ -20,7 +20,8 @@ does not import the Hub and inference code).
 
     from tabsil import TabSilClassifier
 
-    clf = TabSilClassifier().fit(x_train, y_train)  # downloads the published weights
+    clf = TabSilClassifier("path/to/folder").fit(x_train, y_train)  # a save_pretrained folder
+    # without a model: the default Hub repo (`tabsil.recipe.HUB_REPO`; weights not published yet)
 """
 
 from typing import TYPE_CHECKING

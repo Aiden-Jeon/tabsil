@@ -37,15 +37,21 @@ Python ≥ 3.12, PyTorch 2.11.
 
 ## Use
 
+The trained weights are not published yet. Until they are, pass weights you trained yourself (see [Training](#training)): a folder written by `tabsil.hub.save_pretrained` (`model.safetensors` + `config.json`), or a model loaded from a training checkpoint.
+
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor
+from tabsil.models import load_checkpoint
 
-clf = TabSilClassifier().fit(X_train, y_train)  # downloads the weights from the Hugging Face Hub
+clf = TabSilClassifier("path/to/folder").fit(X_train, y_train)  # a save_pretrained folder
 proba = clf.predict_proba(X_test)
 
-reg = TabSilRegressor().fit(X_train, y_train)
+model, borders = load_checkpoint("tabsil_run/final.pt")  # a training checkpoint
+reg = TabSilRegressor(model, borders).fit(X_train, y_train)
 y_pred = reg.predict(X_test)
 ```
+
+Once the weights are published, `TabSilClassifier()` and `TabSilRegressor()` without a model will download them from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`). Until then, constructing them without a model fails with `huggingface_hub.errors.RepositoryNotFoundError` (401, "Repository Not Found"): the repo does not exist yet.
 
 Both are scikit-learn style estimators over an ensemble of 8 preprocessing members; each member sees at most 768 of the original columns.
 
@@ -93,9 +99,9 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 
 TabSil puts together ideas from published work:
 
-- **TabPFN** (Prior Labs): the prior-fitted network approach; the TabPFN-3 / 3.5 technical reports for the column → row → row-ICL backbone. The public inference code was read for design details; no code or weights are used.
+- **TabPFN** (Prior Labs): the prior-fitted network approach; the TabPFN-3 / 3.5 technical reports for the column → row → row-ICL backbone. No weights are used. A few inference routines (balanced feature subsampling, chunked class attention) are adapted from the Apache-2.0 TabPFN inference code; see `NOTICE`.
 - **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package) and the three-stage training curriculum.
-- **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source.
+- **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source. The log-scale attention temperature (`LogScale`) follows the Apache-2.0 NVIDIA code (`sdm/nn/scaling.py`); see `NOTICE`.
 - **Muon** optimizer, and the **nanoTabPFN speedrun** for the training speed options.
 
 TabSil grew out of [minipfn](https://github.com/Aiden-Jeon/minipfn), a hands-on guide that reimplements PFN and TabPFN from scratch. Checkpoints that minipfn trained for this architecture (`minipfn-v1`) load in TabSil.

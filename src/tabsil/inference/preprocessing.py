@@ -81,7 +81,10 @@ def balanced_feature_subsets(
     Members take `max_features` columns in turn from one shuffled column order; when it runs out,
     it is reshuffled and refilled (without the columns that member already has). So every column is
     used about equally often. Tables within the cap get None (all columns) for every member and use
-    no randomness."""
+    no randomness.
+
+    Adapted from TabPFN (Apache-2.0) `src/tabpfn/preprocessing/ensemble.py`
+    `_subsample_features_balanced` and `_draw_balanced_from_pool`; see NOTICE."""
     if max_features is None or n_features <= max_features:
         return [None] * n_members
     order = rng.permutation(n_features)
