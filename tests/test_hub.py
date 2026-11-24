@@ -95,14 +95,13 @@ def test_borders_keep_their_dtype(tmp_path):
 
 
 def test_config_json_holds_the_model_config(tmp_path):
-    # config.json holds the model sizes only; the fixed structure (minipfn's option fields) is not
-    # written
+    # config.json holds the model sizes only; the fixed structure is not written
     tabsil = _model()
     borders = torch.linspace(-3, 3, 5001)
     out = hub.save_pretrained(tabsil, borders, tmp_path / "tabsil")
     saved = json.loads((out / hub.CONFIG_NAME).read_text())
     assert saved["task"] == "multitask" and saved["model_type"] == "column_row_transformer"
-    assert not {"task", "stage_layout", "regression_head", "qassmax_hidden"} & set(saved["model"])
+    assert not {"task", "stage_layout", "regression_head"} & set(saved["model"])
     assert saved["model"] == config_dict(tabsil.config)
     loaded, loaded_borders = hub.from_pretrained(out)
     assert loaded.config == tabsil.config and torch.equal(loaded_borders, borders)

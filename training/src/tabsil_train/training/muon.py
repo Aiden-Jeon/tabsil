@@ -206,17 +206,8 @@ class Muon(torch.optim.Optimizer):
 
     def load_state_dict(self, state_dict: dict) -> None:
         """Load a state; the group settings other than lr (weight decay, momentum) stay as this
-        optimizer has them (lr is set again by the training loop, `_set_base_lr`). Also reads the
-        state of minipfn's `MuonAdam` (`{"muon": ..., "adam": ...}`) when it had no Adam part
-        (`muon_scope="all"`)."""
-        if set(state_dict) == {"muon", "adam"}:
-            if state_dict["adam"] is not None:
-                raise ValueError(
-                    "this optimizer state has an Adam part (minipfn muon_scope='blocks');"
-                    " TabSil trains every parameter with Muon"
-                )
-            state_dict = state_dict["muon"]
-        elif "param_groups" not in state_dict:
+        optimizer has them (lr is set again by the training loop, `_set_base_lr`)."""
+        if "param_groups" not in state_dict:
             raise ValueError("not a Muon optimizer state")
         settings = [
             {k: v for k, v in group.items() if k not in ("params", "lr", "initial_lr")}

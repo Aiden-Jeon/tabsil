@@ -240,14 +240,12 @@ def check_resume_step(state: dict, config: TrainConfig) -> None:
     Resuming a run of a different config by mistake (e.g. another curriculum stage) would end
     without training and overwrite that run's results.
     """
-    # minipfn checkpoints may come from other optimizers (Adam, schedule-free AdamW; runs from
-    # before the key existed are Adam). Only a Muon optimizer state can be continued
-    saved_optimizer = state.get("optimizer_type", "adam")
-    if state.get("schedule_free", False) or saved_optimizer != "muon":
-        kind = "schedule_free" if state.get("schedule_free", False) else saved_optimizer
+    # only a Muon optimizer state can be continued
+    saved_optimizer = state.get("optimizer_type")
+    if saved_optimizer != "muon":
         raise ValueError(
-            f"the checkpoint to resume was trained with {kind}; TabSil continues Muon runs only"
-            " (take its weights with init_from instead)"
+            f"the checkpoint to resume has optimizer_type {saved_optimizer!r}; TabSil continues"
+            " Muon runs only (take its weights with init_from instead)"
         )
     step, stop = int(state["step"]), min(config.stop_step or config.steps, config.steps)
     if step >= stop:
@@ -416,7 +414,7 @@ def _train(
     # measures its own timing
     norm_groups, grad_window, cosine = None, None, None
     if d.is_main:
-        # every parameter is Muon's (the group names keep the `/muon` suffix of minipfn's runs)
+        # every parameter is Muon's (the group names end in `/muon`)
         norm_groups = parameter_groups(model, {id(p) for p in model.parameters()})
         grad_window = GroupNormWindow(norm_groups)
         if config.grad_cosine:

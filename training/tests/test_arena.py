@@ -117,16 +117,16 @@ def test_public_table_failure_does_not_raise(monkeypatch):
 
 
 def test_run_id_changes_with_the_estimator_fingerprint():
-    a = arena._run_id("clf=step_100k", "minipfn", 0)
-    assert a == arena._run_id("clf=step_100k", "minipfn", 0)
-    assert a != arena._run_id("clf=step_200k", "minipfn", 0)
-    assert a != arena._run_id("clf=step_100k", "minipfn", 8)
+    a = arena._run_id("clf=step_100k", "tabsil", 0)
+    assert a == arena._run_id("clf=step_100k", "tabsil", 0)
+    assert a != arena._run_id("clf=step_200k", "tabsil", 0)
+    assert a != arena._run_id("clf=step_100k", "tabsil", 8)
 
 
 def test_method_without_results_has_no_name():
-    board = pd.DataFrame({"method": ["RF (default)", "minipfn_c1"]})
-    assert arena._new_method_name(board, "minipfn") == "minipfn_c1"
-    assert arena._new_method_name(board.iloc[:1], "minipfn") is None
+    board = pd.DataFrame({"method": ["RF (default)", "tabsil_c1"]})
+    assert arena._new_method_name(board, "tabsil") == "tabsil_c1"
+    assert arena._new_method_name(board.iloc[:1], "tabsil") is None
 
 
 def test_suites_point_at_the_official_splits_and_public_tables():

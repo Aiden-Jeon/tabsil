@@ -112,15 +112,9 @@ def test_muon_state_round_trip():
     other.load_state_dict(state)
     assert [g["lr"] for g in other.param_groups] == [1e-3] * len(other.param_groups)
     assert [g["weight_decay"] for g in other.param_groups] == [0.05, 0.05]
-    # minipfn's MuonAdam format with no Adam part (muon_scope="all") loads; with one it does not
-    legacy = Muon.for_model(model, lr=5e-4)
-    legacy.load_state_dict({"muon": state, "adam": None})
-    assert legacy.state_dict()["state"].keys() == state["state"].keys()
     adam = torch.optim.Adam(model.parameters()).state_dict()
-    with pytest.raises(ValueError, match="Adam part"):
-        legacy.load_state_dict({"muon": state, "adam": adam})
     with pytest.raises(ValueError):  # a plain Adam state (one group) is not a Muon state
-        legacy.load_state_dict(adam)
+        other.load_state_dict(adam)
 
 
 def _smoke(**changes):
@@ -158,12 +152,9 @@ def test_resume_needs_a_muon_checkpoint(tmp_path):
     check_resume_step(state, _smoke())
     with pytest.raises(ValueError, match="adam"):
         check_resume_step({**state, "optimizer_type": "adam"}, _smoke())
-    with pytest.raises(ValueError, match="schedule_free"):
-        check_resume_step({**state, "schedule_free": True}, _smoke())
-    # Checkpoints from before this key existed are Adam
-    old = {k: v for k, v in state.items() if k != "optimizer_type"}
-    with pytest.raises(ValueError, match="adam"):
-        check_resume_step(old, _smoke())
+    without = {k: v for k, v in state.items() if k != "optimizer_type"}
+    with pytest.raises(ValueError, match="None"):
+        check_resume_step(without, _smoke())
 
 
 def test_train_script_takes_the_muon_weight_decay(monkeypatch):

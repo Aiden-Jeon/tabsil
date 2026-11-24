@@ -381,7 +381,7 @@ def main(argv: list[str] | None = None) -> None:
         params = source_params(run.data.params, run.data.tags)
         try:
             source = run_architecture(params)
-        except ValueError as e:  # a run of another structure
+        except ValueError as e:  # an unknown model type or a param that does not parse
             raise SystemExit(str(e)) from None
         speed_options = source_speed_options(params)
         if args.init_run_id:

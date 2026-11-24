@@ -17,7 +17,6 @@ from torch import nn
 
 from tabsil import hub
 from tabsil.models import DEFAULT_MODEL_TYPE, canonical_model_type, config_fields, info_fields
-from tabsil.models.column_row_transformer import fixed_fields_check
 from tabsil_train.training.config import TrainConfig
 
 # file where `download_artifact` records the downloaded artifact (to skip re-downloading into the
@@ -90,10 +89,8 @@ def run_architecture(params: dict[str, str]) -> dict:
     structure settings (TrainConfig fields).
 
     Values the run did not record use the config defaults. Apply the result to a training config
-    with `replace(config, **...)`. A minipfn run must have the structure TabSil fixes
-    (`fixed_fields_check`, ValueError otherwise).
+    with `replace(config, **...)`.
     """
-    fixed_fields_check(dict(params), as_text=True)
     model_type = canonical_model_type(params.get("model_type", DEFAULT_MODEL_TYPE))
     defaults = TrainConfig(model_type=model_type)
     names = _model_params(model_type)
