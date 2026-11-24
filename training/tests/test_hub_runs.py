@@ -60,7 +60,7 @@ def test_run_uri_to_a_pretrained_folder(tmp_path, monkeypatch):
 def test_other_specs_go_to_tabsil(tmp_path):
     clf = _model()
     folder = hub.save_pretrained(clf, None, tmp_path / "pretrained")
-    loaded, borders = train_hub.load_model(str(folder), "classification", tmp_path)
+    loaded, borders = train_hub.load_model(folder, "classification", tmp_path)  # a Path too
     assert borders is None
     _same_weights(clf, loaded)
     with pytest.raises(SystemExit, match="hf://"):

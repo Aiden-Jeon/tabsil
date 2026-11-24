@@ -61,7 +61,6 @@ from sync_hub_card import (
 
 from tabsil.recipe import HUB_REPO
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 HUB_DIR = Path(__file__).resolve().parent
 TITLE = "TabSil"
 # The tasks a TabSil multitask checkpoint must serve

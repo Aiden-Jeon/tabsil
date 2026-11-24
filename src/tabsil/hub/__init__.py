@@ -128,7 +128,7 @@ def served_tasks(model: nn.Module, borders: torch.Tensor | None) -> tuple[str, .
 
 
 def load_model(
-    spec: str | Path, task: str, *, name: str | None = None
+    spec: str | Path, task: str, dst: str | Path | None = None, *, name: str | None = None
 ) -> tuple[nn.Module, torch.Tensor | None]:
     """Load a checkpoint onto the CPU. `spec` is one of:
 
@@ -139,7 +139,8 @@ def load_model(
     Checkpoints written during training (`checkpoints/step_XXXXXXX.pt`, `latest.pt`) build the
     model from the model type and config stored in them. MLflow run artifacts (`runs:/...`) are
     read by `tabsil_train.hub.load_model` (the `tabsil-train` package). Messages name the
-    checkpoint `name` (default: `spec`).
+    checkpoint `name` (default: `spec`). `dst` (the download folder of MLflow artifacts) is not used
+    here; it is kept so that calls written for the earlier `load_model(spec, task, dst)` still work.
     """
     spec = str(spec)
     name = spec if name is None else name

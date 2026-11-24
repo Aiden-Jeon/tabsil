@@ -59,6 +59,8 @@ def test_load_model_reads_every_kind_of_checkpoint(tmp_path):
         _same_weights(clf, loaded)
     with pytest.raises(SystemExit, match="needs a regression model"):
         hub.load_model(str(tmp_path / "pretrained"), "regression")
+    # the earlier call with a download folder (`dst`, unused here) still works
+    _same_weights(clf, hub.load_model(str(tmp_path / "final.pt"), "classification", tmp_path)[0])
 
 
 def test_training_checkpoint_without_model_config_is_refused(tmp_path):

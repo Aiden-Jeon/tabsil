@@ -16,9 +16,8 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 Inference only:
 
 ```bash
-uv add tabsil
-# or from GitHub
 uv add "tabsil @ git+https://github.com/Aiden-Jeon/tabsil"
+# once a release is on PyPI: uv add tabsil
 ```
 
 Training and evaluation, from a clone:
@@ -26,12 +25,13 @@ Training and evaluation, from a clone:
 ```bash
 git clone https://github.com/Aiden-Jeon/tabsil
 cd tabsil
-uv sync                           # tabsil + dev tools (inference tests: uv run pytest tests)
-uv sync --package tabsil-train    # + training, priors, AMLB evaluation (tests: uv run --package tabsil-train pytest training/tests)
-uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # + TabArena / BeyondArena evaluation
+uv sync                           # tabsil + dev tools, Jupyter (inference tests: uv run pytest tests)
+uv sync --all-packages            # tabsil + tabsil-train (training, priors, AMLB evaluation) + dev tools, Jupyter
+uv sync --package tabsil-train    # tabsil-train and its test tools only (tests: uv run --package tabsil-train pytest training/tests)
+uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
 ```
 
-The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3).
+Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3).
 
 Python ≥ 3.12, PyTorch 2.11.
 

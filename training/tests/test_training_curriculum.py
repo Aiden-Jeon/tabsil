@@ -1,4 +1,4 @@
-"""The TabICLv2 three-stage training setup (`tabsil.recipe.curriculum`) and its parts: Muon on
+"""The TabICLv2 three-stage training setup (`tabsil_train.recipe.curriculum`) and its parts: Muon on
 all parameters, the TabICLv2 table size rule, the binary share of class counts, prior filter."""
 
 from dataclasses import replace

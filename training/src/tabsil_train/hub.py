@@ -64,7 +64,9 @@ def download_artifact(uri: str, dst: str | Path) -> Path:
     return path
 
 
-def load_model(spec: str, task: str, dst: str | Path) -> tuple[nn.Module, torch.Tensor | None]:
+def load_model(
+    spec: str | Path, task: str, dst: str | Path
+) -> tuple[nn.Module, torch.Tensor | None]:
     """Load a checkpoint onto the CPU. `spec` is one of:
 
     - `runs:/<run_id>/<path>`: a file or folder a training run logged to MLflow (downloaded into
@@ -77,6 +79,7 @@ def load_model(spec: str, task: str, dst: str | Path) -> tuple[nn.Module, torch.
     model from the model type and config stored in them. Everything but `runs:/` is read by
     `tabsil.hub.load_model`.
     """
+    spec = str(spec)
     if spec.startswith(hub.RUNS_PREFIX):
         return hub.load_model(download_artifact(spec, dst), task, name=spec)
     return hub.load_model(spec, task)
