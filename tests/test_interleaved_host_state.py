@@ -141,6 +141,21 @@ def test_offload_without_train_rows_matches_device_state(monkeypatch):
         assert _rel(_rows(model, x, y, task), want_rows[task]) < ROWS_TOL, task
 
 
+def test_offload_with_one_block_pair_keeps_no_state(monkeypatch):
+    # One block pair: block 0 reads the cell encoder output and the last block writes no state, so
+    # nothing is allocated on the CPU; the values still match the device
+    model = _model(True)  # the tiny config has one column/row stage pair
+    x, yc, yr = _inputs()
+    tasks = (("classification", yc), ("regression", yr))
+    want = {t: _forward(model, x, y, t) for t, y in tasks}
+    want_rows = {t: _rows(model, x, y, t) for t, y in tasks}
+    monkeypatch.setattr(M, "_host_state", lambda *a: pytest.fail("should not keep a state"))
+    monkeypatch.setattr(ColumnRowTransformer, "_offload_interleaved_state", lambda *_: True)
+    for task, y in tasks:
+        assert _rel(_forward(model, x, y, task), want[task]) < OUTPUT_TOL, task
+        assert _rel(_rows(model, x, y, task), want_rows[task]) < ROWS_TOL, task
+
+
 def test_held_state_stays_on_device_when_it_fits(monkeypatch):
     # The whole state does not fit on the device, but that of the train-row chunks does: it is not
     # kept on the CPU

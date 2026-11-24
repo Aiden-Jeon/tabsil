@@ -1382,6 +1382,7 @@ class ColumnRowTransformer(nn.Module):
         for r0 in range(0, r, step):
             r1 = min(r0 + step, r)
             h[:, r0:r1] = first if r0 == 0 else embed(x[:, r0:r1], rows=(r0, r1))
+        del first  # copied into h; do not keep a second chunk on the device through the blocks
         e = h.shape[-1]
         cls = self.cls_tokens.to(h.dtype).expand(b, r, -1, -1).clone()  # (B, R, n_cls, E)
         last = len(self.row_blocks) - 1
@@ -1459,14 +1460,17 @@ class ColumnRowTransformer(nn.Module):
           (`_host_state`)
         - Block 0 does not read the state: it recomputes the cell encoder (same input and chunks, so
           the same values)
-        - Without train rows nothing is kept: the summaries attend to no keys, as on the device"""
+        - Without train rows, or with one block pair, nothing is kept (without train rows the
+          summaries attend to no keys, as on the device)"""
         cfg = self.config
         b, r, c = x.shape
         device = x.device
         blocks = list(zip(self.column_blocks, self.row_blocks, strict=True))
         last = len(blocks) - 1
         chunks = [(r0, min(r0 + step, r)) for r0 in range(0, r, step)]
-        n_held = min(r, -(-n_train // step) * step)  # rows of the chunks with train rows
+        # Rows of the chunks with train rows. With one block pair nothing is carried: block 0 reads
+        # the cell encoder output and the last block writes no state
+        n_held = min(r, -(-n_train // step) * step) if len(blocks) > 1 else 0
 
         def cells(r0: int, r1: int) -> torch.Tensor:
             return embed(x[:, r0:r1], rows=(r0, r1))
@@ -1478,7 +1482,7 @@ class ColumnRowTransformer(nn.Module):
 
         shape = (b, n_held, c, e)
         release, rows = None, None
-        if self._offload_interleaved_state(device, math.prod(shape) * dtype.itemsize):
+        if n_held and self._offload_interleaved_state(device, math.prod(shape) * dtype.itemsize):
             h, release = self._acquire_host_state(shape, dtype)
         else:
             h = torch.empty(shape, dtype=dtype, device=device)
@@ -1486,8 +1490,9 @@ class ColumnRowTransformer(nn.Module):
             rows = _HostRows(h, step, device)
             cls = self.cls_tokens.to(dtype).expand(b, r, -1, -1).clone()  # (B, R, n_cls, E)
             acc = _OnlineSummary(blocks[0][0], b * c, n_train, dtype)
-            for r0, r1 in rows.chunks():
-                add(acc, cells(r0, r1), r0)
+            for r0, r1 in chunks:
+                if r0 < n_train:
+                    add(acc, cells(r0, r1), r0)
             summaries = [acc.finish()]  # per block (B x C, n_inducing, E)
             # Chunks with train rows: every chunk, block pair by block pair
             for i, (column, row) in enumerate(blocks):
