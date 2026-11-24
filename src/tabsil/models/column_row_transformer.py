@@ -59,7 +59,6 @@ from __future__ import annotations
 
 import contextlib
 import math
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, ClassVar
 
@@ -177,18 +176,6 @@ class ColumnRowTransformerConfig:
 
     def to_dict(self) -> dict:
         return asdict(self)
-
-    @classmethod
-    def from_dict(cls, values: Mapping[str, Any]) -> ColumnRowTransformerConfig:
-        """The config of a saved dict. Missing fields take the defaults; a field this code does
-        not know raises a ValueError naming it."""
-        unknown = sorted(set(values) - set(cls.__dataclass_fields__))
-        if unknown:
-            raise ValueError(
-                "the column_row_transformer model config has fields this code does not know:"
-                f" {unknown} (the checkpoint may have been saved by newer code or another branch)"
-            )
-        return cls(**values)
 
     @classmethod
     def tiny(cls, **changes: Any) -> ColumnRowTransformerConfig:

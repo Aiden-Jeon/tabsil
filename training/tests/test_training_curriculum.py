@@ -1,6 +1,7 @@
 """The TabICLv2 three-stage training setup (`tabsil_train.recipe.curriculum`) and its parts: Muon on
 all parameters, the TabICLv2 table size rule, the binary share of class counts, prior filter."""
 
+import copy
 from dataclasses import replace
 
 import numpy as np
@@ -274,7 +275,7 @@ def test_scalar_parameter_and_state_round_trip():
     assert model.scale.item() == pytest.approx(before - 0.1 * 0.2, rel=1e-2)
     state = opt.state_dict()
     again = Muon.for_model(model, lr=0.1, weight_decay=0.05)
-    again.load_state_dict(state)
+    again.load_state_dict(copy.deepcopy(state))  # not the same tensors as opt's
     assert again.state_dict()["state"].keys() == state["state"].keys()
     # the group settings other than lr stay as the new optimizer has them
     assert all(g["weight_decay"] == 0.05 for g in again.param_groups)
@@ -400,7 +401,7 @@ def test_train_script_stages(monkeypatch):
     assert config == recipe.curriculum(3, steps=500)
     # Resuming continues the Muon momentum and weight decay of the source run. Params that are
     # not TabSil speed options are not carried over
-    params = {"muon_momentum": "0.9", "muon_weight_decay": "0.01", "muon_scope": "all"}
-    params |= {"optimizer": "muon", "logit_softcap": "None", "schedule_free": "False"}
+    params = {"muon_momentum": "0.9", "muon_weight_decay": "0.01"}
+    params |= {"emsize": "256", "prior_type": "graph_scm", "steps": "300"}
     options = script.source_speed_options(params)
     assert options == {"muon_momentum": 0.9, "muon_weight_decay": 0.01}

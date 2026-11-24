@@ -20,8 +20,8 @@ than calling the model class directly. A registry model class provides:
 - `decoder_weight()`: the output layer weight (training metric `decoder_norm`), or None
 - (optional) `repeated_blocks()`: the repeated blocks. The `compile` speed-up option compiles each
   of them (without it, the whole model is compiled)
-- (optional) the config class's `from_dict(values)`: the config of a saved dict (reads older
-  formats, `config_from_dict`)
+- (optional) the config class's `from_dict(values)`: the config of a saved dict, when reading it
+  needs more than the fields (`config_from_dict`)
 - (optional) the config class's `INFO_FIELDS`: fields unrelated to the weight shapes (e.g. the
   feature count seen in training). They are not compared when resuming and are not logged as part
   of the model structure of a training run (`info_fields`)
@@ -83,8 +83,8 @@ def config_dict(config: Any) -> dict:
 
 def config_from_dict(model_type: str, values: dict) -> Any:
     """The model config of a saved dict. Missing fields take the defaults. The config class's
-    `from_dict` reads it if there is one (older formats); otherwise a field this code does not know
-    (saved by newer code or another branch) raises a ValueError naming it."""
+    `from_dict` reads it if there is one; otherwise a field this code does not know (saved by newer
+    code or another branch) raises a ValueError naming it."""
     cls = model_class(model_type).config_class
     if hasattr(cls, "from_dict"):
         return cls.from_dict(values)
