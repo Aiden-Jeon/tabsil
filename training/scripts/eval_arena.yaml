@@ -1,0 +1,60 @@
+# TabSil TabArena-Lite / BeyondArena evaluation (training/scripts/eval.py --suite tabarena-lite
+# etc.) on Databricks AI Runtime. Runs the official splits and computes Elo, normalized score,
+# improvability and win rates the same way as the public leaderboard. The suite is TABSIL_SUITE,
+# the checkpoints TABSIL_CHECKPOINTS (default: the default Hub repo `hf://aiden-jeon/tabsil` for
+# both tasks; its weights are not published yet).
+# Giving only one task leaves the other task's splits imputed (from the repository root):
+#   databricks air run -f training/scripts/eval_arena.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+#     --override "env_variables.TABSIL_SUITE=beyondarena" \
+#     --override "env_variables.TABSIL_CHECKPOINTS=--classifier-path runs:/<run_id>/checkpoints/latest.pt \
+#       --regressor-path runs:/<run_id>/checkpoints/latest.pt" \
+#     --override "env_variables.TABSIL_EXTRA_ARGS=--method-name tabsil-v1-stage3"
+# Test-time compute (classification only): `--test-time greedy` (diagscale, diagscale+greedy) with
+# another --method-name in TABSIL_EXTRA_ARGS; it takes longer, so raise timeout_minutes too. Space
+# several BeyondArena runs more than 5 minutes apart (Hugging Face rate limit, 429).
+experiment_name: tabsil
+mlflow_run_name: tabsil-v1-eval-arena
+environment:
+  version: databricks_ai_v6
+  # tabarena uses an autogluon pre-release and ray and needs pandas<2.4 (the environment's pandas
+  # 3 goes down to 2.3). The data-foundry extra downloads the BeyondArena data. The environment
+  # installer (uv) only allows pre-releases for pinned packages, so the uv.lock versions are listed
+  dependencies:
+    - huggingface-hub>=0.34
+    - tabarena[data-foundry]==0.1.1.dev20261031114042
+    - bencheval==0.1.1.dev20261031114042
+    - autogluon.tabular==1.6.4b20261101
+    - autogluon.core[ray]==1.6.4b20261101
+    - autogluon.common==1.6.4b20261101
+    - autogluon.features==1.6.4b20261101
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+code_source:
+  type: snapshot
+  snapshot:
+    # the two packages (tabsil, tabsil-train, imported through PYTHONPATH) and the script, relative
+    # to the repository root
+    root_path: ../..
+    include_paths:
+      - src
+      - training/src
+      - training/scripts/eval.py
+env_variables:
+  TABSIL_SUITE: tabarena-lite
+  TABSIL_CHECKPOINTS: >-
+    --classifier-path hf://aiden-jeon/tabsil
+    --regressor-path hf://aiden-jeon/tabsil
+  TABSIL_EXTRA_ARGS: ""
+  # One worker per GPU takes datasets from a queue, most expensive first (eval.py --shards); the
+  # main process prints progress every 5 minutes (--heartbeat-minutes). For 8, change compute to
+  # GPU_8xH100 with 8 accelerators. TabSil keeps the cell state of large tables on the CPU
+  # (float32), so large tables run together only while their sum stays within 50% of the
+  # container memory limit (eval.py --host-memory-budget-gb)
+  TABSIL_SHARDS: "1"
+max_retries: 0
+timeout_minutes: 480
+command: >-
+  PYTHONPATH=$CODE_SOURCE_PATH/src:$CODE_SOURCE_PATH/training/src
+  python $CODE_SOURCE_PATH/training/scripts/eval.py --suite $TABSIL_SUITE
+  $TABSIL_CHECKPOINTS --shards $TABSIL_SHARDS $TABSIL_EXTRA_ARGS

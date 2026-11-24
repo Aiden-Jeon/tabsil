@@ -1,5 +1,6 @@
-"""Reading checkpoints, Hub config.json files and MLflow run params written by minipfn for the
-TabSil structure (`ColumnRowTransformerConfig.from_dict`, `fixed_fields_check`).
+"""Reading checkpoints and Hub config.json files written by minipfn for the TabSil structure
+(`ColumnRowTransformerConfig.from_dict`, `fixed_fields_check`). minipfn MLflow run params and
+training from a minipfn checkpoint are tested in training/tests (tabsil-train).
 
 minipfn's config of this model had fields that TabSil fixes in the code (`FIXED_FIELDS`). They are
 accepted only with the TabSil value; a minipfn dict that lacks one of them had it at minipfn's
@@ -7,18 +8,15 @@ default (minipfn left fields added after the first release out of the dict at th
 """
 
 import json
-from dataclasses import replace
 
 import pytest
 import torch
+from helpers import smoke_model, smoke_model_config
 from safetensors.torch import save_file
 
-from tabsil import recipe
-from tabsil.hub import from_pretrained, run_architecture
+from tabsil.hub import from_pretrained
 from tabsil.models import config_from_dict, model_from_state
 from tabsil.models.column_row_transformer import FIXED_FIELDS, ColumnRowTransformerConfig
-from tabsil.training.config import TrainConfig
-from tabsil.training.loop import check_checkpoint
 
 # `minipfn.models.config_dict` of the minipfn-v1 smoke model, exactly as minipfn 8a7c81c wrote it
 # (`with_architecture(TrainConfig.smoke("multitask"), keep_size=True).build_model().config`)
@@ -54,49 +52,16 @@ MINIPFN_SMOKE_CONFIG = {
     "stage_layout": "interleaved",
     "regression_head": "quantile",
 }
-# The structure params of a minipfn-v1 stage 1 training run, as MLflow recorded them (strings)
-MINIPFN_STAGE1_PARAMS = {
-    "task": "multitask",
-    "model_type": "column_row_transformer",
-    "emsize": "256",
-    "nlayers": "24",
-    "nhead": "16",
-    "features_per_group": "3",
-    "encoder": "fourier",
-    "n_inducing": "256",
-    "n_cls": "4",
-    "qk_norm": "True",
-    "logit_softcap": "None",
-    "qk_norm_affine": "False",
-    "column_summary_temperature": "logscale",
-    "column_spread_temperature": "none",
-    "row_temperature": "gated_logscale",
-    "icl_temperature": "logscale",
-    "decoder_temperature": "logscale",
-    "column_blocks": "6",
-    "row_blocks": "6",
-    "column_heads": "4",
-    "row_heads": "4",
-    "decoder_qk_norm": "False",
-    "stage_layout": "interleaved",
-    "regression_head": "quantile",
-    "categorical_encoder": "False",
-    "target_norm": "True",
-    "head_mlp": "True",
-    "max_features": "100",
-    "optimizer": "muon",
-    "muon_scope": "all",
-}
 
 
 def _smoke_model():
     torch.manual_seed(0)
-    return TrainConfig.smoke().build_model().eval()
+    return smoke_model().eval()
 
 
 def test_minipfn_config_dict_reads_as_the_tabsil_smoke_config():
     config = config_from_dict("column_row_transformer", MINIPFN_SMOKE_CONFIG)
-    assert config == TrainConfig.smoke().model_config()
+    assert config == smoke_model_config()  # TabSil's smoke model (`TrainConfig.smoke()`)
     assert config.gate_hidden == 64  # renamed from qassmax_hidden
     # the dict is not changed
     assert "qassmax_hidden" in MINIPFN_SMOKE_CONFIG and "task" in MINIPFN_SMOKE_CONFIG
@@ -114,8 +79,7 @@ def test_minipfn_training_checkpoint_loads_and_takes_weights(tmp_path):
     }
     loaded, loaded_borders = model_from_state(state)
     assert loaded.config == model.config and torch.equal(loaded_borders, borders)
-    # init_from (stage 2 from a minipfn stage 1 run) accepts it
-    check_checkpoint(state, TrainConfig.smoke(), "init_from")
+    # init_from (stage 2 from a minipfn stage 1 run) accepting it is tested in training/tests
     x, y = torch.randn(1, 30, 5), torch.randint(0, 3, (1, 20)).float()
     torch.testing.assert_close(loaded(x, y, "classification"), model(x, y, "classification"))
 
@@ -180,16 +144,3 @@ def test_tabsil_dict_has_no_fixed_fields_and_unknown_fields_raise():
     # a removed field in a TabSil dict (no `task` marker) is an unknown field
     with pytest.raises(ValueError, match="stage_layout"):
         config_from_dict("column_row_transformer", {**saved, "stage_layout": "interleaved"})
-
-
-def test_minipfn_run_params_give_the_tabsil_structure():
-    source = run_architecture(dict(MINIPFN_STAGE1_PARAMS))
-    assert source == recipe.STRUCTURE
-    assert replace(recipe.curriculum(2), **source) == recipe.curriculum(2)
-    for name, value in (("stage_layout", "sequential"), ("logit_softcap", "30.0")):
-        with pytest.raises(ValueError, match=name):
-            run_architecture({**MINIPFN_STAGE1_PARAMS, name: value})
-    # a run from before the field existed had minipfn's default
-    older = {k: v for k, v in MINIPFN_STAGE1_PARAMS.items() if k != "regression_head"}
-    with pytest.raises(ValueError, match="regression_head"):
-        run_architecture(older)

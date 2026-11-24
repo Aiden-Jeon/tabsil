@@ -32,7 +32,10 @@ mlflow.db
 *.ckpt
 
 # Local tool state
+.env
+.env.*
 .env.local
+.isaac/
 .databricks/
 .vscode/
 

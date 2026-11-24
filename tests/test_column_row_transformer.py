@@ -1,9 +1,7 @@
 """Tests of the `column_row_transformer` model (TabSil's backbone) and of the TabSil recipe
-around it."""
+around it (inference side; training and the scripts are in training/tests)."""
 
 import json
-import types
-from dataclasses import replace
 
 import helpers
 import numpy as np
@@ -15,7 +13,6 @@ from tabsil import hub, recipe
 from tabsil import models as registry
 from tabsil.inference.ensemble import EnsembleClassifier, EnsembleRegressor
 from tabsil.models.column_row_transformer import (
-    MAX_CLASSES,
     ColumnRowTransformer,
     ColumnRowTransformerConfig,
     RetrievalDecoder,
@@ -23,17 +20,15 @@ from tabsil.models.column_row_transformer import (
     group_offsets,
 )
 from tabsil.models.quantile_distribution import N_QUANTILES
-from tabsil.training.config import N_BUCKETS, TrainConfig
-from tabsil.training.loop import check_checkpoint, train
 
 TASKS = ("classification", "regression")
-BORDERS = torch.linspace(-3, 3, N_BUCKETS + 1)
+BORDERS = torch.linspace(-3, 3, 5000 + 1)  # the training borders (tabsil-train `N_BUCKETS`)
 
 
 def _model(**changes):
     """The smoke-size TabSil model, with the zero-initialized layers filled."""
     torch.manual_seed(0)
-    model = helpers.tabsil_smoke(**changes).build_model()
+    model = helpers.smoke_model(**changes)
     # The last layer of each residual branch starts at zero, so inputs do not reach the output at
     # first. Fill it in to expose the paths
     with torch.no_grad():
@@ -59,30 +54,19 @@ def _out(task):
     return 10 if task == "classification" else N_QUANTILES
 
 
+def _published_config():
+    # the published structure (`recipe.STRUCTURE`); tabsil-train checks the curriculum builds it
+    sizes = {k: v for k, v in recipe.STRUCTURE.items() if k != "model_type"}
+    return ColumnRowTransformerConfig(**sizes)
+
+
 def test_paper_size_matches_the_report():
     # TabSil (interleaved Kumo stages, quantile head): 221.5M
-    config = recipe.curriculum(1).model_config()
+    config = _published_config()
     with torch.device("meta"):
         model = ColumnRowTransformer(config)
     assert abs(model.num_parameters() / 1e6 - 221.5) / 221.5 < 0.02
     assert config.icl_dim == 1024
-
-
-def test_smoke_config_builds_and_runs():
-    config = TrainConfig.smoke()
-    assert config.model_type == "column_row_transformer"
-    assert (config.emsize, config.nlayers, config.nhead) == (32, 2, 2)
-    assert (config.n_inducing, config.column_blocks, config.row_blocks) == (8, 2, 2)
-    # the default config is the published structure
-    assert {k: getattr(TrainConfig(), k) for k in recipe.STRUCTURE} == recipe.STRUCTURE
-    torch.manual_seed(0)
-    model = registry.randomize_zero_weights(config.build_model()).eval()
-    x, yc = _data("classification")
-    _, yr = _data("regression")
-    with torch.no_grad():
-        assert model(x, yc, task="classification").shape == (2, 15, 10)
-        out = model(x, yr, task="regression")
-    assert out.shape == (2, 15, N_QUANTILES) and torch.isfinite(out).all()
 
 
 def test_group_offsets_and_ecdf():
@@ -193,36 +177,6 @@ def test_bad_options_raise():
         ColumnRowTransformerConfig(column_blocks=3, row_blocks=2)
 
 
-def test_train_save_load_and_hub(tmp_path):
-    config = helpers.tabsil_smoke(steps=3)
-    result = train(config, tmp_path, mlflow_log=False)
-    model, borders = registry.load_checkpoint(result["final_path"])
-    assert isinstance(model, ColumnRowTransformer) and borders is not None
-    assert model.config == config.model_config()
-    state = torch.load(tmp_path / "latest.pt", weights_only=True)
-    check_checkpoint(state, config, "resume_from")
-    with pytest.raises(ValueError, match="different model config"):
-        check_checkpoint(state, replace(config, emsize=16), "resume_from")
-    no_borders = {**state, "borders": None}
-    with pytest.raises(ValueError, match="regression borders"):
-        check_checkpoint(no_borders, config, "resume_from")
-
-    loaded, loaded_borders = hub.from_pretrained(
-        hub.save_pretrained(model, borders, tmp_path / "pretrained")
-    )
-    assert isinstance(loaded, ColumnRowTransformer) and torch.equal(loaded_borders, borders)
-    for name, tensor in model.state_dict().items():
-        assert torch.equal(loaded.state_dict()[name], tensor), name
-    # Rebuild the architecture from training run params (training-script resume). The feature count
-    # seen in training is not architecture, so it is not part of the run architecture
-    params = {k: str(v) for k, v in vars(config).items()}
-    source = hub.run_architecture(params)
-    assert "max_features" not in source
-    rebuilt = replace(TrainConfig(), **source, max_features=config.max_features)
-    assert rebuilt.model_config() == config.model_config()
-    assert len(result["history"]["val_loss"]) == 1
-
-
 def test_ensembles_and_default_inference():
     # TabSil's inference defaults (8 standard members, 768 columns per member, balanced) for any
     # model without saved settings
@@ -274,115 +228,18 @@ def test_standard_members_keep_values():
     assert np.allclose(kept, X)
 
 
-def _script(name):
-    return helpers.load_script(f"scripts/{name}.py", f"{name}_script_column_row")
-
-
-def _clear_env(monkeypatch):
-    for name in ("CONFIG_NAME", "BATCH_SIZE", "STEPS"):
-        monkeypatch.delenv(f"TABSIL_{name}", raising=False)
-
-
-def test_train_script_builds_tabsil_and_reads_its_run(monkeypatch):
-    _clear_env(monkeypatch)
-    script = _script("train")
-    args = script.parse_args(["--config-name", "stage1"])
-    config = script.build_config(args)
-    assert config == recipe.curriculum(1)
-    params = {k: str(v) for k, v in vars(config).items()}
-    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "r"])
-    resumed = script.build_config(args, hub.run_architecture(params))
-    assert resumed.model_config() == config.model_config()
-    smoke = script.build_config(script.parse_args(["--config-name", "smoke"]))
-    assert smoke == helpers.tabsil_smoke()
-    # a run of another size is not taken
-    other = {k: str(v) for k, v in vars(replace(config, n_cls=8, emsize=128)).items()}
-    with pytest.raises(SystemExit, match="structure"):
-        script.build_config(args, hub.run_architecture(other))
-    with pytest.raises(SystemExit):
-        script.parse_args(["--config-name", "stage2"])  # needs --init-run-id
-    with pytest.raises(SystemExit):
-        script.parse_args(["--task", "classification"])  # the flag is gone
-
-
-def test_train_script_takes_the_batch_size_and_keeps_it_on_resume(monkeypatch):
-    # Resuming follows the source run's batch unless the argument is given
-    _clear_env(monkeypatch)
-    script = _script("train")
-    base = ["--config-name", "stage1"]
-    assert script.build_config(script.parse_args(base)).batch_size == 256
-    monkeypatch.setenv("TABSIL_BATCH_SIZE", "128")
-    config = script.build_config(script.parse_args(base))
-    assert config.batch_size == 128 and config.grad_accumulation(32) == 1
-    assert config.for_world_size(64).micro_batch == 2
-    monkeypatch.delenv("TABSIL_BATCH_SIZE")
-    params = {k: str(v) for k, v in vars(config).items()}
-    resume = ["--config-name", "stage1", "--resume-run-id", "r"]
-    for extra, expected in (([], 128), (["--batch-size", "64"], 64)):
-        args = script.parse_args(resume + extra)
-        script.inherit_batch_size(args, params)
-        resumed = script.build_config(args, hub.run_architecture(params))
-        assert resumed.batch_size == expected
-    # Taking only the weights keeps the preset value
-    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "r"])
-    script.inherit_batch_size(args, params)
-    assert args.batch_size is None
-
-
-def test_eval_script_takes_tabsil_inference_defaults():
-    script = _script("eval")
-    assert script.default_inference(_model(), "classification") == {
-        "n_estimators": 8,
-        "member_kinds": ("standard",),
-        "max_features_per_member": 768,
-        "feature_subsampling": "balanced",
-    }
-
-
 def test_fresh_model_reads_its_input():
     # Even in a fresh model (zero-init layers intact), row vectors depend on the input
     # so gradients flow. With a large CLS token or a zero-init row-stage output layer, all rows were
     # nearly identical and gradients were 1e-8
     torch.manual_seed(0)
-    model = helpers.tabsil_smoke().build_model()
+    model = helpers.smoke_model()
     x, y = _data("classification")
     out = model(x, y, "classification")
     assert out.std(dim=1).mean() > 1e-3  # different prediction per test row
     out[..., 0].sum().backward()
     assert model.row_blocks[0].attention.qkv.weight.grad.norm() > 1e-4
     assert model.heads["classification"].q_projection.weight.grad.norm() > 1e-4
-
-
-def test_eval_n_estimators_sets_the_member_count(monkeypatch, tmp_path):
-    script = _script("eval")
-    model = _model()
-    monkeypatch.setattr(script, "load_model", lambda path, suite, dst: (model, None))
-    args = script.parse_args(["--classifier-path", "x.pt"])
-    assert script.make_estimator_factory("classification", args).n_estimators == 8
-    args = script.parse_args(["--classifier-path", "x.pt", "--n-estimators", "4"])
-    assert script.make_estimator_factory("classification", args).n_estimators == 4
-
-
-def test_arena_limits_follow_the_recipe():
-    # The TabArena / BeyondArena size limits are TabSil's supported size
-    import argparse as _argparse
-
-    assert recipe.SUPPORTED_SIZE == {"max_train_rows": 1_000_000, "max_features": 6_000}
-    script = _script("eval")
-    args = _argparse.Namespace(max_train_rows=None, max_features=None)
-    limits = script.arena_limits({"classification": (_model(), None)}, args)
-    # Classes beyond the 10 target embeddings share embeddings, up to MAX_CLASSES (issue #66)
-    assert limits["binary"].max_train_rows == 1_000_000
-    assert limits["binary"].max_features == 6_000
-    assert limits["binary"].max_classes == MAX_CLASSES == 160
-    # With per-member feature selection there is no feature limit (--max-features sets one)
-    wide = script.parse_args(["--max-features-per-member", "6000"])
-    assert wide.max_features_per_member == 6000
-    limits = script.arena_limits({"classification": (_model(), None)}, wide)
-    assert limits["binary"].max_features is None and limits["binary"].max_train_rows == 1_000_000
-    wide.max_features = 9000
-    limits = script.arena_limits({"classification": (_model(), None)}, wide)
-    assert limits["binary"].max_features == 9000
 
 
 # ---------------------------------------------------------------------------
@@ -423,15 +280,6 @@ def test_labels_reach_the_icl_stage():
     assert not torch.allclose(model(x, y, task="regression"), out)
 
 
-def test_recipe_and_config():
-    config = recipe.curriculum(1)
-    assert config.tasks == TASKS and config.rewind_lr_factor == 0.5
-    with pytest.raises(ValueError, match="stage"):
-        recipe.curriculum(4)
-    with pytest.raises(ValueError, match="task"):
-        config.make_prior("multitask", 0)
-
-
 def test_ensembles_and_hub(tmp_path):
     model = _model()
     X, y = load_breast_cancer(return_X_y=True)
@@ -451,7 +299,7 @@ def test_ensembles_and_hub(tmp_path):
 
 
 def test_parameter_counts_by_stage_and_task_add_up():
-    config = recipe.curriculum(1).model_config()
+    config = _published_config()
     with torch.device("meta"):
         model = ColumnRowTransformer(config)
     by_stage = model.num_parameters_by_stage()
@@ -535,28 +383,6 @@ def test_more_classes_than_target_embeddings_share_embeddings():
     # More classes than the limit (MAX_CLASSES) are rejected
     with pytest.raises(ValueError, match="exceed what the model accepts"):
         EnsembleClassifier(model, n_estimators=1).fit(X[:200], np.arange(200) % 161)
-
-
-def test_eval_seed_changes_members_and_the_arena_fingerprint(monkeypatch, tmp_path):
-    script = _script("eval")
-    args = script.parse_args(["--suite", "classification", "--seed", "3"])
-    assert args.seed == 3 and script.parse_args([]).seed == 0
-    model = _model()
-    monkeypatch.setattr(script, "load_model", lambda *a, **k: (model, None))
-    args.classifier_path, args.out_dir = "unused", str(tmp_path)
-    make = script.make_estimator_factory("classification", args)
-    estimator = make(types.SimpleNamespace(categorical_indices=[]))
-    assert estimator.random_state == 3
-    # seed 0 (the default) is left out of the fingerprint, another seed is recorded
-    paths = {"classification": "unused"}
-    factories = {"classification": types.SimpleNamespace(model=model, n_estimators=8)}
-
-    def fingerprint(argv):
-        return json.loads(script.arena_fingerprint(script.parse_args(argv), paths, factories))
-
-    assert fingerprint(["--seed", "0"]) == {"paths": paths, "n_estimators": {"classification": 8}}
-    assert fingerprint(["--seed", "3"])["seed"] == 3
-    assert fingerprint(["--max-features-per-member", "6000"])["max_features_per_member"] == 6000
 
 
 def test_forward_rejects_labels_outside_the_target_embeddings():
@@ -653,9 +479,20 @@ def test_tabsil_classes_share_the_multitask_repo(tmp_path, monkeypatch):
         TabSilRegressor(model)
 
 
-def test_tabsil_default_feature_cap_in_classes_and_eval(monkeypatch, tmp_path):
+def test_diag_scale_views_keep_feature_subsampling():
+    from tabsil.inference.diag_scale import _views
+
+    model = _model()
+    est = EnsembleClassifier(
+        model, n_estimators=2, max_features_per_member=3, feature_subsampling="balanced"
+    )
+    views = _views(est, model, n_views=4, random_state=0)
+    assert views.max_features_per_member == 3 and views.feature_subsampling == "balanced"
+
+
+def test_tabsil_default_feature_cap_in_classes():
     # The default inference puts at most 768 columns per member, balanced (issue #99). Arguments
-    # come first
+    # come first (the eval script's defaults: training/tests)
     from tabsil import TabSilClassifier, TabSilRegressor
 
     model = _model()
@@ -669,48 +506,3 @@ def test_tabsil_default_feature_cap_in_classes_and_eval(monkeypatch, tmp_path):
     assert (reg.n_estimators, reg.member_kinds) == (8, ("standard",))
     # The plain ensemble has no cap
     assert EnsembleClassifier(model, n_estimators=2).max_features_per_member is None
-
-    script = _script("eval")
-
-    def factory(argv, task="classification"):
-        monkeypatch.setattr(script, "load_model", lambda *a, **k: (model, None))
-        paths = ["--classifier-path", "u", "--regressor-path", "u", "--out-dir", str(tmp_path)]
-        args = script.parse_args([*paths, *argv])
-        f = script.make_estimator_factory(task, args)
-        return args, f
-
-    def caps(argv):
-        _, f = factory(argv)
-        return f.max_features_per_member, f.feature_subsampling
-
-    args, f = factory([])
-    assert (f.max_features_per_member, f.feature_subsampling) == (768, "balanced")
-    est = f(types.SimpleNamespace(categorical_indices=[]))
-    assert est.max_features_per_member == 768 and est.feature_subsampling == "balanced"
-    paths = {"classification": "u"}
-    printed = json.loads(script.arena_fingerprint(args, paths, {"classification": f}))
-    # Results computed with all columns are not reused
-    assert printed["max_features_per_member"] == 768
-    assert caps(["--max-features-per-member", "6000"]) == (6000, "balanced")
-    assert caps(["--max-features-per-member", "0"]) == (None, "balanced")  # off: all columns
-    assert caps(["--test-time", "greedy"]) == (None, "balanced")
-    with pytest.raises(SystemExit):
-        script.parse_args(["--max-features-per-member", "-1"])
-    # Off keeps the old default fingerprint and the arena feature limit
-    off, f_off = factory(["--max-features-per-member", "0"])
-    printed = json.loads(script.arena_fingerprint(off, paths, {"classification": f_off}))
-    assert "max_features_per_member" not in printed
-    caps_off = script.feature_caps(off, {"classification": f_off})
-    limits = script.arena_limits({"classification": (model, None)}, off, caps_off)
-    assert limits["binary"].max_features == 6_000
-
-
-def test_diag_scale_views_keep_feature_subsampling():
-    from tabsil.inference.diag_scale import _views
-
-    model = _model()
-    est = EnsembleClassifier(
-        model, n_estimators=2, max_features_per_member=3, feature_subsampling="balanced"
-    )
-    views = _views(est, model, n_views=4, random_state=0)
-    assert views.max_features_per_member == 3 and views.feature_subsampling == "balanced"

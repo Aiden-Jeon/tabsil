@@ -1,18 +1,16 @@
 """The Kumo-Tabular parts of the model (`column_row_transformer` module docstring): interleaved
-column/row stages and the regression quantile head, plus the TabSil curriculum presets."""
+column/row stages and the regression quantile head (the curriculum presets and the training loss:
+training/tests)."""
 
 import math
-from dataclasses import replace
 
-import helpers
 import numpy as np
 import pytest
 import torch
 
 from tabsil import recipe
-from tabsil.hub import run_architecture
 from tabsil.inference.ensemble import EnsembleClassifier, EnsembleRegressor
-from tabsil.models import config_dict, model_from_state
+from tabsil.models import config_dict
 from tabsil.models.column_row_transformer import ColumnRowTransformer, ColumnRowTransformerConfig
 from tabsil.models.quantile_distribution import (
     N_QUANTILES,
@@ -21,8 +19,6 @@ from tabsil.models.quantile_distribution import (
     quantile_levels,
     quantiles_to_bucket_probs,
 )
-from tabsil.training.loop import train
-from tabsil.training.losses import prior_loss
 
 # Tiny Kumo-style column/row stages (2 block pairs)
 TINY_STAGES = {"column_blocks": 2, "row_blocks": 2}
@@ -30,6 +26,13 @@ TINY_STAGES = {"column_blocks": 2, "row_blocks": 2}
 
 def _config(**changes) -> ColumnRowTransformerConfig:
     return ColumnRowTransformerConfig.tiny(**changes)
+
+
+def _published_config() -> ColumnRowTransformerConfig:
+    # the published structure (`recipe.STRUCTURE`, what curriculum stage 1 builds)
+    return ColumnRowTransformerConfig(
+        **{k: v for k, v in recipe.STRUCTURE.items() if k != "model_type"}
+    )
 
 
 def _inputs(c: int = 5, seed: int = 0):
@@ -95,7 +98,7 @@ def test_interleaved_layout_mixes_columns_before_the_next_column_block():
 
 def test_kumo_stages_size():
     # The row ICL is the TabPFN-3.5 one (width 1024); the cell, column and row stages are 256 wide
-    model_config = recipe.curriculum(1).model_config()
+    model_config = _published_config()
     assert model_config.icl_dim == 1024 and model_config.emsize == 256
     with torch.device("meta"):
         counts = ColumnRowTransformer(model_config).num_parameters_by_stage()
@@ -122,8 +125,6 @@ def test_pinball_loss_and_initial_quantiles():
     out = model(x, yr, "regression")
     assert out.shape == (2, 10, N_QUANTILES)
     torch.testing.assert_close(out, bias.expand_as(out))
-    loss = prior_loss(out, torch.randn(2, 10), "regression")
-    assert torch.isfinite(loss)
 
 
 def test_quantiles_to_bucket_probs():
@@ -176,29 +177,12 @@ def test_test_time_methods_refuse_regression():
 # --- Training config, training script, smoke training ----------------------------------------
 
 
-def test_curriculum_presets():
-    one, two, three = (recipe.curriculum(n) for n in (1, 2, 3))
-    for config in (one, two, three):
-        assert {k: getattr(config, k) for k in recipe.STRUCTURE} == recipe.STRUCTURE
-    assert (one.lr, two.lr, three.lr) == (8e-4, 1e-4, 2e-5)
-    assert (one.micro_batch, two.micro_batch, three.micro_batch) == (4, 1, 1)
-    assert (one.max_rows, two.max_rows, three.max_rows) == (1_024, 10_240, 60_000)
-    # The wide column/row stages need activation checkpointing above 2,048 rows from stage 2
-    assert one.activation_checkpointing_rows is None
-    assert two.activation_checkpointing_rows == three.activation_checkpointing_rows == 2_048
-    assert recipe.curriculum(1, steps=1000).warmup_steps == 10
-    with pytest.raises(ValueError, match="curriculum stage"):
-        recipe.curriculum(4)
-    with pytest.raises(ValueError, match="step"):
-        recipe.curriculum(1, steps=0)
-
-
 def test_saved_tabsil_config_round_trips():
     # Checkpoints and Hub config.json files hold the model config only (no structure name). The
     # rebuilt model has the same config and TabSil's inference settings
     from tabsil.models import config_from_dict
 
-    model_config = recipe.curriculum(1).model_config()
+    model_config = _published_config()
     saved = config_dict(model_config)
     assert not {"name", "arch", "architecture", "task"} & set(saved)
     with torch.device("meta"):
@@ -206,57 +190,6 @@ def test_saved_tabsil_config_round_trips():
     assert model.config == model_config
     for task in ("classification", "regression"):
         assert recipe.default_inference(model, task)["max_features_per_member"] == 768
-
-
-def test_tabsil_smoke_checkpoint_round_trip(tmp_path, monkeypatch):
-    # A small TabSil model trained and saved reads back with the same structure
-    monkeypatch.setenv("PYTHONHASHSEED", "0")
-    small = dict(
-        max_features=8,
-        min_rows=48,
-        max_rows=80,
-        max_cells=80 * 8,
-        steps=2,
-        warmup_steps=1,
-        val_every=2,
-        log_every=1,
-        checkpoint_every=2,
-        keep_every=None,
-        collapse_threshold=None,
-        border_datasets=20,
-    )
-    config = helpers.tabsil_smoke(**small)
-    train(config, tmp_path, mlflow_log=False)
-    model, borders = model_from_state(torch.load(tmp_path / "latest.pt", weights_only=True))
-    assert borders is not None and model.config == config.model_config()
-
-
-def _script(name):
-    return helpers.load_script("scripts/train.py", name)
-
-
-def _clear_train_env(monkeypatch):
-    for name in ("CONFIG_NAME", "LR", "MICRO_BATCH", "STEPS"):
-        monkeypatch.delenv(f"TABSIL_{name}", raising=False)
-
-
-def test_train_script_curriculum(monkeypatch):
-    _clear_train_env(monkeypatch)
-    script = _script("train_script_tabsil_curriculum")
-    config = script.build_config(script.parse_args(["--config-name", "stage1"]))
-    assert config == recipe.curriculum(1)
-    # Stage 2 and 3 take the weights of the previous stage's run
-    with pytest.raises(SystemExit):
-        script.parse_args(["--config-name", "stage2"])
-    source = run_architecture({k: str(v) for k, v in vars(recipe.curriculum(1)).items()})
-    for n in (2, 3):
-        args = script.parse_args([f"--config-name=stage{n}", "--init-run-id", "x"])
-        assert script.build_config(args, source) == recipe.curriculum(n)
-    # The weights of a run with another size are not taken
-    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "x"])
-    other = replace(recipe.curriculum(1), n_cls=8, emsize=128)
-    with pytest.raises(SystemExit, match="structure"):
-        script.build_config(args, run_architecture({k: str(v) for k, v in vars(other).items()}))
 
 
 def test_attention_splits_large_batch(monkeypatch):

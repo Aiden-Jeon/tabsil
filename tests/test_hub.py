@@ -1,13 +1,13 @@
-"""Checkpoint loading and Hub format tests (no MLflow or Hub server)."""
+"""Checkpoint loading and Hub format tests (no Hub server). MLflow run checkpoints (`runs:/`) are
+tested in training/tests/test_hub_runs.py."""
 
 import json
 import subprocess
 import sys
 
-import mlflow
 import pytest
 import torch
-from helpers import tabsil_smoke
+from helpers import smoke_model
 
 from tabsil import hub
 from tabsil.models import config_dict, save_checkpoint
@@ -21,7 +21,7 @@ def chdir_tmp(tmp_path, monkeypatch):
 def _model():
     # one multitask model; saved without borders it serves classification only
     torch.manual_seed(0)
-    return tabsil_smoke().build_model().eval()
+    return smoke_model().eval()
 
 
 def _same_weights(a, b):
@@ -54,44 +54,19 @@ def test_load_model_reads_every_kind_of_checkpoint(tmp_path):
     save_checkpoint(tmp_path / "final.pt", clf)
     hub.save_pretrained(clf, None, tmp_path / "pretrained")
     for spec in (tmp_path / "final.pt", tmp_path / "pretrained"):
-        loaded, borders = hub.load_model(str(spec), "classification", tmp_path)
+        loaded, borders = hub.load_model(str(spec), "classification")
         assert borders is None
         _same_weights(clf, loaded)
     with pytest.raises(SystemExit, match="needs a regression model"):
-        hub.load_model(str(tmp_path / "pretrained"), "regression", tmp_path)
+        hub.load_model(str(tmp_path / "pretrained"), "regression")
+    # the earlier call with a download folder (`dst`, unused here) still works
+    _same_weights(clf, hub.load_model(str(tmp_path / "final.pt"), "classification", tmp_path)[0])
 
 
 def test_training_checkpoint_without_model_config_is_refused(tmp_path):
     path = _training_state(tmp_path, _model())
     with pytest.raises(SystemExit, match="no model config"):
-        hub.load_model(str(path), "classification", tmp_path)
-
-
-def test_training_checkpoint_from_run_carries_its_model_config(tmp_path, monkeypatch):
-    from tabsil.training.loop import train
-
-    config = tabsil_smoke(steps=1, border_datasets=20)
-    train(config, tmp_path / "run", mlflow_log=False)
-    path = tmp_path / "run" / "latest.pt"
-    seen = {}
-
-    def download(artifact_uri, dst_path):
-        seen["uri"] = artifact_uri
-        return str(path)
-
-    monkeypatch.setattr(mlflow.artifacts, "download_artifacts", download)
-    uri = "runs:/abc123/checkpoints/latest.pt"
-    loaded, borders = hub.load_model(uri, "classification", tmp_path)
-    assert seen["uri"] == uri and not loaded.training
-    state = torch.load(path, weights_only=True)
-    assert torch.equal(borders, state["borders"])  # training checkpoints keep the borders
-    for name, tensor in state["model"].items():
-        assert torch.equal(loaded.state_dict()[name], tensor), name
-    # with its borders the same checkpoint serves regression too
-    assert hub.served_tasks(*hub.load_model(uri, "regression", tmp_path)) == (
-        "classification",
-        "regression",
-    )
+        hub.load_model(str(path), "classification")
 
 
 def test_hub_needs_the_hf_prefix_and_missing_local_paths_fail(tmp_path, monkeypatch, chdir_tmp):
@@ -101,14 +76,15 @@ def test_hub_needs_the_hf_prefix_and_missing_local_paths_fail(tmp_path, monkeypa
         "from_pretrained",
         lambda spec, revision=None: seen.append((spec, revision)) or (_model(), None),
     )
-    hub.load_model("hf://owner/name", "classification", tmp_path)
+    hub.load_model("hf://owner/name", "classification")
     assert seen == [("owner/name", None)]
-    hub.load_model(
-        "hf://owner/name@step-100k", "classification", tmp_path
-    )  # intermediate checkpoint branch
+    hub.load_model("hf://owner/name@step-100k", "classification")  # intermediate checkpoint branch
     assert seen[-1] == ("owner/name", "step-100k")
     with pytest.raises(SystemExit, match="hf://"):
-        hub.load_model("models/clf", "classification", tmp_path)  # mistyped local path
+        hub.load_model("models/clf", "classification")  # mistyped local path
+    # MLflow run artifacts are read by tabsil-train (`tabsil_train.hub.load_model`)
+    with pytest.raises(SystemExit, match="tabsil_train"):
+        hub.load_model("runs:/abc/model", "classification")
     assert len(seen) == 2
 
 
@@ -116,16 +92,6 @@ def test_borders_keep_their_dtype(tmp_path):
     edges = torch.linspace(-3, 3, 5001, dtype=torch.float64)
     _, borders = hub.from_pretrained(hub.save_pretrained(_model(), edges, tmp_path))
     assert borders.dtype == torch.float64 and torch.equal(borders, edges)
-
-
-def test_run_uri_to_a_pretrained_folder(tmp_path, monkeypatch):
-    clf = _model()
-    folder = hub.save_pretrained(clf, None, tmp_path / "pretrained")
-    monkeypatch.setattr(
-        mlflow.artifacts, "download_artifacts", lambda artifact_uri, dst_path: str(folder)
-    )
-    loaded, _ = hub.load_model("runs:/abc/model", "classification", tmp_path)
-    _same_weights(clf, loaded)
 
 
 def test_config_json_holds_the_model_config(tmp_path):
@@ -157,7 +123,7 @@ def test_inference_classes_load_weights_without_from_pretrained(tmp_path, monkey
     tabsil_dir, cls_dir = tmp_path / "tabsil", tmp_path / "cls"
     hub.save_pretrained(model, borders, tabsil_dir, inference={"n_estimators": 3})
     torch.manual_seed(1)
-    cls_model = tabsil_smoke().build_model().eval()
+    cls_model = smoke_model().eval()
     hub.save_pretrained(cls_model, None, cls_dir)  # without borders: classification only
 
     # Return a local folder instead of the Hub; record whether it was called with the public repo
@@ -204,7 +170,7 @@ def test_import_tabsil_loads_the_hub_and_recipe_on_first_use():
         "assert from_pretrained is tabsil.hub.from_pretrained\n"
         "assert TabSilClassifier is tabsil.recipe.TabSilClassifier\n"
         "assert TabSilRegressor is tabsil.recipe.TabSilRegressor\n"
-        "assert 'tabsil.training.config' not in sys.modules and 'mlflow' not in sys.modules\n"
+        "assert 'tabsil_train' not in sys.modules and 'mlflow' not in sys.modules\n"
         "assert {'TabSilClassifier', 'from_pretrained'} <= set(dir(tabsil))\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True)

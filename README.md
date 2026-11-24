@@ -4,32 +4,54 @@ TabSil is a tabular foundation model. One model handles both classification and 
 
 *Sil* (실) is Korean for *thread*: the model reads a table by weaving through its columns and rows.
 
-This repository has everything needed to reproduce TabSil: the model, the synthetic-data prior, the training curriculum, inference, and the benchmark harness.
+This repository has everything needed to reproduce TabSil. It holds two packages:
+
+- `tabsil` (`src/tabsil/`): inference only. The model, the scikit-learn style estimators, and loading weights from the Hugging Face Hub.
+- `tabsil-train` (`training/`, imported as `tabsil_train`): the synthetic-data prior, the training curriculum, the benchmark harness, and the Hub upload scripts. It is a uv workspace member that depends on `tabsil`.
 
 > Status: the code is complete; trained weights are not published yet.
 
 ## Install
 
+Inference only:
+
+```bash
+uv add "tabsil @ git+https://github.com/Aiden-Jeon/tabsil"
+# once a release is on PyPI: uv add tabsil
+```
+
+Training and evaluation, from a clone:
+
 ```bash
 git clone https://github.com/Aiden-Jeon/tabsil
 cd tabsil
-uv sync                  # inference and training
-uv sync --extra arena    # + TabArena / BeyondArena evaluation
+uv sync                           # tabsil + dev tools, Jupyter (inference tests: uv run pytest tests)
+uv sync --all-packages            # tabsil + tabsil-train (training, priors, AMLB evaluation) + dev tools, Jupyter
+uv sync --package tabsil-train    # tabsil-train and its test tools only (tests: uv run --package tabsil-train pytest training/tests)
+uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
 ```
+
+Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3).
 
 Python ≥ 3.12, PyTorch 2.11.
 
 ## Use
 
+The trained weights are not published yet. Until they are, pass weights you trained yourself (see [Training](#training)): a folder written by `tabsil.hub.save_pretrained` (`model.safetensors` + `config.json`), or a model loaded from a training checkpoint.
+
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor
+from tabsil.models import load_checkpoint
 
-clf = TabSilClassifier().fit(X_train, y_train)  # downloads the weights from the Hugging Face Hub
+clf = TabSilClassifier("path/to/folder").fit(X_train, y_train)  # a save_pretrained folder
 proba = clf.predict_proba(X_test)
 
-reg = TabSilRegressor().fit(X_train, y_train)
+model, borders = load_checkpoint("tabsil_run/final.pt")  # a training checkpoint
+reg = TabSilRegressor(model, borders).fit(X_train, y_train)
 y_pred = reg.predict(X_test)
 ```
+
+Once the weights are published, `TabSilClassifier()` and `TabSilRegressor()` without a model will download them from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`). Until then, constructing them without a model fails with `huggingface_hub.errors.RepositoryNotFoundError` (401, "Repository Not Found"): the repo does not exist yet.
 
 Both are scikit-learn style estimators over an ensemble of 8 preprocessing members; each member sees at most 768 of the original columns.
 
@@ -45,7 +67,7 @@ Both are scikit-learn style estimators over an ensemble of 8 preprocessing membe
 | Regression head | 999 quantiles, pinball loss | Kumo-Tabular |
 | Tasks | one multitask model for classification and regression | TabPFN-3.5 |
 
-Code: `src/tabsil/models/column_row_transformer.py`; all numbers are in `src/tabsil/recipe.py`.
+Code: `src/tabsil/models/column_row_transformer.py`; the structure and inference numbers are in `src/tabsil/recipe.py`, the training curriculum in `training/src/tabsil_train/recipe.py`.
 
 ## Training
 
@@ -59,27 +81,27 @@ Synthetic tables come from the TabICLv2 graph SCM prior (`tabicl` package) with 
 
 ```bash
 # local check (CPU, about a minute)
-uv run python scripts/train.py --config-name smoke
+uv run --package tabsil-train python training/scripts/train.py --config-name smoke
 
-# full training: Databricks AI Runtime job specs in scripts/train.yaml
-uv run python scripts/train.py --config-name stage1
-uv run python scripts/train.py --config-name stage2 --init-run-id <stage 1 run>
-uv run python scripts/train.py --config-name stage3 --init-run-id <stage 2 run>
+# full training: Databricks AI Runtime job specs in training/scripts/train.yaml
+uv run --package tabsil-train python training/scripts/train.py --config-name stage1
+uv run --package tabsil-train python training/scripts/train.py --config-name stage2 --init-run-id <stage 1 run>
+uv run --package tabsil-train python training/scripts/train.py --config-name stage3 --init-run-id <stage 2 run>
 ```
 
 Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a set of strings, so its tables depend on the hash seed.
 
 ## Evaluation
 
-`scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration) and test-time compute options (greedy ensemble selection, DiagScale).
+`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration) and test-time compute options (greedy ensemble selection, DiagScale).
 
 ## Acknowledgements
 
 TabSil puts together ideas from published work:
 
-- **TabPFN** (Prior Labs): the prior-fitted network approach; the TabPFN-3 / 3.5 technical reports for the column → row → row-ICL backbone. The public inference code was read for design details; no code or weights are used.
-- **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package) and the three-stage training curriculum.
-- **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source.
+- **TabPFN** (Prior Labs): the prior-fitted network approach; the TabPFN-3 / 3.5 technical reports for the column → row → row-ICL backbone. No weights are used. A few inference routines (balanced feature subsampling, chunked class attention) are adapted from the Apache-2.0 TabPFN inference code; see `NOTICE`.
+- **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package), the three-stage training curriculum, and the QASSMax query gate of the `gated_logscale` attention temperature (BSD-3-Clause, `LICENSES/TabICL-BSD-3-Clause.txt`; see `NOTICE`).
+- **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source. The log-scale attention temperature (`LogScale`) follows the Apache-2.0 NVIDIA code (`sdm/nn/scaling.py`); see `NOTICE`.
 - **Muon** optimizer, and the **nanoTabPFN speedrun** for the training speed options.
 
 TabSil grew out of [minipfn](https://github.com/Aiden-Jeon/minipfn), a hands-on guide that reimplements PFN and TabPFN from scratch. Checkpoints that minipfn trained for this architecture (`minipfn-v1`) load in TabSil.

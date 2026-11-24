@@ -12,21 +12,19 @@ minipfn for the same structure are read as well (`ColumnRowTransformerConfig.fro
     model, borders = from_pretrained("aiden-jeon/tabsil@step-100k")
 
 For inference alone this function is not needed: `TabSilClassifier()`·`TabSilRegressor()`
-(`tabsil.recipe`) download the published weights (`model_or_pretrained`).
+(`tabsil.recipe`) download from the default Hub repo (`HUB_REPO`; weights not published yet)
+(`model_or_pretrained`).
 
-`load_model` reads a checkpoint the same way wherever it is stored (used by the evaluation and
-upload scripts). Hub repos are written as `hf://owner/name`, so a mistyped local path is not sent
-to the Hub. Intermediate checkpoints live on branches of the same repo (`step-100k`, ...) and are
-loaded as `hf://owner/name@step-100k`.
-
-mlflow and the training config are imported inside the functions that use them, so downloading
-from the Hub for inference alone does not import the training stack.
+`load_model` reads a Hub repo, a local `save_pretrained` folder or a checkpoint file the same way
+(the evaluation and upload scripts use it through `tabsil_train.hub.load_model`, which also reads
+MLflow run artifacts, `runs:/...`). Hub repos are written as `hf://owner/name`, so a mistyped local
+path is not sent to the Hub. Intermediate checkpoints live on branches of the same repo
+(`step-100k`, ...) and are loaded as `hf://owner/name@step-100k`.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import fields
 from pathlib import Path
 
 import torch
@@ -37,10 +35,7 @@ from torch import nn
 from tabsil.models import (
     DEFAULT_MODEL_TYPE,
     build_model,
-    canonical_model_type,
     config_dict,
-    config_fields,
-    info_fields,
     model_from_state,
     state_config,
 )
@@ -49,28 +44,8 @@ WEIGHTS_NAME = "model.safetensors"
 CONFIG_NAME = "config.json"
 BORDERS_KEY = "borders"
 HUB_PREFIX = "hf://"
-# file where `download_artifact` records the downloaded artifact (to skip re-downloading into the
-# same folder)
-DOWNLOADED_NAME = ".downloaded.json"
-
-
-def _model_params(model_type: str) -> tuple[str, ...]:
-    # the model-structure settings a training run logs as params (fields of both the model config
-    # and TrainConfig). Fields that do not affect the weight shapes (`info_fields`) are not
-    # structure and are left out
-    from tabsil.training.config import TrainConfig
-
-    train_fields = {f.name for f in fields(TrainConfig)} - set(info_fields(model_type))
-    return tuple(name for name in config_fields(model_type) if name in train_fields)
-
-
-def _parse_param(default, text: str):
-    # MLflow params are strings. bool("False") is True, so bools are parsed separately
-    if isinstance(default, bool):
-        if text not in ("True", "False"):
-            raise ValueError(f"not a bool param: {text}")
-        return text == "True"
-    return type(default)(text)
+# MLflow run artifacts, read by `tabsil_train.hub.load_model`
+RUNS_PREFIX = "runs:/"
 
 
 def _is_local_path(repo_id_or_path: str | Path) -> bool:
@@ -137,7 +112,7 @@ def model_or_pretrained(
     """Resolve the `model` an inference class receives into (model, regression borders).
 
     A module gives (that module, None); a Hub repo id (`owner/name`, `owner/name@branch`) or a
-    local folder is loaded from there; None loads `default_repo` (the published weights).
+    local folder is loaded from there; None loads `default_repo` (the default Hub repo).
     ValueError if the loaded model does not serve `task`."""
     if isinstance(model, nn.Module):
         return model, None
@@ -153,80 +128,40 @@ def served_tasks(model: nn.Module, borders: torch.Tensor | None) -> tuple[str, .
     return tuple(t for t in model.tasks if t != "regression" or borders is not None)
 
 
-def download_artifact(uri: str, dst: str | Path) -> Path:
-    """Download an MLflow artifact (`runs:/<run_id>/<path>`) under `dst` and return its path.
-
-    If the same `uri` was fully downloaded into the same `dst` before, it is not downloaded again,
-    so rerunning the upload script after a card edit does not fetch a large checkpoint again. The
-    record is written only after the download finishes, so a partial download is never reused."""
-    import mlflow
-
-    dst = Path(dst)
-    record = dst / DOWNLOADED_NAME
-    if record.is_file():
-        saved = json.loads(record.read_text())
-        if saved.get("uri") == uri and Path(saved["path"]).exists():
-            print(f"reusing the downloaded artifact: {saved['path']}")
-            return Path(saved["path"])
-    dst.mkdir(parents=True, exist_ok=True)
-    record.unlink(missing_ok=True)
-    path = Path(mlflow.artifacts.download_artifacts(artifact_uri=uri, dst_path=str(dst)))
-    record.write_text(json.dumps({"uri": uri, "path": str(path)}) + "\n")
-    return path
-
-
-def load_model(spec: str, task: str, dst: str | Path) -> tuple[nn.Module, torch.Tensor | None]:
+def load_model(
+    spec: str | Path, task: str, dst: str | Path | None = None, *, name: str | None = None
+) -> tuple[nn.Module, torch.Tensor | None]:
     """Load a checkpoint onto the CPU. `spec` is one of:
 
-    - `runs:/<run_id>/<path>`: a file or folder a training run logged to MLflow (downloaded into
-      `dst`; an earlier download in the same `dst` is reused, see `download_artifact`)
     - `hf://owner/name`: a Hub repo (uploaded with `save_pretrained`). Append `@<revision>` to
       load a branch, tag or commit (e.g. `hf://owner/name@step-100k`)
     - a local `save_pretrained` folder, or a file saved with `tabsil.models.save_checkpoint`
 
     Checkpoints written during training (`checkpoints/step_XXXXXXX.pt`, `latest.pt`) build the
-    model from the model type and config stored in them.
+    model from the model type and config stored in them. MLflow run artifacts (`runs:/...`) are
+    read by `tabsil_train.hub.load_model` (the `tabsil-train` package). Messages name the
+    checkpoint `name` (default: `spec`). `dst` (the download folder of MLflow artifacts) is not used
+    here; it is kept so that calls written for the earlier `load_model(spec, task, dst)` still work.
     """
+    spec = str(spec)
+    name = spec if name is None else name
     if spec.startswith(HUB_PREFIX):
         repo_id, _, revision = spec.removeprefix(HUB_PREFIX).partition("@")
-        return _check_task(from_pretrained(repo_id, revision=revision or None), task, spec)
+        return _check_task(from_pretrained(repo_id, revision=revision or None), task, name)
+    if spec.startswith(RUNS_PREFIX):
+        raise SystemExit(
+            f"{name} is an MLflow run artifact: load it with `tabsil_train.hub.load_model`"
+            " (the tabsil-train package)."
+        )
     path = Path(spec)
-    if spec.startswith("runs:/"):
-        path = download_artifact(spec, dst)
-    elif not path.exists():
-        raise SystemExit(f"{spec} does not exist (pass a Hub repo as {HUB_PREFIX}owner/name).")
+    if not path.exists():
+        raise SystemExit(f"{name} does not exist (pass a Hub repo as {HUB_PREFIX}owner/name).")
     if path.is_dir():
-        return _check_task(from_pretrained(path), task, spec)
+        return _check_task(from_pretrained(path), task, name)
     state = torch.load(path, map_location="cpu", weights_only=True)
     if state_config(state) is None:
-        raise SystemExit(f"{spec} has no model config (saved before checkpoints recorded one).")
-    return _check_task(model_from_state(state), task, spec)
-
-
-def run_architecture(params: dict[str, str]) -> dict:
-    """The model structure from a training run's MLflow params: `model_type` and the model's
-    structure settings (TrainConfig fields).
-
-    Values the run did not record use the config defaults. Apply the result to a training config
-    with `replace(config, **...)`. A minipfn run must have the structure TabSil fixes
-    (`fixed_fields_check`, ValueError otherwise).
-    """
-    from tabsil.models.column_row_transformer import fixed_fields_check
-    from tabsil.training.config import TrainConfig
-
-    fixed_fields_check(dict(params), as_text=True)
-    model_type = canonical_model_type(params.get("model_type", DEFAULT_MODEL_TYPE))
-    defaults = TrainConfig(model_type=model_type)
-    names = _model_params(model_type)
-    return {
-        "model_type": model_type,
-        **{
-            name: _parse_param(
-                getattr(defaults, name), params.get(name, str(getattr(defaults, name)))
-            )
-            for name in names
-        },
-    }
+        raise SystemExit(f"{name} has no model config (saved before checkpoints recorded one).")
+    return _check_task(model_from_state(state), task, name)
 
 
 def _check_task(loaded: tuple[nn.Module, torch.Tensor | None], task: str, spec: str):

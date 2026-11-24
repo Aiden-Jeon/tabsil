@@ -37,10 +37,10 @@ heads are per task, everything else is shared. The `task` argument of `forward` 
 Normalization is RMSNorm with a learned gain (pre-norm, plus one at the end of each stage) and the
 MLP width factor is `ff_factor` (2).
 
-Attention temperatures (Kumo-Tabular, NVIDIA structured-data-models `sdm/nn/scaling.py`, Apache
-2.0, reimplemented from its behavior): q and k get an RMSNorm without gain, and q is multiplied by a
-per-head scalar times log n (n = number of keys), so that the logits are bounded by
-sqrt(head dim) * a_h * log n (`LogScale`):
+Attention temperatures (Kumo-Tabular; `LogScale` is adapted from NVIDIA structured-data-models
+`sdm/nn/scaling.py` `LogScale` / `GatedLogScale`, Apache-2.0, see NOTICE): q and k get an RMSNorm
+without gain, and q is multiplied by a per-head scalar times log n (n = number of keys), so that the
+logits are bounded by sqrt(head dim) * a_h * log n (`LogScale`):
 - `logscale` (column summary: inducing points -> train rows, row ICL, retrieval decoder): q <- q *
   a_h * log n, a_h learned per head and drawn from U(0, 1)
 - `gated_logscale` (row stage): logscale times (1 + tanh(gate(q))), gate a head dim ->
@@ -169,7 +169,7 @@ def standardize_cells(
 
 @dataclass
 class ColumnRowTransformerConfig:
-    """Model size. The defaults are the published TabSil model (`tabsil.recipe.STRUCTURE`)."""
+    """Model size. The defaults are the TabSil structure (`tabsil.recipe.STRUCTURE`)."""
 
     emsize: int = 256  # width E of the cell, column and row stages
     features_per_group: int = 3
@@ -189,8 +189,8 @@ class ColumnRowTransformerConfig:
     gate_hidden: int = 64
     # number of target embeddings of the classification output (the class cap in training)
     n_out: int = 10
-    # feature cap seen in training (`TrainConfig.max_features`). Not part of the structure;
-    # read by inference
+    # feature cap seen in training (`TrainConfig.max_features` of tabsil-train). Not part of the
+    # structure; read by inference
     max_features: int = 100
 
     INFO_FIELDS: ClassVar[tuple[str, ...]] = ("max_features",)
@@ -327,7 +327,11 @@ def _rope(t: torch.Tensor, base: float) -> torch.Tensor:
 class LogScale(nn.Module):
     """q ← q · a_h · log n (module docstring, attention temperatures). a_h (`head_scale`) is a
     learned per-head scalar drawn from U(0, 1). With `gated`, q is also multiplied by
-    (1 + tanh(gate(q))) (the gate starts at 0, so the first factor is 1)."""
+    (1 + tanh(gate(q))) (the gate starts at 0, so the first factor is 1).
+
+    Adapted from NVIDIA structured-data-models (Apache-2.0) `sdm/nn/scaling.py` `LogScale` and
+    `GatedLogScale`, merged into one class. The query gate follows TabICLv2's QASSMax query MLP
+    (BSD-3-Clause, `tabicl/_model/ssmax.py` `QASSMaxMLP`). See NOTICE."""
 
     def __init__(self, nhead: int, head_dim: int, hidden: int, gated: bool = False) -> None:
         super().__init__()
@@ -709,9 +713,12 @@ def _retrieve(q: torch.Tensor, k: torch.Tensor, onehot: torch.Tensor) -> torch.T
 
     q (B, H, T, d), k (B, H, N, d), onehot (B, N, n_classes). To keep the value width of the
     attention kernel equal to that of q and k, the one-hot labels are cut into pieces of d columns,
-    each with its own attention (the method of `_chunked_class_attention` in the official
-    TabPFN-3.5 inference code). q and k are the same for every piece and are not copied. Computed
-    in float32 with autocast off."""
+    each with its own attention (the method of `_class_attention` in the official TabPFN-3.5
+    inference code). q and k are the same for every piece and are not copied. Computed in float32
+    with autocast off.
+
+    Adapted from TabPFN (Apache-2.0) `src/tabpfn/architectures/tabpfn_v3_5.py` `_class_attention`;
+    see NOTICE."""
     b, heads, t, d = q.shape
     n, n_classes = onehot.shape[1:]
     pieces = math.ceil(n_classes / d)
@@ -814,7 +821,7 @@ class ColumnRowTransformer(nn.Module):
     # forward accepts the inference arguments (`inference`, `y_classes`/`n_classes`)
     # (`tabsil.inference.ensemble.forward_kwargs`)
     supports_inference_options = True
-    # Activation checkpointing (training config `TrainConfig.activation_checkpointing_rows`). In
+    # Activation checkpointing (tabsil-train config `TrainConfig.activation_checkpointing_rows`). In
     # training forwards on tables with more rows (train + test) than this, the activations of the
     # column/row stage blocks and the row ICL layers are recomputed in backward instead of kept
     # (`torch.utils.checkpoint`), and the classification decoder skips the score matrix
@@ -1193,10 +1200,11 @@ class ColumnRowTransformer(nn.Module):
     ) -> int:
         """Bytes of cell state that one inference forward (`inference=True`) keeps on the CPU
         (offload of `_rows_interleaved_chunked`; the eval queue uses it to choose which large tables
-        run concurrently, `scripts/eval.py --host-memory-budget-gb`). The cell state (B, R, C, E)
-        has one token per column. 0 when the forward is not chunked or the state stays on the
-        device. `itemsize` is the size of the cell token dtype: 4, because the cell encoder outputs
-        float32 even under bfloat16 autocast (so the state is float32 too; checked on H100)."""
+        run concurrently, `training/scripts/eval.py --host-memory-budget-gb`). The cell state
+        (B, R, C, E) has one token per column. 0 when the forward is not chunked or the state stays
+        on the device. `itemsize` is the size of the cell token dtype: 4, because the cell encoder
+        outputs float32 even under bfloat16 autocast (so the state is float32 too; checked on
+        H100)."""
         cells = batch * rows * columns
         if cells <= self.inference_chunk_cells:
             return 0

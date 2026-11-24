@@ -4,33 +4,23 @@ version = "0.1.0"
 description = "TabSil: a tabular foundation model for classification and regression, trained on synthetic priors"
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE", "NOTICE", "LICENSES/TabICL-BSD-3-Clause.txt"]
 authors = [
     { name = "Aiden-Jeon", email = "aiden.jongseob@gmail.com" }
 ]
 requires-python = ">=3.12"
-# Lower bounds follow Databricks Serverless GPU environment v6; torch is pinned to 2.11 (the CUDA 13.0
-# build tested there). pandas stays at >=2.2 here and is raised to >=3.0.6 in the dev group; the
-# arena extra's tabarena (autogluon) needs pandas<2.4, so that install gets 2.3 (tool.uv.conflicts).
+# Inference only (model, preprocessing ensembles, Hub download); training and evaluation are the
+# tabsil-train workspace member (`training/pyproject.toml`). Lower bounds follow Databricks
+# Serverless GPU environment v6; torch is pinned to 2.11 (the CUDA 13.0 build tested there). pandas
+# stays at >=2.2 here and is raised to >=3.0.6 in the dev groups; tabsil-train's arena extra
+# (tabarena, autogluon) needs pandas<2.4, so that install gets 2.3 (tool.uv.conflicts below).
 dependencies = [
     "huggingface-hub>=0.34",
-    "matplotlib>=3.10",
-    "mlflow>=2.15",
     "numpy>=2.3",
-    "openml>=0.15",
     "pandas>=2.2",
     "safetensors>=0.5",
     "scikit-learn>=1.7",
-    "scipy>=1.16",
-    "tabicl>=2.2",
     "torch>=2.11,<2.12",
-    "tqdm>=4.67",
-]
-
-[project.optional-dependencies]
-# TabArena / BeyondArena evaluation (tabsil.benchmarks.arena); tabarena and autogluon are pre-releases
-arena = [
-    "tabarena[data-foundry]>=0.1.1.dev20261031",
 ]
 
 [build-system]
@@ -47,21 +37,26 @@ dev = [
     "python-dotenv>=1.2",
     "ruff>=0.16.8",
 ]
-# dev tools to use with the arena extra (it cannot be installed with dev because of pandas):
-#   uv sync --no-dev --extra arena --group arena-dev
-arena-dev = [
-    "pytest>=9.1.1",
-    "ruff>=0.16.8",
-]
+
+[tool.uv.workspace]
+# training, priors, evaluation and the Hub upload scripts (package tabsil-train)
+members = ["training"]
 
 [tool.uv]
 prerelease = "if-necessary"
-# dev (pandas 3) and the arena extra (pandas<2.4) are resolved separately
-conflicts = [[{ extra = "arena" }, { group = "dev" }]]
+# The workspace has one lock, so every member's extras and groups are resolved together. The dev
+# groups (pandas 3) and tabsil-train's arena extra (tabarena/autogluon need pandas<2.4) are
+# resolved separately and cannot be installed together; see training/pyproject.toml
+conflicts = [
+    [{ package = "tabsil-train", extra = "arena" }, { package = "tabsil", group = "dev" }],
+    [{ package = "tabsil-train", extra = "arena" }, { package = "tabsil-train", group = "dev" }],
+]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# first-party packages: tabsil and the tabsil-train workspace member
+src = ["src", "training/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
