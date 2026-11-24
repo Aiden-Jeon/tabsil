@@ -678,11 +678,14 @@ def test_host_state_estimate_only_for_factories_with_a_model():
         ]
     )  # fmt: skip
     got = script.host_state_bytes(grid, {"big": 1_100_000}, estimate)
-    # Unknown rows default to train rows × 1.5; skipped and zero-cost datasets are left out
+    # Unknown rows default to train rows × 1.5; skipped and zero-cost datasets are left out. The
+    # offload keeps only the row chunks with train rows, so both count 10^6 train rows (rounded up
+    # to whole chunks), less than the whole state
     assert got == {
-        "big": estimate("binary", 1_100_000, 100),
-        "guess": estimate("binary", 1_500_000, 100),
+        "big": estimate("binary", 1_100_000, 100, True, 10**6),
+        "guess": estimate("binary", 1_500_000, 100, True, 10**6),
     }
+    assert got["big"] == got["guess"] < estimate("binary", 1_100_000, 100)
     jobs = script.shard_jobs([("big", 1), ("tiny", 1)], Path("/tmp/x"), "beyondarena", "id", got)
     assert jobs[0]["host_bytes"] == got["big"] and "host_bytes" not in jobs[1]
 

@@ -1015,11 +1015,13 @@ def host_memory_budget(
 
 
 def host_state_estimator(factories: dict, caps: dict):
-    """`(problem_type, rows, features, has categorical columns) -> bytes of cell state one member
-    forward keeps on the CPU`, an upper estimate. The model's `inference_host_state_bytes` gets the
-    member's input column count: the original columns (per member cap `caps`), up to the one-hot cap
-    (`max_one_hot_width`) when there are categorical columns, plus the sample identifier. None
-    when no factory has a model (the queue then does not budget host memory)."""
+    """`(problem_type, rows, features, has categorical columns, train rows) -> bytes of cell state
+    one member forward keeps on the CPU`, an upper estimate. The model's
+    `inference_host_state_bytes` gets the member's input column count: the original columns (per
+    member cap `caps`), up to the one-hot cap (`max_one_hot_width`) when there are categorical
+    columns, plus the sample identifier. With the train rows it counts only the part of the state
+    the offload keeps (the row chunks with train rows); without them, the whole state. None when no
+    factory has a model (the queue then does not budget host memory)."""
     models = [getattr(f, "model", None) for f in factories.values()]
     if all(m is None for m in models):
         return None
@@ -1027,7 +1029,13 @@ def host_state_estimator(factories: dict, caps: dict):
     def task_of(problem_type: str) -> str:
         return "regression" if problem_type == "regression" else "classification"
 
-    def estimate(problem_type: str, rows: int, n_features: int, categorical: bool = True) -> int:
+    def estimate(
+        problem_type: str,
+        rows: int,
+        n_features: int,
+        categorical: bool = True,
+        train_rows: int | None = None,
+    ) -> int:
         factory = factories.get(task_of(problem_type))
         fn = getattr(getattr(factory, "model", None), "inference_host_state_bytes", None)
         if fn is None:
@@ -1039,7 +1047,9 @@ def host_state_estimator(factories: dict, caps: dict):
             # expanded columns never exceed the larger of the original count and the cap
             # (`one_hot_sizes`)
             columns = max(columns, width)
-        return int(fn(rows, columns + 1))
+        if train_rows is None:
+            return int(fn(rows, columns + 1))
+        return int(fn(rows, columns + 1, train_rows=min(train_rows, rows)))
 
     return estimate
 
@@ -1047,7 +1057,9 @@ def host_state_estimator(factories: dict, caps: dict):
 def host_state_bytes(grid, rows: dict[str, int], estimate) -> dict[str, int]:
     """CPU cell state estimate per dataset with splits to run (`estimate`; zeros left out). Rows
     are the largest split's training + test rows (`arena.split_rows`), or training rows x 1.5 if
-    unknown (an upper bound up to a 2:1 train:test split)."""
+    unknown (an upper bound up to a 2:1 train:test split). The largest split's training rows (the
+    grid's `max_train_rows`, before any subsampling, so an upper bound) give the part of the state
+    the offload keeps."""
     todo = grid[grid["skip_reason"].isna()]
     out = {}
     for dataset, part in todo.groupby("dataset"):
@@ -1056,7 +1068,10 @@ def host_state_bytes(grid, rows: dict[str, int], estimate) -> dict[str, int]:
         # if unknown whether categorical columns exist (None, TabArena), assume they do
         categorical = part["has_categorical"].iloc[0] if "has_categorical" in part else None
         categorical = True if categorical is None or pd.isna(categorical) else bool(categorical)
-        need = estimate(problem_type, int(n_rows), int(part["n_features"].max()), categorical)
+        train_rows = int(part["max_train_rows"].max())
+        need = estimate(
+            problem_type, int(n_rows), int(part["n_features"].max()), categorical, train_rows
+        )
         if need:
             out[dataset] = need
     return out

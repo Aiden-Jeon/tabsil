@@ -386,6 +386,50 @@ def test_inference_host_state_bytes():
     default = _model(**TINY_STAGES)
     default.inference_chunk_cells = ColumnRowTransformer.inference_chunk_cells
     assert default.inference_host_state_bytes(1_250_000, 769) == 1_250_000 * 769 * e * 4
+    # With the train rows: only the row chunks with train rows (2045 rows each at 769 columns)
+    step = ColumnRowTransformer.inference_chunk_cells // 769
+    held = -(-1_000_000 // step) * step
+    got = default.inference_host_state_bytes(1_250_000, 769, train_rows=1_000_000)
+    assert got == held * 769 * e * 4 < 1_250_000 * 769 * e * 4
+    # One block pair carries nothing
+    one = _model()
+    one.inference_chunk_cells = ColumnRowTransformer.inference_chunk_cells
+    one.interleaved_state_device_bytes = 0
+    assert one.inference_host_state_bytes(1_250_000, 769, train_rows=1_000_000) == 0
+
+
+@pytest.mark.parametrize(
+    ("changes", "n_train", "budget_rows", "kept_rows"),
+    [
+        (TINY_STAGES, 30, 0, 35),  # 5 train-row chunks of 7 rows on the CPU
+        (TINY_STAGES, 3, 0, 7),  # one chunk
+        (TINY_STAGES, 30, 35, 0),  # the train-row chunks fit on the device (the whole state not)
+        ({}, 30, 0, 0),  # one block pair: nothing carried
+    ],
+)
+def test_host_state_estimate_matches_the_allocation(
+    monkeypatch, changes, n_train, budget_rows, kept_rows
+):
+    # `inference_host_state_bytes(..., train_rows=)` is the CPU state the forward allocates
+    model = _model(**changes)
+    x, _, _ = _inputs()
+    y = torch.zeros(1, n_train)
+    e = model.config.emsize
+    model.interleaved_state_device_bytes = budget_rows * 5 * e * 4
+    sizes = []
+    real = M._host_state
+
+    def host_state(shape, dtype, pin):
+        state, registered = real(shape, dtype, pin)
+        sizes.append(state.nbytes)
+        return state, registered
+
+    monkeypatch.setattr(M, "_host_state", host_state)
+    monkeypatch.setattr(ColumnRowTransformer, "_offload_interleaved_state", _offload_any_device)
+    _forward(model, x, y, "classification")
+    want = model.inference_host_state_bytes(*x.shape[1:], train_rows=n_train)
+    assert want == kept_rows * 5 * e * 4
+    assert sizes == ([want] if want else [])
 
 
 # --- GPU -----------------------------------------------------------------------------------------
@@ -478,8 +522,8 @@ def test_gpu_attention_lse_kernel_matches_math(dtype):
 @cuda
 def test_gpu_state_size_matches_the_estimate(monkeypatch):
     # Cell state is float32 even under bfloat16 autocast. The carried state (the row chunks with
-    # train rows) is not larger than the evaluation queue's estimate (`inference_host_state_bytes`,
-    # all rows)
+    # train rows) is what the evaluation queue's estimate gives with the train rows
+    # (`inference_host_state_bytes`), and not more than the estimate without them (all rows)
     model = _model(**TINY_STAGES).cuda()
     model.interleaved_state_device_bytes = 0
     x, yc, _ = _inputs("cuda")
@@ -496,6 +540,7 @@ def test_gpu_state_size_matches_the_estimate(monkeypatch):
         _forward(model, x, yc, "classification")
     held = _held_rows(model, x, yc.shape[1]) * x.shape[-1] * model.config.emsize * 4
     assert sizes == [(torch.float32, held)]
+    assert held == model.inference_host_state_bytes(*x.shape[1:], train_rows=yc.shape[1])
     assert held <= model.inference_host_state_bytes(*x.shape[1:])
 
 

@@ -1468,9 +1468,7 @@ class ColumnRowTransformer(nn.Module):
         blocks = list(zip(self.column_blocks, self.row_blocks, strict=True))
         last = len(blocks) - 1
         chunks = [(r0, min(r0 + step, r)) for r0 in range(0, r, step)]
-        # Rows of the chunks with train rows. With one block pair nothing is carried: block 0 reads
-        # the cell encoder output and the last block writes no state
-        n_held = min(r, -(-n_train // step) * step) if len(blocks) > 1 else 0
+        n_held = self._held_rows(r, n_train, step)
 
         def cells(r0: int, r1: int) -> torch.Tensor:
             return embed(x[:, r0:r1], rows=(r0, r1))
@@ -1575,22 +1573,45 @@ class ColumnRowTransformer(nn.Module):
         device (then `_rows_interleaved_offload`, which asks again for the state it carries)."""
         return device.type == "cuda" and size > self.interleaved_state_device_bytes
 
+    def _held_rows(self, rows: int, n_train: int, step: int) -> int:
+        """Rows of the cell state `_rows_interleaved_offload` carries across block pairs: the row
+        chunks (`step` rows each) with train rows. With one block pair nothing is carried (block 0
+        reads the cell encoder output and the last block writes no state)."""
+        if len(self.row_blocks) < 2:
+            return 0
+        return min(rows, -(-n_train // step) * step)
+
     def inference_host_state_bytes(
-        self, rows: int, columns: int, *, batch: int = 1, itemsize: int = 4
+        self,
+        rows: int,
+        columns: int,
+        *,
+        batch: int = 1,
+        itemsize: int = 4,
+        train_rows: int | None = None,
     ) -> int:
-        """Bytes of cell state that one inference forward (`inference=True`) keeps on the CPU at
-        most (offload of `_rows_interleaved_offload`; the eval queue uses it to choose which large
-        tables run concurrently, `training/scripts/eval.py --host-memory-budget-gb`): the whole
-        cell state (B, R, C, E), one token per column. The offload carries only the row chunks
-        with train rows, so it keeps less (or nothing, if that part fits on the device). 0 when the
-        forward is not chunked or the whole state fits on the device. `itemsize` is the size of the
-        cell token dtype: 4, because the cell encoder outputs float32 even under bfloat16 autocast
-        (so the state is float32 too; checked on H100)."""
+        """Bytes of cell state that one inference forward (`inference=True`, on a GPU) keeps on the
+        CPU (offload of `_rows_interleaved_offload`; the eval queue uses it to choose which large
+        tables run concurrently, `training/scripts/eval.py --host-memory-budget-gb`). `rows` are
+        train + test rows; the cell state (B, R, C, E) has one token per column.
+
+        0 when the forward is not chunked or the whole state fits on the device. Otherwise the
+        offload carries only the row chunks with train rows (`_held_rows`), on the CPU only if that
+        part does not fit on the device either. With `train_rows` (the forward's train rows, which
+        come first) this is exact; without it, the whole state (an upper bound). `itemsize` is the
+        size of the cell token dtype: 4, because the cell encoder outputs float32 even under
+        bfloat16 autocast (so the state is float32 too; checked on H100)."""
         cells = batch * rows * columns
         if cells <= self.inference_chunk_cells:
             return 0
-        size = cells * self.config.emsize * itemsize
-        return size if size > self.interleaved_state_device_bytes else 0
+        token = self.config.emsize * itemsize
+        if cells * token <= self.interleaved_state_device_bytes:
+            return 0
+        if train_rows is None:
+            return cells * token
+        step = max(1, self.inference_chunk_cells // (batch * columns))
+        held = batch * self._held_rows(rows, train_rows, step) * columns * token
+        return held if held > self.interleaved_state_device_bytes else 0
 
     def _encode_cells(self, z, indicator, u) -> torch.Tensor:
         """Cell values (`_CellStats.features`) of all C columns -> tokens (B, rows, C, E); the
