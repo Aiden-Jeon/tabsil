@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "TabSil: a tabular foundation model for classification and regression, trained on synthetic priors"
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE", "NOTICE", "LICENSES/TabICL-BSD-3-Clause.txt"]
 authors = [
     { name = "Aiden-Jeon", email = "aiden.jongseob@gmail.com" }
 ]

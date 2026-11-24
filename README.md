@@ -100,7 +100,7 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 TabSil puts together ideas from published work:
 
 - **TabPFN** (Prior Labs): the prior-fitted network approach; the TabPFN-3 / 3.5 technical reports for the column → row → row-ICL backbone. No weights are used. A few inference routines (balanced feature subsampling, chunked class attention) are adapted from the Apache-2.0 TabPFN inference code; see `NOTICE`.
-- **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package) and the three-stage training curriculum.
+- **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package), the three-stage training curriculum, and the QASSMax query gate of the `gated_logscale` attention temperature (BSD-3-Clause, `LICENSES/TabICL-BSD-3-Clause.txt`; see `NOTICE`).
 - **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source. The log-scale attention temperature (`LogScale`) follows the Apache-2.0 NVIDIA code (`sdm/nn/scaling.py`); see `NOTICE`.
 - **Muon** optimizer, and the **nanoTabPFN speedrun** for the training speed options.
 

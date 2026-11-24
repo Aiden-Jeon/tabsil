@@ -5,9 +5,10 @@ The output range is cut into buckets and the model predicts one probability per 
 The density is taken as uniform inside a bucket, giving the piecewise-constant density
 `p_k / width_k`. The training loss is the NLL of that density at the target y.
 
-Mirrors the `BarDistribution` / `FullSupportBarDistribution` API of the reference library
-`automl/PFNs`. `FullSupportBarDistribution` replaces the two end buckets with half-normal tails so
-that y outside the bucket range still has a finite NLL (the training default).
+Follows the API names and definitions of `BarDistribution` / `FullSupportBarDistribution` in the
+reference library `automl/PFNs` (independent implementation). `FullSupportBarDistribution` replaces
+the two end buckets with half-normal tails so that y outside the bucket range still has a finite NLL
+(the training default).
 """
 
 from __future__ import annotations

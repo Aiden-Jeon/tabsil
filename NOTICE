@@ -13,4 +13,11 @@ This product includes software adapted from NVIDIA structured-data-models
 (https://github.com/NVIDIA/structured-data-models), Copyright (c) 2026 NVIDIA CORPORATION &
 AFFILIATES, licensed under the Apache License 2.0:
 - src/tabsil/models/column_row_transformer.py `LogScale`: adapted from sdm/nn/scaling.py
-  `LogScale` and `GatedLogScale`
+  `LogScale` and `GatedLogScale` (that file states that portions of it are derived from TabICLv2;
+  see below)
+
+This product includes software derived from TabICLv2 (https://github.com/soda-inria/tabicl),
+Copyright (c) 2025, Soda team @ Inria, licensed under the BSD 3-Clause License
+(LICENSES/TabICL-BSD-3-Clause.txt):
+- src/tabsil/models/column_row_transformer.py `LogScale`: the query gate of `gated_logscale`
+  follows TabICLv2's QASSMax query MLP (tabicl/_model/ssmax.py `QASSMaxMLP`)

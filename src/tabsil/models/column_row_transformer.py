@@ -330,7 +330,8 @@ class LogScale(nn.Module):
     (1 + tanh(gate(q))) (the gate starts at 0, so the first factor is 1).
 
     Adapted from NVIDIA structured-data-models (Apache-2.0) `sdm/nn/scaling.py` `LogScale` and
-    `GatedLogScale`, merged into one class; see NOTICE."""
+    `GatedLogScale`, merged into one class. The query gate follows TabICLv2's QASSMax query MLP
+    (BSD-3-Clause, `tabicl/_model/ssmax.py` `QASSMaxMLP`). See NOTICE."""
 
     def __init__(self, nhead: int, head_dim: int, hidden: int, gated: bool = False) -> None:
         super().__init__()
