@@ -4,6 +4,7 @@ table, console and MLflow output, and the AMLB fit / prediction records. No data
 
 import argparse
 import json
+import time
 import types
 
 import numpy as np
@@ -117,22 +118,24 @@ def test_baseline_times_cover_the_same_splits_as_ours():
     assert xgb_times["run_splits"] == 2
 
 
-def test_dataset_sizes_average_all_splits_of_each_dataset():
-    def split(train, test):
-        return types.SimpleNamespace(num_instances_train=train, num_instances_test=test)
+def _context(frame: pd.DataFrame):
+    collection = types.SimpleNamespace(to_dataframe=lambda: frame)
+    return types.SimpleNamespace(task_metadata_collection=collection)
 
-    context = types.SimpleNamespace(
-        task_metadata_collection=[
-            types.SimpleNamespace(
-                tabarena_task_name="a", splits_metadata={0: split(900, 100), 1: split(1100, 300)}
-            ),
-            types.SimpleNamespace(tabarena_task_name="b", splits_metadata={0: split(50, 10)}),
-        ]
+
+def test_dataset_sizes_average_all_splits_of_each_dataset():
+    # task metadata: one row per split
+    frame = pd.DataFrame(
+        {
+            "tabarena_task_name": ["a", "a", "b"],
+            "num_instances_train": [900, 1100, 50],
+            "num_instances_test": [100, 300, 10],
+        }
     )
-    sizes = arena.dataset_sizes(context)
+    sizes = arena.dataset_sizes(_context(frame))
     assert sizes.loc["a"].to_dict() == {"num_instances_train": 1000.0, "num_instances_test": 200.0}
     assert sizes.loc["b", "num_instances_train"] == 50.0
-    empty = arena.dataset_sizes(types.SimpleNamespace(task_metadata_collection=[]))
+    empty = arena.dataset_sizes(_context(pd.DataFrame()))
     assert empty.empty and set(arena.PER_1K_ROWS.values()) <= set(empty.columns)
 
 
@@ -204,9 +207,13 @@ def test_console_summary_prints_per_1k_times_next_to_baselines(capsys):
     script = load_script("scripts/eval.py", "eval_times_console")
     script.print_arena_summary(_summary())
     lines = capsys.readouterr().out.splitlines()
-    assert "time train 12.0s infer 1.5s s/1K train/infer 0.90/0.125 (run 0.80/0.110)" in lines[0]
-    assert "XGBoost (default) 1.20/0.045 (run 1.10/0.040)" in lines[1]
-    assert lines[2].lstrip().startswith("binary") and "s/1K train/infer 0.90/0.125" in lines[2]
+    expected = "time train 12.0s infer 1.5s s/1K train/infer run 0.8/0.11 leaderboard 0.9/0.125"
+    assert expected in lines[0]
+    assert "XGBoost (default) run 1.1/0.04 leaderboard 1.2/0.045" in lines[1]
+    assert lines[2].lstrip().startswith("binary") and "leaderboard 0.9/0.125" in lines[2]
+    # small times keep their digits (in-context fits are fast)
+    assert script.per_1k_text({"time_train_s_per_1K_median": 0.0042}).startswith("0.0042/")
+    assert script.per_1k_text({"time_train_s_per_1K_median": 1613.3}).startswith("1613/")
 
 
 def test_mlflow_metrics_include_per_1k_times(monkeypatch, tmp_path):
@@ -263,8 +270,30 @@ def test_amlb_rows_record_fit_and_prediction_time():
     assert len(rows) == 2
     for row in rows:
         assert set(amlb.TIME_KEYS) <= set(row)
-        assert (row["train_rows"], row["test_rows"]) == (30, 10)
+        assert (row["train_rows"], row["test_rows"], row["fit_rows"]) == (30, 10, 30)
         assert row["fit_seconds"] >= 0 and row["predict_seconds"] >= 0
+
+
+def test_amlb_fit_rows_follow_subsampling():
+    from tabsil.inference.subsample import SubsampledEstimator
+
+    make = lambda t: SubsampledEstimator(_Mean(), 12, stratify=False)  # noqa: E731
+    rows = amlb.evaluate_task(_task(), make, n_folds=1)
+    assert (rows[0]["train_rows"], rows[0]["fit_rows"]) == (30, 12)
+
+
+class _SlowDistribution(_Mean):
+    def predict_distribution(self, X):
+        time.sleep(0.2)
+        edges = np.linspace(-3, 3, 11)
+        return np.log(np.full((len(X), 10), 0.1)), edges
+
+
+def test_amlb_prediction_time_leaves_out_a_separate_distribution_call():
+    # without `predict_full`, `uncertainty` adds a `predict_distribution` call: not timed, so the
+    # prediction time is the same with or without `uncertainty`
+    rows = amlb.evaluate_task(_task(), lambda t: _SlowDistribution(), n_folds=1, uncertainty=True)
+    assert "crps" in rows[0] and rows[0]["predict_seconds"] < 0.2
 
 
 def test_amlb_time_per_1k_and_medians():
@@ -272,12 +301,18 @@ def test_amlb_time_per_1k_and_medians():
     assert amlb.per_1k(row) == {"fit_seconds_per_1K": 2.0, "predict_seconds_per_1K": 2.0}
     rows = [
         {"task_id": 1, **row},
-        {"task_id": 1, **row, "fit_seconds": 8.0},  # task 1: mean(2, 4) = 3
+        {"task_id": 1, **row, "fit_seconds": 8.0},  # task 1: mean(4, 8) / 2000 rows -> 3
         {"task_id": 2, **row, "fit_seconds": 20.0},  # 10
         {"task_id": 3, **row, "fit_seconds": 2.0},  # 1
     ]
     t = amlb.time_medians(rows)
     assert t == {"time_train_s_per_1K_median": 3.0, "time_infer_s_per_1K_median": 2.0}
+    # as TabArena: divided by the dataset's mean fold size, not each fold's
+    uneven = [
+        {"task_id": 1, **row, "train_rows": 1000, "fit_seconds": 1.0},
+        {"task_id": 1, **row, "train_rows": 3000, "fit_seconds": 3.0},
+    ]
+    assert amlb.time_medians(uneven)["time_train_s_per_1K_median"] == pytest.approx(1.0)
     assert amlb.time_medians([]) == {}
 
 
@@ -299,6 +334,7 @@ def test_amlb_fit_records_follow_the_arena_record_format(tmp_path):
         "features": 2,
     }
     assert (first["task_id"], first["fold"], first["test_rows"]) == (7, 0, 10)
+    assert first["train_rows"] == 30
     assert first["fit_seconds"] == rows[0]["fit_seconds"]
     assert first["predict_seconds"] == rows[0]["predict_seconds"]
     assert first["predict_seconds_per_1K"] == pytest.approx(rows[0]["predict_seconds"] * 100)

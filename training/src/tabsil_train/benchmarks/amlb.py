@@ -794,7 +794,7 @@ def score_fold(
 
 
 # per-fold row counts and fit / prediction seconds (`evaluate_task` rows)
-TIME_KEYS = ("train_rows", "test_rows", "fit_seconds", "predict_seconds")
+TIME_KEYS = ("train_rows", "test_rows", "fit_rows", "fit_seconds", "predict_seconds")
 
 
 def per_1k(row: dict) -> dict:
@@ -807,19 +807,25 @@ def per_1k(row: dict) -> dict:
 
 
 def time_medians(rows: list[dict]) -> dict[str, float]:
-    """TabArena's leaderboard time over `evaluate_task` rows: per-fold seconds per 1K rows
-    (`per_1k`), averaged over each dataset's folds, then the median over datasets
-    (`time_train_s_per_1K_median`, `time_infer_s_per_1K_median`, as `arena.run_times`). TabArena
-    divides by the dataset's mean split size instead of each fold's; with cross-validation folds
-    of near-equal size the two agree. Empty dict without rows."""
+    """TabArena's leaderboard time (`arena.per_1k_medians`) over `evaluate_task` rows: fit and
+    prediction seconds per 1K of the dataset's mean fold train / test rows, averaged over each
+    dataset's folds, then the median over datasets (`time_train_s_per_1K_median`,
+    `time_infer_s_per_1K_median`, as `arena.run_times`). Empty dict without rows."""
+    from tabsil_train.benchmarks.arena import PER_1K_ROWS, per_1k_medians
+
     if not rows:
         return {}
-    df = pd.DataFrame([{"task_id": r["task_id"], **per_1k(r)} for r in rows])
-    per_dataset = df.groupby("task_id").mean()
-    return {
-        "time_train_s_per_1K_median": float(per_dataset["fit_seconds_per_1K"].median()),
-        "time_infer_s_per_1K_median": float(per_dataset["predict_seconds_per_1K"].median()),
-    }
+    df = pd.DataFrame(rows)
+    results = pd.DataFrame(
+        {
+            "dataset": df["task_id"],
+            "time_train_s": df["fit_seconds"],
+            "time_infer_s": df["predict_seconds"],
+        }
+    )
+    sizes = df.groupby("task_id")[["train_rows", "test_rows"]].mean()
+    sizes.columns = [PER_1K_ROWS["time_train_s"], PER_1K_ROWS["time_infer_s"]]
+    return per_1k_medians(results, sizes)
 
 
 def evaluate_task(
@@ -833,9 +839,10 @@ def evaluate_task(
     must provide `predict_full` (mean, bin log-probabilities, borders) or `predict_distribution`
     (log-probabilities, borders).
 
-    Each row also has `TIME_KEYS`: the fold's train and test row counts, the `fit` time and the
-    prediction time (the one call on the test rows that gives the scored prediction; with
-    `uncertainty` for regression it also returns the distribution) in seconds."""
+    Each row also has `TIME_KEYS`: the fold's train and test row counts, the rows `fit` actually
+    used (`fit_rows`, fewer with `SubsampledEstimator`), the `fit` time and the prediction time in
+    seconds (the one call on the test rows that gives the scored prediction; a regressor's
+    `predict_full`, used with `uncertainty`, returns the distribution from the same pass)."""
     from tabsil_train.benchmarks import uncertainty as unc
 
     rows = []
@@ -846,6 +853,8 @@ def evaluate_task(
         start = time.perf_counter()
         estimator.fit(x_train, y_train)
         fit_seconds = time.perf_counter() - start
+        # rows fit saw: `SubsampledEstimator` records (original, selected)
+        fit_rows = getattr(estimator, "train_rows_", (None, len(train_ix)))[1]
         extra = {}
         start = time.perf_counter()
         if task.task_type == "classification":
@@ -859,8 +868,7 @@ def evaluate_task(
         else:
             y_test = y_test.astype(float)
             if uncertainty:
-                prediction, log_probs, borders = _predict_full(estimator, x_test)
-                predict_seconds = time.perf_counter() - start
+                prediction, log_probs, borders, predict_seconds = _predict_full(estimator, x_test)
                 scale = float(np.std(y_train.astype(float))) or 1.0
                 extra = unc.regression_metrics(np.exp(log_probs), borders, y_test, y_scale=scale)
                 # Also record RMSE divided by the training-target std, for same-unit comparison
@@ -872,6 +880,7 @@ def evaluate_task(
         times = {
             "train_rows": len(train_ix),
             "test_rows": len(test_ix),
+            "fit_rows": int(fit_rows),
             "fit_seconds": fit_seconds,
             "predict_seconds": predict_seconds,
         }
@@ -888,10 +897,17 @@ def evaluate_task(
     return rows
 
 
-def _predict_full(estimator, x_test) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _predict_full(estimator, x_test) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """(mean, log probabilities, borders, seconds of the call that gives the mean). Without
+    `predict_full` the distribution is a second call, left out of the time so the prediction time
+    does not depend on `uncertainty`."""
+    start = time.perf_counter()
     if hasattr(estimator, "predict_full"):
         mean, log_probs, borders = estimator.predict_full(x_test)
+        seconds = time.perf_counter() - start
     else:
         mean = estimator.predict(x_test)
+        seconds = time.perf_counter() - start
         log_probs, borders = estimator.predict_distribution(x_test)
-    return np.asarray(mean), np.asarray(log_probs, dtype=np.float64), np.asarray(borders)
+    mean, borders = np.asarray(mean), np.asarray(borders)
+    return mean, np.asarray(log_probs, dtype=np.float64), borders, seconds

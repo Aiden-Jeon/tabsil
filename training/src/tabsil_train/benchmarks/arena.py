@@ -513,7 +513,7 @@ SCORE_KEYS = (
 def _scores(leaderboard: pd.DataFrame, name: str) -> dict:
     """This method's scores from the leaderboard, in public leaderboard units: score is
     1 - normalized error, improvability and imputed are %, harmonic rank is 1 / mrr."""
-    row = leaderboard[leaderboard["method"] == name].iloc[0]
+    row = _board_row(leaderboard, name)
     return {
         "elo": float(row["elo"]),
         "elo_ci_plus": float(row["elo+"]),
@@ -555,14 +555,12 @@ def dataset_sizes(context) -> pd.DataFrame:
     metadata (`num_instances_train`, `num_instances_test`), the row counts TabArena divides times
     by (`LeaderboardReporter.compute_results`, "add times per 1K samples"). The mean is over all
     of the dataset's splits, not only those of the suite's subset, as in TabArena."""
-    rows = [
-        {"dataset": ttm.tabarena_task_name, **{c: getattr(split, c) for c in PER_1K_ROWS.values()}}
-        for ttm in context.task_metadata_collection
-        for split in ttm.splits_metadata.values()
-    ]
-    if not rows:
-        return pd.DataFrame(columns=list(PER_1K_ROWS.values()), dtype=float)
-    return pd.DataFrame(rows).groupby("dataset").mean().astype(float)
+    columns = list(PER_1K_ROWS.values())
+    frame = context.task_metadata_collection.to_dataframe()  # one row per split, as `split_rows`
+    if frame.empty or not {"tabarena_task_name", *columns} <= set(frame.columns):
+        return pd.DataFrame(columns=columns, dtype=float)
+    sizes = frame.groupby("tabarena_task_name")[columns].mean().astype(float)
+    return sizes.rename_axis("dataset")
 
 
 def per_1k_medians(results: pd.DataFrame, sizes: pd.DataFrame) -> dict:

@@ -1184,7 +1184,11 @@ def per_1k_text(t: dict, suffix: str = "") -> str:
     nan = float("nan")
     train = t.get(f"time_train_s_per_1K_median{suffix}", nan)
     infer = t.get(f"time_infer_s_per_1K_median{suffix}", nan)
-    return f"{train:.2f}/{infer:.3f}"
+
+    def fmt(v: float) -> str:  # 3 significant digits for small times, no exponent for large
+        return f"{v:.0f}" if abs(v) >= 1000 else f"{v:.3g}"
+
+    return f"{fmt(train)}/{fmt(infer)}"
 
 
 def print_arena_summary(summary: dict) -> None:
@@ -1201,13 +1205,14 @@ def print_arena_summary(summary: dict) -> None:
             f"position {s['position']}/{s['n_methods']} "
             f"time train {t.get('time_train_s_mean', float('nan')):.1f}s "
             f"infer {t.get('time_infer_s_mean', float('nan')):.1f}s "
-            f"s/1K train/infer {per_1k_text(t, '_leaderboard')} (run {per_1k_text(t)})"
+            # run: splits we ran; leaderboard: all splits, imputed ones with the fill method's time
+            f"s/1K train/infer run {per_1k_text(t)} leaderboard {per_1k_text(t, '_leaderboard')}"
         )
 
     def baselines(label: str, s: dict) -> str | None:
         # baselines' leaderboard time on the same splits (run: only the splits we ran)
         parts = [
-            f"{b} {per_1k_text(t, '_leaderboard')} (run {per_1k_text(t)})"
+            f"{b} run {per_1k_text(t)} leaderboard {per_1k_text(t, '_leaderboard')}"
             for b, t in s.get("time_baselines", {}).items()
         ]
         return f"{label:24s} s/1K train/infer: " + ", ".join(parts) if parts else None
@@ -1394,8 +1399,9 @@ def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: b
 
 def write_amlb_fits(args: argparse.Namespace, suite: str, task, task_rows: list[dict]) -> None:
     """Append one line per fold to `fits_<suite>.jsonl`, in the arena fit record's format
-    (`RecordedEstimator`: suite, task, dataset, rows, features, fit_seconds) plus the task id,
-    fold, test rows, prediction time and both times per 1K rows (`amlb.per_1k`)."""
+    (`RecordedEstimator`: suite, task, dataset, rows fit saw, features, fit_seconds) plus the task
+    id, fold, the fold's train / test rows, prediction time and both times per 1K fold rows
+    (`amlb.per_1k`)."""
     path = fits_path(args)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
@@ -1406,9 +1412,10 @@ def write_amlb_fits(args: argparse.Namespace, suite: str, task, task_rows: list[
                 "dataset": task.name,
                 "task_id": task.task_id,
                 "fold": r["fold"],
-                "rows": r["train_rows"],
+                "rows": r["fit_rows"],  # as the arena record: rows fit saw
                 "features": int(task.X.shape[1]),
                 "fit_seconds": r["fit_seconds"],
+                "train_rows": r["train_rows"],
                 "test_rows": r["test_rows"],
                 "predict_seconds": r["predict_seconds"],
                 **bm.per_1k(r),
