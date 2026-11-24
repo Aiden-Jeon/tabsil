@@ -1,0 +1,67 @@
+"""TabSil: a tabular foundation model (classification and regression in one model).
+
+The code is split into axes and their combination. Modules on an axis are named after the part
+they implement (generic nouns); TabSil's numbers and the combination of the parts are in `recipe`.
+
+- `priors`: training data (assembler, generators, transforms, table size rules, graph SCM prior)
+- `models`: the model and its registry (column-row transformer, bar and quantile distributions)
+- `training`: training config, the training loop, data feeding, losses, stability
+- `inference`: sklearn-style inference (preprocessing member ensembles, test-time methods)
+- `benchmarks`: evaluation (AMLB/CTR23, TabArena, BeyondArena, uncertainty metrics)
+- `hub`: upload to and download from the Hugging Face Hub
+- `recipe`: TabSil's structure, training curriculum and inference defaults
+
+The inference entry points are importable from here and loaded on first use (so `import tabsil`
+does not import the Hub and inference code).
+
+    from tabsil import TabSilClassifier
+
+    clf = TabSilClassifier().fit(x_train, y_train)  # downloads the published weights
+"""
+
+from typing import TYPE_CHECKING
+
+from tabsil.models.bar_distribution import (
+    BarDistribution,
+    FullSupportBarDistribution,
+    get_bucket_borders,
+)
+from tabsil.utils import get_device, log_run_source, set_seed
+
+if TYPE_CHECKING:
+    from tabsil.hub import from_pretrained
+    from tabsil.recipe import TabSilClassifier, TabSilRegressor
+
+# Names loaded on first use -> the module defining them
+_LAZY = {
+    "from_pretrained": "tabsil.hub",
+    "TabSilClassifier": "tabsil.recipe",
+    "TabSilRegressor": "tabsil.recipe",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY:
+        import importlib
+
+        value = getattr(importlib.import_module(_LAZY[name]), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
+
+
+__all__ = [
+    "get_device",
+    "set_seed",
+    "log_run_source",
+    "BarDistribution",
+    "FullSupportBarDistribution",
+    "get_bucket_borders",
+    "from_pretrained",
+    "TabSilClassifier",
+    "TabSilRegressor",
+]

@@ -1,0 +1,40 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# Training artifacts (checkpoints and logs are not committed)
+checkpoints/
+# default output folders of TensorBoard etc.
+runs/
+# default output folders of scripts/ (when run from the repository root)
+tabsil_run/
+tabsil_eval/
+hub_upload/
+*.safetensors
+mlruns/
+mlartifacts/
+mlflow.db
+*.pt
+*.ckpt
+
+# Local tool state
+.env.local
+.databricks/
+.vscode/
+
+# OS
+.DS_Store

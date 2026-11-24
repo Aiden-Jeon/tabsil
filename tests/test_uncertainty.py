@@ -1,0 +1,322 @@
+"""Tests for predictive-distribution and uncertainty metrics (tabsil.benchmarks.uncertainty)."""
+
+import numpy as np
+import pytest
+import torch
+from scipy import special
+from sklearn.datasets import load_diabetes
+
+from tabsil.benchmarks import uncertainty as unc
+
+
+def _random_histogram(n=5, buckets=12, seed=0):
+    g = np.random.default_rng(seed)
+    borders = np.sort(g.uniform(-3, 3, buckets + 1))
+    probs = g.dirichlet(np.ones(buckets), size=n)
+    return probs, borders
+
+
+def _sample(probs, borders, size, g, tails):
+    """Draw `size` samples per row from the histogram (uniform inner buckets, tails at the ends)."""
+    h = unc.bar_histogram(probs, borders, tails)
+    out = np.empty((len(probs), size))
+    for i, p in enumerate(h.probs):
+        k = g.choice(len(p), size=size, p=p)
+        out[i] = g.uniform(borders[k], borders[k + 1])
+        if tails == "half_normal":
+            d = np.abs(g.normal(size=size))
+            out[i] = np.where(k == 0, borders[1] - h.scale_left[i] * d, out[i])
+            out[i] = np.where(k == len(p) - 1, borders[-2] + h.scale_right[i] * d, out[i])
+    return out
+
+
+@pytest.mark.parametrize("tails", unc.TAILS)
+def test_crps_matches_numerical_integration_of_the_cdf(tails):
+    # CRPS matches ∫ (F(t) − 1{t ≥ y})² dt integrated directly on a fine grid
+    probs, borders = _random_histogram()
+    y = np.array([-4.0, -1.0, 0.3, 2.9, 5.0])  # two outside the borders
+    t = np.linspace(-25, 25, 500_001)
+    rows = [unc.bar_histogram(np.repeat(p[None], len(t), 0), borders, tails) for p in probs]
+    cdf = np.stack([unc.pit(row, t) for row in rows])
+    step = (t[None, :] >= y[:, None]).astype(float)
+    expected = np.trapezoid((cdf - step) ** 2, t, axis=1)
+    h = unc.bar_histogram(probs, borders, tails)
+    assert np.allclose(unc.crps(h, y), expected, atol=1e-4)
+
+
+def test_crps_is_computed_in_row_chunks(monkeypatch):
+    probs, borders = _random_histogram(n=7)
+    y = np.linspace(-4, 4, 7)
+    h = unc.bar_histogram(probs, borders)
+    full = unc.crps(h, y)
+    monkeypatch.setattr(unc, "CRPS_CHUNK_ROWS", 3)
+    assert np.array_equal(unc.crps(h, y), full)
+
+
+def test_crps_of_a_narrow_bucket_is_the_absolute_error():
+    borders = np.array([-10.0, 0.999, 1.001, 10.0])
+    h = unc.bar_histogram(np.array([[0.0, 1.0, 0.0]]), borders)
+    assert unc.crps(h, [3.0])[0] == pytest.approx(2.0, abs=1e-3)
+
+
+@pytest.mark.parametrize("tails", unc.TAILS)
+def test_quantile_inverts_the_cdf_and_pit_is_the_cdf(tails):
+    probs, borders = _random_histogram(n=3)
+    probs[:, [0, -1]] = 0.1  # put mass in both end buckets to check tail quantiles
+    h = unc.bar_histogram(probs, borders, tails)
+    levels = np.array([0.01, 0.05, 0.3, 0.5, 0.97, 0.995])
+    x = unc.quantile(h, levels)
+    assert x.shape == (3, len(levels))
+    for j, q in enumerate(levels):
+        assert np.allclose(unc.pit(h, x[:, j]), q, atol=1e-9)
+    edge = unc.pit(h, [borders[0], borders[0], borders[-1]])
+    if tails == "uniform":
+        assert np.allclose(edge, [0, 0, 1])  # no mass beyond the outermost borders
+    else:
+        # half-normal: half the tail mass lies beyond the outermost border (median = bucket width)
+        p_left, p_right = h.probs[:, 0], h.probs[:, -1]
+        assert np.allclose(edge, [p_left[0] / 2, p_left[1] / 2, 1 - p_right[2] / 2])
+
+
+def test_zero_width_buckets_are_atoms():
+    # A bucket with equal borders: its mass collapses onto that point
+    borders = np.array([0.0, 1.0, 1.0, 2.0])
+    h = unc.bar_histogram(np.array([[0.25, 0.5, 0.25]]), borders)
+    assert unc.pit(h, [1.0])[0] == pytest.approx(0.75)
+    assert unc.quantile(h, 0.5)[0, 0] == pytest.approx(1.0)
+    assert np.isfinite(unc.crps(h, [1.0])).all()
+
+
+@pytest.mark.parametrize("tails", unc.TAILS)
+def test_calibrated_forecasts_cover_at_the_nominal_level(tails):
+    # When targets are drawn from the predictive distribution itself, PIT is uniform and coverage
+    # equals the level
+    g = np.random.default_rng(0)
+    probs, borders = _random_histogram(n=4000, seed=2)
+    y = _sample(probs, borders, 1, g, tails)[:, 0]
+    out = unc.regression_metrics(probs, borders, y, y_scale=2.0, tails=tails)
+    for level in unc.COVERAGE_LEVELS:
+        name = round(level * 100)
+        assert out[f"coverage_{name}"] == pytest.approx(level, abs=0.03)
+        assert out[f"coverage_min_by_width_{name}"] == pytest.approx(level, abs=0.06)
+    assert out["pit_ks"] < 0.03
+    assert out["crps_scaled"] == pytest.approx(out["crps"] / 2.0)
+    # Shifting the distribution moves PIT away from uniform and increases CRPS
+    shifted = unc.regression_metrics(probs, borders + 1.0, y, tails=tails)
+    assert shifted["pit_ks"] > 0.2 and shifted["crps"] > out["crps"]
+
+
+@pytest.mark.parametrize("tails", unc.TAILS)
+def test_per_row_borders_match_shared_and_row_by_row(tails):
+    # Giving the same borders for every row as (n, B + 1) equals giving them as (B + 1,)
+    probs, borders = _random_histogram(n=6)
+    probs[:, [0, -1]] = 0.1
+    y = np.array([-4.0, -1.0, 0.3, 2.9, 5.0, 0.0])
+    shared = unc.bar_histogram(probs, borders, tails)
+    tiled = unc.bar_histogram(probs, np.tile(borders, (6, 1)), tails)
+    assert shared.shared_borders is not None and tiled.shared_borders is None
+    levels = [0.02, 0.3, 0.5, 0.99]
+    assert np.allclose(unc.crps(shared, y), unc.crps(tiled, y))
+    assert np.allclose(unc.pit(shared, y), unc.pit(tiled, y))
+    assert np.allclose(unc.quantile(shared, levels), unc.quantile(tiled, levels))
+    # Per-row borders equal computing each row separately
+    g = np.random.default_rng(1)
+    per_row = np.sort(g.uniform(-3, 3, (6, len(borders))), axis=1)
+    h = unc.bar_histogram(probs, per_row, tails)
+    one = [unc.bar_histogram(probs[i : i + 1], per_row[i], tails) for i in range(6)]
+    assert np.allclose(unc.crps(h, y), [unc.crps(o, y[i : i + 1])[0] for i, o in enumerate(one)])
+    assert np.allclose(unc.pit(h, y), [unc.pit(o, y[i : i + 1])[0] for i, o in enumerate(one)])
+    assert np.allclose(
+        unc.quantile(h, levels), np.concatenate([unc.quantile(o, levels) for o in one])
+    )
+
+
+def test_bar_histogram_rejects_borders_of_the_wrong_shape():
+    probs, borders = _random_histogram(n=3)
+    with pytest.raises(ValueError, match="borders must have shape"):
+        unc.bar_histogram(probs, np.tile(borders, (2, 1)))
+
+
+def test_quantile_histogram_returns_the_quantiles_and_sorts_crossings():
+    levels = np.array([0.1, 0.5, 0.9])
+    values = np.array([[0.0, 1.0, 3.0], [2.0, 1.0, 0.0], [1.0, 1.0, 1.0]])  # crossing, all equal
+    probs, borders = unc.quantile_histogram(levels, values)
+    assert probs.shape == (3, 4) and borders.shape == (3, 5)
+    assert np.allclose(probs.sum(axis=1), 1.0)
+    for tails in unc.TAILS:
+        h = unc.bar_histogram(probs, borders, tails)
+        assert np.allclose(unc.quantile(h, levels), np.sort(values, axis=1))
+        assert np.allclose(unc.pit(h, [0.5, 1.5, 1.5]), [0.3, 0.7, 1.0], atol=1e-6)
+    # A row whose quantiles are all equal is close to a point mass: CRPS equals the absolute error
+    h = unc.bar_histogram(probs, borders)
+    assert unc.crps(h, [0.0, 0.0, 4.0])[2] == pytest.approx(3.0, abs=1e-6)
+    with pytest.raises(ValueError, match="probability levels"):
+        unc.quantile_histogram([0.5, 0.1], values[:, :2])
+
+
+def test_quantile_histogram_tail_density_continues_the_inner_bucket():
+    # The tail density at the shared border equals the adjacent inner bucket's density
+    levels = np.array([0.05, 0.5, 0.95])
+    probs, borders = unc.quantile_histogram(levels, [[-1.0, 0.0, 2.0]])
+    h = unc.bar_histogram(probs, borders)
+    eps = 1e-6
+    for y, inner in ((-1.0, 0.45 / 1.0), (2.0, 0.45 / 2.0)):
+        density = (unc.pit(h, [y + eps]) - unc.pit(h, [y - eps]))[0] / (2 * eps)
+        assert density == pytest.approx(inner, rel=1e-3)
+
+
+def test_dense_gaussian_quantiles_give_the_gaussian_crps():
+    # A histogram of 999 normal quantiles: CRPS near the closed form, intervals correct
+    g = np.random.default_rng(0)
+    n = 3000
+    mu, sigma = g.normal(size=n), g.uniform(0.5, 2.0, n)
+    y = mu + sigma * g.normal(size=n)
+    levels = np.linspace(0, 1, 1001)[1:-1]
+    values = mu[:, None] + sigma[:, None] * special.ndtri(levels)[None, :]
+    probs, borders = unc.quantile_histogram(levels, values)
+    z = (y - mu) / sigma
+    exact = sigma * (z * (2 * special.ndtr(z) - 1) + 2 * np.exp(-z * z / 2) / np.sqrt(2 * np.pi))
+    exact -= sigma / np.sqrt(np.pi)
+    h = unc.bar_histogram(probs, borders)
+    assert np.allclose(unc.crps(h, y), exact, rtol=2e-3, atol=1e-4)
+    out = unc.regression_metrics(probs, borders, y)
+    for level in unc.COVERAGE_LEVELS:
+        assert out[f"coverage_{round(level * 100)}"] == pytest.approx(level, abs=0.03)
+    assert out["pit_ks"] < 0.03
+
+
+def test_min_coverage_by_width_does_not_depend_on_row_order():
+    # Equal widths fall into one bin matching overall coverage (for any row order)
+    g = np.random.default_rng(0)
+    covered = g.random(200) < 0.9
+    width = np.ones(200)
+    expected = covered.mean()
+    for _ in range(3):
+        perm = g.permutation(200)
+        assert unc.min_coverage_by_width(covered[perm], width[perm]) == pytest.approx(expected)
+
+
+def test_ece_is_zero_when_confidence_matches_accuracy():
+    proba = np.tile([0.75, 0.25], (400, 1))
+    labels = np.array([0] * 300 + [1] * 100)
+    assert unc.ece(proba, labels) == pytest.approx(0.0)
+    assert unc.ece(proba, np.array([0] * 200 + [1] * 200)) == pytest.approx(0.25)
+
+
+def test_conformal_threshold_and_scores():
+    assert unc.conformal_threshold(np.arange(9.0), 0.1) == 8.0  # ⌈10 × 0.9⌉ = 9th
+    assert unc.conformal_threshold(np.arange(5.0), 0.1) == float("inf")
+    proba = np.array([[0.6, 0.3, 0.1]])
+    assert np.allclose(unc.conformal_scores(proba, "lac"), [[0.4, 0.7, 0.9]])
+    assert np.allclose(unc.conformal_scores(proba, "aps"), [[0.6, 0.9, 1.0]])  # u = 1
+    assert np.allclose(unc.conformal_scores(proba, "aps", u=[0.5]), [[0.3, 0.75, 0.95]])
+
+
+def test_sscs_puts_empty_and_singleton_sets_together():
+    # Exact model: size bins 0-1 get coverage even with empty (coverage 0) and size-1 sets mixed
+    sizes = np.array([0] * 10 + [1] * 90 + [2] * 20)
+    covered = np.r_[np.zeros(10, bool), np.ones(90, bool), np.r_[np.ones(18), np.zeros(2)] > 0]
+    assert unc.size_stratified_coverage(covered, sizes) == pytest.approx(0.9)
+    assert np.isnan(unc.size_stratified_coverage(covered[:5], sizes[:5]))
+
+
+def test_randomized_aps_does_not_return_every_class_on_hard_binary_data():
+    # Binary, 75% accuracy: non-randomized APS has threshold 1, so every set held both classes
+    g = np.random.default_rng(0)
+    p1 = g.uniform(0.5, 1.0, 2000)
+    proba = np.c_[p1, 1 - p1]
+    labels = (g.random(2000) > p1).astype(int)
+    out = unc.conformal(proba, labels, alpha=0.1, kind="aps")
+    assert out["coverage"] == pytest.approx(0.9, abs=0.02)
+    assert out["set_size"] < 1.9
+
+
+@pytest.mark.parametrize("kind", unc.CONFORMAL_SCORES)
+def test_split_conformal_covers_at_least_the_target(kind):
+    g = np.random.default_rng(0)
+    proba = g.dirichlet(np.ones(4) * 0.7, size=2000)
+    labels = np.array([g.choice(4, p=p) for p in proba])  # calibrated model
+    out = unc.conformal(proba, labels, alpha=0.1, kind=kind)
+    assert out["coverage"] == pytest.approx(0.9, abs=0.02)
+    assert 1.0 <= out["set_size"] < 4.0
+    assert out["sscs"] <= out["coverage"] + 1e-12
+    assert out["class_coverage_gap"] >= 0.0
+
+
+def test_classification_metrics_ignore_classes_unseen_in_training():
+    proba = np.tile([0.8, 0.2], (40, 1))
+    y = np.array(["a"] * 32 + ["b"] * 6 + ["z"] * 2)  # "z" is a class absent from the training fold
+    out = unc.classification_metrics(proba, y, np.array(["a", "b"]))
+    assert out["ece"] == pytest.approx(abs(0.8 - 32 / 38))
+    assert set(out) >= {"log_loss", "brier", "lac_coverage", "aps_sscs"}
+
+
+def test_classification_metrics_are_nan_when_no_row_is_left():
+    proba = np.tile([0.8, 0.2], (5, 1))
+    out = unc.classification_metrics(proba, np.array(["z"] * 5), np.array(["a", "b"]))
+    assert out and all(np.isnan(v) for v in out.values())
+    assert np.isnan(unc.ece(np.zeros((0, 2)), np.zeros(0, dtype=int)))
+
+
+def test_regressor_predict_full_matches_predict_and_distribution():
+    from helpers import tiny_model
+
+    from tabsil.recipe import TabSilRegressor
+
+    model = tiny_model()
+    x, y = load_diabetes(return_X_y=True)
+    reg = TabSilRegressor(model, torch.linspace(-4, 4, 33)).fit(x[:80], y[:80])
+    mean, log_probs, borders = reg.predict_full(x[80:100])
+    assert np.array_equal(mean, reg.predict(x[80:100]))
+    log_probs2, borders2 = reg.predict_distribution(x[80:100])
+    assert torch.equal(log_probs, log_probs2) and torch.equal(borders, borders2)
+    # Borders are mapped back to original units in float64 (float32 collapses them when the mean is
+    # large and the spread small)
+    assert borders.dtype == torch.float64
+    assert torch.equal(borders, reg.borders.double() * reg.y_std_ + reg.y_mean_)
+    out = unc.regression_metrics(log_probs.exp().numpy(), borders.numpy(), y[80:100])
+    assert np.isfinite(out["crps"]) and 0.0 <= out["coverage_90"] <= 1.0
+
+
+def test_evaluate_task_adds_uncertainty_columns():
+    import pandas as pd
+
+    from tabsil.benchmarks.amlb import OpenMLTask, evaluate_task
+
+    class Folds:
+        def get_train_test_split_indices(self, fold, repeat, sample):
+            ix = np.arange(60)
+            return ix[ix % 2 != fold], ix[ix % 2 == fold]
+
+    class Gaussian:
+        """Regression estimator predicting the training target mean and histogram."""
+
+        def fit(self, X, y):
+            self.counts, self.edges = np.histogram(y, bins=10)
+            self.mean = float(np.mean(y))
+            return self
+
+        def predict(self, X):
+            return np.full(len(X), self.mean)
+
+        def predict_distribution(self, X):
+            p = (self.counts + 1e-3) / (self.counts + 1e-3).sum()
+            return np.log(np.tile(p, (len(X), 1))), self.edges
+
+    g = np.random.default_rng(0)
+    X = pd.DataFrame({"a": g.normal(size=60)})
+    task = OpenMLTask(1, "toy", X, pd.Series(g.normal(size=60)), [], "regression", Folds())
+    rows = evaluate_task(task, lambda t: Gaussian(), n_folds=2, uncertainty=True)
+    assert len(rows) == 2
+    assert {"crps", "crps_scaled", "coverage_90", "pit_ks", "rmse_scaled"} <= set(rows[0])
+    assert rows[0]["score"] == pytest.approx(-rows[0]["rmse_scaled"] * np.std(task.y[1::2]))
+
+
+def test_eval_script_rejects_uncertainty_for_arena_suites(tmp_path):
+    from helpers import load_script
+
+    script = load_script("scripts/eval.py", "eval_uncertainty")
+    out = tmp_path / "out"
+    with pytest.raises(SystemExit, match="AMLB"):
+        script.main(["--suite", "tabarena-lite", "--uncertainty", "--out-dir", str(out)])
+    assert not out.exists()

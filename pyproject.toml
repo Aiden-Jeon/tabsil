@@ -1,0 +1,71 @@
+[project]
+name = "tabsil"
+version = "0.1.0"
+description = "TabSil: a tabular foundation model for classification and regression, trained on synthetic priors"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "Aiden-Jeon", email = "aiden.jongseob@gmail.com" }
+]
+requires-python = ">=3.12"
+# Lower bounds follow Databricks Serverless GPU environment v6; torch is pinned to 2.11 (the CUDA 13.0
+# build tested there). pandas stays at >=2.2 here and is raised to >=3.0.6 in the dev group; the
+# arena extra's tabarena (autogluon) needs pandas<2.4, so that install gets 2.3 (tool.uv.conflicts).
+dependencies = [
+    "huggingface-hub>=0.34",
+    "matplotlib>=3.10",
+    "mlflow>=2.15",
+    "numpy>=2.3",
+    "openml>=0.15",
+    "pandas>=2.2",
+    "safetensors>=0.5",
+    "scikit-learn>=1.7",
+    "scipy>=1.16",
+    "tabicl>=2.2",
+    "torch>=2.11,<2.12",
+    "tqdm>=4.67",
+]
+
+[project.optional-dependencies]
+# TabArena / BeyondArena evaluation (tabsil.benchmarks.arena); tabarena and autogluon are pre-releases
+arena = [
+    "tabarena[data-foundry]>=0.1.1.dev20261031",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "ipywidgets>=8.1.9",
+    "jupyterlab>=4.6.4",
+    "pandas>=3.0.6",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.2",
+    "ruff>=0.16.8",
+]
+# dev tools to use with the arena extra (it cannot be installed with dev because of pandas):
+#   uv sync --no-dev --extra arena --group arena-dev
+arena-dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.8",
+]
+
+[tool.uv]
+prerelease = "if-necessary"
+# dev (pandas 3) and the arena extra (pandas<2.4) are resolved separately
+conflicts = [[{ extra = "arena" }, { group = "dev" }]]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
