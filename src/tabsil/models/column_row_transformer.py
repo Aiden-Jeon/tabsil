@@ -94,55 +94,6 @@ SDPA_MAX_BATCH = 65_535
 # A switch for comparing the two in measurements
 CHECKPOINT_FUSED_DECODER = True
 
-# Fields that minipfn's config of this model had and TabSil fixes: name -> (minipfn default, the
-# only value TabSil accepts). minipfn checkpoints, Hub config.json files and MLflow run params may
-# still hold them (`fixed_fields_check`). minipfn left a field at its default out of the saved dict
-# when the field was added after the first release, hence the defaults
-FIXED_FIELDS: dict[str, tuple[Any, Any]] = {
-    "task": ("classification", "multitask"),
-    "qk_norm": (False, True),
-    "encoder": ("linear", "fourier"),
-    "target_norm": (False, True),
-    "head_mlp": (False, True),
-    "n_buckets": (5000, 5000),
-    "logit_softcap": (None, None),
-    "qk_norm_affine": (True, False),
-    "column_summary_temperature": ("qassmax", "logscale"),
-    "column_spread_temperature": ("none", "none"),
-    "row_temperature": ("none", "gated_logscale"),
-    "icl_temperature": ("qassmax", "logscale"),
-    "decoder_temperature": ("qassmax", "logscale"),
-    "decoder_qk_norm": (False, False),
-    "stage_layout": ("sequential", "interleaved"),
-    "regression_head": ("bar", "quantile"),
-    "categorical_encoder": (False, False),
-}
-# minipfn always wrote this field, TabSil never does: its presence marks a minipfn dict
-LEGACY_MARKER = "task"
-# Fields renamed since minipfn: old name -> current name
-RENAMED_FIELDS = {"qassmax_hidden": "gate_hidden"}
-
-
-def fixed_fields_check(values: dict, *, as_text: bool = False) -> None:
-    """Remove the fields TabSil fixes (`FIXED_FIELDS`) from `values` in place, and raise a
-    ValueError if one of them differs from the TabSil value.
-
-    `values` is a saved model config dict or the MLflow params of a training run (`as_text`: the
-    values are strings). A minipfn dict or run (it has `LEGACY_MARKER`) that lacks one of the fields
-    had it at minipfn's default; a dict without the marker is a TabSil one and is left as it is."""
-    if LEGACY_MARKER not in values:
-        return
-    wrong = {}
-    for name, (old_default, fixed) in FIXED_FIELDS.items():
-        value = values.pop(name, str(old_default) if as_text else old_default)
-        if value != (str(fixed) if as_text else fixed):
-            wrong[name] = (value, fixed)
-    if wrong:
-        raise ValueError(
-            "this minipfn model is not the TabSil structure; TabSil fixes these fields"
-            f" (saved value, TabSil value): {wrong}"
-        )
-
 
 def standardize_cells(
     x: torch.Tensor, n_train: int
@@ -185,7 +136,7 @@ class ColumnRowTransformerConfig:
     ff_factor: int = 2
     decoder_heads: int = 6  # classification retrieval decoder
     decoder_head_dim: int = 64
-    # hidden width of the gate MLP of the gated_logscale temperature (minipfn: `qassmax_hidden`)
+    # hidden width of the gate MLP of the gated_logscale temperature
     gate_hidden: int = 64
     # number of target embeddings of the classification output (the class cap in training)
     n_out: int = 10
@@ -229,14 +180,8 @@ class ColumnRowTransformerConfig:
 
     @classmethod
     def from_dict(cls, values: Mapping[str, Any]) -> ColumnRowTransformerConfig:
-        """The config of a saved dict: a TabSil one, or a minipfn one of the same structure (the
-        fields TabSil fixes must hold the TabSil value, `fixed_fields_check`). Missing fields take
-        the defaults; a field this code does not know raises a ValueError naming it."""
-        values = dict(values)
-        fixed_fields_check(values)
-        for old, new in RENAMED_FIELDS.items():
-            if old in values:
-                values[new] = values.pop(old)
+        """The config of a saved dict. Missing fields take the defaults; a field this code does
+        not know raises a ValueError naming it."""
         unknown = sorted(set(values) - set(cls.__dataclass_fields__))
         if unknown:
             raise ValueError(

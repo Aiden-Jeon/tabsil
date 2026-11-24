@@ -278,17 +278,11 @@ def test_scalar_parameter_and_state_round_trip():
     assert again.state_dict()["state"].keys() == state["state"].keys()
     # the group settings other than lr stay as the new optimizer has them
     assert all(g["weight_decay"] == 0.05 for g in again.param_groups)
-    # minipfn's MuonAdam state with Muon on every parameter (no Adam part) loads as well
-    legacy = Muon.for_model(model, lr=0.1)
-    legacy.load_state_dict({"muon": state, "adam": None})
-    buffers = [s["momentum_buffer"] for s in legacy.state.values()]
+    buffers = [s["momentum_buffer"] for s in again.state.values()]
     expected = [s["momentum_buffer"] for s in opt.state.values()]
     assert all(torch.equal(a, b) for a, b in zip(buffers, expected, strict=True))
-    # a state with an Adam part (minipfn muon_scope="blocks") cannot be continued
-    with pytest.raises(ValueError, match="Adam part"):
-        legacy.load_state_dict({"muon": state, "adam": {"state": {}, "param_groups": []}})
     with pytest.raises(ValueError, match="Muon optimizer state"):
-        legacy.load_state_dict({"state": {}})
+        again.load_state_dict({"state": {}})
 
 
 def test_config_checks():
@@ -404,8 +398,8 @@ def test_train_script_stages(monkeypatch):
     args = ["--config-name", "stage3", "--steps", "500", "--init-run-id", "stage2"]
     config = script.build_config(script.parse_args(args))
     assert config == recipe.curriculum(3, steps=500)
-    # Resuming continues the Muon momentum and weight decay of the source run. Options of minipfn
-    # runs that TabSil no longer has are not carried over
+    # Resuming continues the Muon momentum and weight decay of the source run. Params that are
+    # not TabSil speed options are not carried over
     params = {"muon_momentum": "0.9", "muon_weight_decay": "0.01", "muon_scope": "all"}
     params |= {"optimizer": "muon", "logit_softcap": "None", "schedule_free": "False"}
     options = script.source_speed_options(params)

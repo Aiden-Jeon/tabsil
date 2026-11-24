@@ -8,9 +8,8 @@ import pytest
 from tabsil_train import recipe
 from tabsil_train.training.config import TrainConfig
 
-# Every TrainConfig field of curriculum stages 1-3, written out (the values minipfn's
-# minipfn_v1.curriculum produced at commit 8a7c81c; the fields TabSil fixes in the code since are
-# checked in `test_minipfn_compat`). Fields that are the same in every stage:
+# Every TrainConfig field of curriculum stages 1-3, written out. Fields that are the same in
+# every stage:
 EXPECTED_COMMON = {
     "prior_type": "graph_scm",
     "model_type": "column_row_transformer",

@@ -294,19 +294,16 @@ def test_resume_past_the_stop_step_is_an_error(tmp_path):
 
 
 def test_resume_refuses_checkpoints_of_other_optimizers(tmp_path):
-    # minipfn checkpoints of Adam or schedule-free AdamW runs (or from before the optimizer key)
-    # cannot be continued; their weights can still be taken with init_from
+    # a checkpoint without a Muon optimizer state cannot be continued; its weights can still be
+    # taken with init_from
     config = _smoke(steps=2, val_every=2, collapse_threshold=None)
     train(config, tmp_path / "a", mlflow_log=False)
     state = torch.load(tmp_path / "a" / "latest.pt", weights_only=True)
     longer = replace(config, steps=4)
-    for name, changes in (
-        ("adam", {"optimizer_type": "adam"}),
-        ("old", {"optimizer_type": None}),
-        ("schedule_free", {"schedule_free": True}),
-    ):
+    for name, optimizer_type in (("adam", "adam"), ("none", None)):
         other = {k: v for k, v in state.items() if k != "optimizer_type"}
-        other.update({k: v for k, v in changes.items() if v is not None})
+        if optimizer_type is not None:
+            other["optimizer_type"] = optimizer_type
         path = tmp_path / f"{name}.pt"
         torch.save(other, path)
         with pytest.raises(ValueError, match="Muon runs only"):

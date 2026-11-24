@@ -4,8 +4,7 @@ them (`tabsil.from_pretrained` is `from_pretrained` here).
 On the Hub the weights are in `model.safetensors` and the config in `config.json`, so loading
 needs no pickle.
 The regression borders (the buckets the quantile outputs are turned into) go into
-`model.safetensors` too, under the name `borders`. config.json files and checkpoints written by
-minipfn for the same structure are read as well (`ColumnRowTransformerConfig.from_dict`).
+`model.safetensors` too, under the name `borders`.
 
     from tabsil import from_pretrained
     model, borders = from_pretrained("aiden-jeon/tabsil")
