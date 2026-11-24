@@ -3,6 +3,8 @@ name = "tabsil-train"
 version = "0.1.0"
 description = "Training, synthetic priors and benchmark evaluation of the TabSil tabular foundation model"
 license = "Apache-2.0"
+# copies of the root LICENSE and a NOTICE (uv_build does not accept paths outside this folder)
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Aiden-Jeon", email = "aiden.jongseob@gmail.com" }
 ]

@@ -1,0 +1,5 @@
+TabSil (tabsil-train)
+Copyright 2026 Aiden-Jeon
+
+Third-party code adapted into the TabSil inference package (tabsil, a dependency of this
+package) is listed in its NOTICE.
