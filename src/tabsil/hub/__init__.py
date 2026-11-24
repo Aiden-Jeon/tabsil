@@ -8,10 +8,10 @@ The regression borders (the buckets the quantile outputs are turned into) go int
 
     from tabsil import from_pretrained
     model, borders = from_pretrained("aiden-jeon/tabsil")
-    model, borders = from_pretrained("aiden-jeon/tabsil@step-100k")
+    model, borders = from_pretrained("aiden-jeon/tabsil@stage2-10k")
 
 For inference alone this function is not needed: `TabSilClassifier()`·`TabSilRegressor()`
-(`tabsil.recipe`) download from the default Hub repo (`HUB_REPO`; weights not published yet)
+(`tabsil.recipe`) download from the default Hub repo (`HUB_REPO`)
 (`model_or_pretrained`).
 
 `load_model` reads a Hub repo, a local `save_pretrained` folder or a checkpoint file the same way

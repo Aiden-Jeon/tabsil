@@ -9,6 +9,9 @@ scripts) with Muon on all parameters, batch 256 on 32 GPUs, 1% warmup and cosine
     2      400-10,240 (80%)           20K   1e-4   starts from the stage 1 weights
     3      400-60,000 (80%)            5K   2e-5   starts from the stage 2 weights
 
+The published v1 weights were trained with the same stages at 150K / 10K / 2K steps
+(`curriculum(stage, steps)`, `--steps` of the training script).
+
 Tables have at most 100 features (fewer for long tables, by the TabICLv2 table size rule). The
 prior is the `graph_scm` prior (the TabICLv2 graph SCM from the `tabicl` package,
 `tabsil_train.priors.graph_scm`).

@@ -116,7 +116,7 @@ def _inference_kwargs(model: nn.Module, task: str, n_estimators, member_kinds) -
     return out
 
 
-# The default Hub repo of `TabSilClassifier()` and `TabSilRegressor()` (weights not published yet).
+# The default Hub repo of `TabSilClassifier()` and `TabSilRegressor()` (the v1 weights).
 # One multitask model serves both tasks
 HUB_REPO = "aiden-jeon/tabsil"
 HUB_REPOS = {"classification": HUB_REPO, "regression": HUB_REPO}
@@ -131,7 +131,7 @@ def _load(model, task: str, repos: dict[str, str]) -> tuple[nn.Module, torch.Ten
 
 class TabSilClassifier(EnsembleClassifier):
     """TabSil classification: `EnsembleClassifier` with TabSil's inference defaults. Without `model`
-    it downloads the default Hub repo (`HUB_REPO`; weights not published yet). Other weights can
+    it downloads the default Hub repo (`HUB_REPO`). Other weights can
     be given as a Hub repo id
     (`owner/name`, `owner/name@branch`), a local folder, or a model. The member count and
     kinds default to the model's settings (`default_inference`); arguments override them.
@@ -157,8 +157,8 @@ class TabSilClassifier(EnsembleClassifier):
 
 class TabSilRegressor(EnsembleRegressor):
     """TabSil regression: `EnsembleRegressor` with TabSil's inference defaults. Without `model` it
-    downloads the weights and their regression borders from the default Hub repo (`HUB_REPO`;
-    weights not published yet). Other weights can be given as a Hub repo id, a local folder (borders
+    downloads the weights and their regression borders from the default Hub repo (`HUB_REPO`).
+    Other weights can be given as a Hub repo id, a local folder (borders
     from there too), or a model with `borders`.
 
         reg = TabSilRegressor().fit(x_train, y_train)
