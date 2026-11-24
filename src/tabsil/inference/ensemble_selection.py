@@ -58,8 +58,8 @@ paper's method as is, set `min_improvement=0` and pass no `groups`:
   group in one fold only; `StratifiedGroupKFold`, or `GroupKFold` when that cannot split). Empty
   folds are dropped, and random folds are used when fewer than 2 remain. For TabArena and
   BeyondArena, grouped splits pass the group column and temporal splits pass time intervals as
-  groups (`tabsil.benchmarks.arena.split_groups`). Temporal splits are also interval-wise k-fold,
-  so some folds fit the past from future intervals (not a forward-only split; the same way
+  groups (`tabsil_train.benchmarks.arena.split_groups`). Temporal splits are also interval-wise
+  k-fold, so some folds fit the past from future intervals (not a forward-only split; the same way
   AutoGluon builds bagging folds in TabArena). Wrapped in `DiagScale`, groups are used only for
   greedy selection and DiagScale's validation split stays random
 """
@@ -124,7 +124,7 @@ def check_selection(
 ) -> tuple[float, ...]:
     """Validate the selection settings and return the pool temperatures (at least
     `min_temperature`); ValueError otherwise. Also used to check settings before building an
-    estimator (`scripts/eval.py`)."""
+    estimator (`training/scripts/eval.py`)."""
     if selection not in SELECTIONS:
         raise ValueError(f"selection must be one of {SELECTIONS}: {selection}")
     if pool_size < n_estimators:

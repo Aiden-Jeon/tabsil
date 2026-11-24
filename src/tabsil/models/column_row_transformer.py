@@ -189,8 +189,8 @@ class ColumnRowTransformerConfig:
     gate_hidden: int = 64
     # number of target embeddings of the classification output (the class cap in training)
     n_out: int = 10
-    # feature cap seen in training (`TrainConfig.max_features`). Not part of the structure;
-    # read by inference
+    # feature cap seen in training (`TrainConfig.max_features` of tabsil-train). Not part of the
+    # structure; read by inference
     max_features: int = 100
 
     INFO_FIELDS: ClassVar[tuple[str, ...]] = ("max_features",)
@@ -814,7 +814,7 @@ class ColumnRowTransformer(nn.Module):
     # forward accepts the inference arguments (`inference`, `y_classes`/`n_classes`)
     # (`tabsil.inference.ensemble.forward_kwargs`)
     supports_inference_options = True
-    # Activation checkpointing (training config `TrainConfig.activation_checkpointing_rows`). In
+    # Activation checkpointing (tabsil-train config `TrainConfig.activation_checkpointing_rows`). In
     # training forwards on tables with more rows (train + test) than this, the activations of the
     # column/row stage blocks and the row ICL layers are recomputed in backward instead of kept
     # (`torch.utils.checkpoint`), and the classification decoder skips the score matrix
@@ -1193,10 +1193,11 @@ class ColumnRowTransformer(nn.Module):
     ) -> int:
         """Bytes of cell state that one inference forward (`inference=True`) keeps on the CPU
         (offload of `_rows_interleaved_chunked`; the eval queue uses it to choose which large tables
-        run concurrently, `scripts/eval.py --host-memory-budget-gb`). The cell state (B, R, C, E)
-        has one token per column. 0 when the forward is not chunked or the state stays on the
-        device. `itemsize` is the size of the cell token dtype: 4, because the cell encoder outputs
-        float32 even under bfloat16 autocast (so the state is float32 too; checked on H100)."""
+        run concurrently, `training/scripts/eval.py --host-memory-budget-gb`). The cell state
+        (B, R, C, E) has one token per column. 0 when the forward is not chunked or the state stays
+        on the device. `itemsize` is the size of the cell token dtype: 4, because the cell encoder
+        outputs float32 even under bfloat16 autocast (so the state is float32 too; checked on
+        H100)."""
         cells = batch * rows * columns
         if cells <= self.inference_chunk_cells:
             return 0

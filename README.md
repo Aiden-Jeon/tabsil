@@ -4,18 +4,34 @@ TabSil is a tabular foundation model. One model handles both classification and 
 
 *Sil* (실) is Korean for *thread*: the model reads a table by weaving through its columns and rows.
 
-This repository has everything needed to reproduce TabSil: the model, the synthetic-data prior, the training curriculum, inference, and the benchmark harness.
+This repository has everything needed to reproduce TabSil. It holds two packages:
+
+- `tabsil` (`src/tabsil/`): inference only. The model, the scikit-learn style estimators, and loading weights from the Hugging Face Hub.
+- `tabsil-train` (`training/`, imported as `tabsil_train`): the synthetic-data prior, the training curriculum, the benchmark harness, and the Hub upload scripts. It is a uv workspace member that depends on `tabsil`.
 
 > Status: the code is complete; trained weights are not published yet.
 
 ## Install
 
+Inference only:
+
+```bash
+uv add tabsil
+# or from GitHub
+uv add "tabsil @ git+https://github.com/Aiden-Jeon/tabsil"
+```
+
+Training and evaluation, from a clone:
+
 ```bash
 git clone https://github.com/Aiden-Jeon/tabsil
 cd tabsil
-uv sync                  # inference and training
-uv sync --extra arena    # + TabArena / BeyondArena evaluation
+uv sync                           # tabsil + dev tools (inference tests: uv run pytest tests)
+uv sync --package tabsil-train    # + training, priors, AMLB evaluation (tests: uv run --package tabsil-train pytest training/tests)
+uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # + TabArena / BeyondArena evaluation
 ```
+
+The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3).
 
 Python ≥ 3.12, PyTorch 2.11.
 
@@ -45,7 +61,7 @@ Both are scikit-learn style estimators over an ensemble of 8 preprocessing membe
 | Regression head | 999 quantiles, pinball loss | Kumo-Tabular |
 | Tasks | one multitask model for classification and regression | TabPFN-3.5 |
 
-Code: `src/tabsil/models/column_row_transformer.py`; all numbers are in `src/tabsil/recipe.py`.
+Code: `src/tabsil/models/column_row_transformer.py`; the structure and inference numbers are in `src/tabsil/recipe.py`, the training curriculum in `training/src/tabsil_train/recipe.py`.
 
 ## Training
 
@@ -59,19 +75,19 @@ Synthetic tables come from the TabICLv2 graph SCM prior (`tabicl` package) with 
 
 ```bash
 # local check (CPU, about a minute)
-uv run python scripts/train.py --config-name smoke
+uv run --package tabsil-train python training/scripts/train.py --config-name smoke
 
-# full training: Databricks AI Runtime job specs in scripts/train.yaml
-uv run python scripts/train.py --config-name stage1
-uv run python scripts/train.py --config-name stage2 --init-run-id <stage 1 run>
-uv run python scripts/train.py --config-name stage3 --init-run-id <stage 2 run>
+# full training: Databricks AI Runtime job specs in training/scripts/train.yaml
+uv run --package tabsil-train python training/scripts/train.py --config-name stage1
+uv run --package tabsil-train python training/scripts/train.py --config-name stage2 --init-run-id <stage 1 run>
+uv run --package tabsil-train python training/scripts/train.py --config-name stage3 --init-run-id <stage 2 run>
 ```
 
 Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a set of strings, so its tables depend on the hash seed.
 
 ## Evaluation
 
-`scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration) and test-time compute options (greedy ensemble selection, DiagScale).
+`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration) and test-time compute options (greedy ensemble selection, DiagScale).
 
 ## Acknowledgements
 

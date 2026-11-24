@@ -1,15 +1,19 @@
 """TabSil: a tabular foundation model (classification and regression in one model).
 
-The code is split into axes and their combination. Modules on an axis are named after the part
-they implement (generic nouns); TabSil's numbers and the combination of the parts are in `recipe`.
+This package is inference: loading the weights and predicting. Modules on an axis are named after
+the part they implement (generic nouns); TabSil's numbers and the combination of the parts are in
+`recipe`.
 
-- `priors`: training data (assembler, generators, transforms, table size rules, graph SCM prior)
-- `models`: the model and its registry (column-row transformer, bar and quantile distributions)
-- `training`: training config, the training loop, data feeding, losses, stability
+- `models`: the model and its registry (column-row transformer, bar and quantile distributions,
+  checkpoint save and load)
 - `inference`: sklearn-style inference (preprocessing member ensembles, test-time methods)
-- `benchmarks`: evaluation (AMLB/CTR23, TabArena, BeyondArena, uncertainty metrics)
-- `hub`: upload to and download from the Hugging Face Hub
-- `recipe`: TabSil's structure, training curriculum and inference defaults
+- `hub`: save to and load from the Hugging Face Hub format (`save_pretrained`, `from_pretrained`)
+- `recipe`: TabSil's structure and inference defaults (`TabSilClassifier`, `TabSilRegressor`)
+- `utils`: device and seed helpers
+
+Training (priors, training loop, curriculum), evaluation (AMLB/CTR23, TabArena, BeyondArena,
+uncertainty metrics) and the Hub upload scripts are in the `tabsil-train` package (`training/` in
+the repository, imported as `tabsil_train`).
 
 The inference entry points are importable from here and loaded on first use (so `import tabsil`
 does not import the Hub and inference code).
@@ -26,7 +30,7 @@ from tabsil.models.bar_distribution import (
     FullSupportBarDistribution,
     get_bucket_borders,
 )
-from tabsil.utils import get_device, log_run_source, set_seed
+from tabsil.utils import get_device, set_seed
 
 if TYPE_CHECKING:
     from tabsil.hub import from_pretrained
@@ -57,7 +61,6 @@ def __dir__() -> list[str]:
 __all__ = [
     "get_device",
     "set_seed",
-    "log_run_source",
     "BarDistribution",
     "FullSupportBarDistribution",
     "get_bucket_borders",

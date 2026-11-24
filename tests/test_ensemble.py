@@ -262,13 +262,10 @@ def test_predict_is_repeatable_and_regressor_keeps_borders_on_cpu():
 
 def test_one_hot_width_follows_the_feature_count_the_model_was_trained_on():
     # a model trained on long tables (max_features 500) may expand past 100 columns
-    from dataclasses import replace
+    from helpers import smoke_model
 
-    from helpers import tabsil_smoke
-
-    wide = replace(tabsil_smoke(), max_features=500, max_cells=64 * 500)
-    assert wide.model_config().max_features == 500
-    model = wide.build_model().eval()
+    model = smoke_model(max_features=500).eval()
+    assert model.config.max_features == 500
     assert TabSilClassifier(model).max_one_hot_width == 500
     assert TabSilClassifier(_tiny_model()).max_one_hot_width == MODEL_MAX_FEATURES
     assert TabSilClassifier(model, max_one_hot_width=30).max_one_hot_width == 30
