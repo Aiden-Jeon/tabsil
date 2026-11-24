@@ -593,10 +593,15 @@ class _OnlineSummary:
         self.lse = total
 
     def finish(self) -> torch.Tensor:
-        if self.acc is None:
-            raise ValueError("no train rows were added")
+        """The summary (N, n_inducing, E). Without train rows the attention output is 0 (the
+        output of SDPA over zero keys in `InducedBlock.summary`)."""
         block = self.block
-        out = block.summarize.split_output(self.acc.to(self.value_dtype))
+        if self.acc is None:
+            _, heads, n_ind, d = self.q.shape
+            acc = self.q.new_zeros(self.n, heads, n_ind, d)
+        else:
+            acc = self.acc
+        out = block.summarize.split_output(acc.to(self.value_dtype))
         ind = self.ind.expand(self.n, -1, -1) + out
         return ind + block.summarize_mlp(block.norms["ind_mlp"](ind))
 
@@ -912,8 +917,9 @@ def _host_state(shape: tuple[int, ...], dtype: torch.dtype, pin: bool) -> tuple[
 
 def _release_host_state(state: torch.Tensor, registered: bool) -> None:
     """Undo the registration of `_host_state` (the memory returns to the OS when the tensor is
-    freed). All copies are synchronous and already done, but the device is synchronized first in
-    case work is still pending. Also called on the way out of an exception (`finally`), so it raises
+    freed). The caller first waits for its copies (`_HostRows.close`: they are asynchronous, on
+    their own streams and threads); the device is also synchronized here in case work is still
+    pending. Also called on the way out of an exception (`finally`), so it raises
     no new exception (so as not to mask the original one)."""
     if not registered:
         return
@@ -1367,7 +1373,11 @@ class ColumnRowTransformer(nn.Module):
         first = embed(x[:, :step], rows=(0, min(step, r)))
         shape = (b, r, c, first.shape[-1])
         if self._offload_interleaved_state(device, math.prod(shape) * first.element_size()):
-            return self._rows_interleaved_offload(x, n_train, embed, step, first)
+            # The offload recomputes this chunk when it needs it: holding it for the whole forward
+            # would keep a chunk of device memory (up to `inference_chunk_cells` x E) busy
+            e, dtype = first.shape[-1], first.dtype
+            del first
+            return self._rows_interleaved_offload(x, n_train, embed, step, e, dtype)
         h = torch.empty(shape, dtype=first.dtype, device=device)
         for r0 in range(0, r, step):
             r1 = min(r0 + step, r)
@@ -1426,12 +1436,12 @@ class ColumnRowTransformer(nn.Module):
         return tokens[:, cfg.n_cls :].view(b, rj, c, e)
 
     def _rows_interleaved_offload(
-        self, x: torch.Tensor, n_train: int, embed, step: int, first: torch.Tensor
+        self, x: torch.Tensor, n_train: int, embed, step: int, e: int, dtype: torch.dtype
     ) -> torch.Tensor:
         """`_rows_interleaved_chunked` when the cell state (B, R, C, E) does not fit on the device.
         The values are equal within numerical error (only the computation order of the column
-        summaries differs). The row chunks are the same (`step` rows each); `first` is the cell
-        encoder output of the first chunk.
+        summaries differs). The row chunks are the same (`step` rows each); `e` and `dtype` are the
+        width and dtype of the cell encoder output.
 
         - The column summaries are accumulated over chunks of train rows (`_OnlineSummary`): the
           summary of block i + 1 takes each train-row chunk produced by block pair i while it is
@@ -1448,17 +1458,18 @@ class ColumnRowTransformer(nn.Module):
           allocator) and released as soon as the forward ends, even on an exception
           (`_host_state`)
         - Block 0 does not read the state: it recomputes the cell encoder (same input and chunks, so
-          the same values)"""
+          the same values)
+        - Without train rows nothing is kept: the summaries attend to no keys, as on the device"""
         cfg = self.config
         b, r, c = x.shape
-        e, dtype, device = first.shape[-1], first.dtype, x.device
+        device = x.device
         blocks = list(zip(self.column_blocks, self.row_blocks, strict=True))
         last = len(blocks) - 1
         chunks = [(r0, min(r0 + step, r)) for r0 in range(0, r, step)]
         n_held = min(r, -(-n_train // step) * step)  # rows of the chunks with train rows
 
         def cells(r0: int, r1: int) -> torch.Tensor:
-            return first if r0 == 0 else embed(x[:, r0:r1], rows=(r0, r1))
+            return embed(x[:, r0:r1], rows=(r0, r1))
 
         def add(acc: _OnlineSummary, new: torch.Tensor, r0: int) -> None:
             if r0 < n_train:  # the chunk's train rows (B, k, C, E) -> (B x C, k, E)
@@ -1467,7 +1478,7 @@ class ColumnRowTransformer(nn.Module):
 
         shape = (b, n_held, c, e)
         release, rows = None, None
-        if self._offload_interleaved_state(device, math.prod(shape) * first.element_size()):
+        if self._offload_interleaved_state(device, math.prod(shape) * dtype.itemsize):
             h, release = self._acquire_host_state(shape, dtype)
         else:
             h = torch.empty(shape, dtype=dtype, device=device)

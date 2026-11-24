@@ -108,6 +108,18 @@ def test_offload_matches_device_state_in_float64(monkeypatch):
     assert got.dtype == torch.float64 and _rel(got, want) < 1e-12
 
 
+def test_offload_without_train_rows_matches_device_state(monkeypatch):
+    # No train rows: nothing is kept and the summaries attend to no keys, as on the device
+    model = _model(True, **TINY_STAGES)
+    x, _, _ = _inputs()
+    y = torch.zeros(1, 0)
+    want = {t: _forward(model, x, y, t) for t in ("classification", "regression")}
+    monkeypatch.setattr(ColumnRowTransformer, "_offload_interleaved_state", lambda *_: True)
+    for task in ("classification", "regression"):
+        got = _forward(model, x, y, task)
+        assert torch.isfinite(got).all() and _rel(got, want[task]) < 1e-5, task
+
+
 def test_held_state_stays_on_device_when_it_fits(monkeypatch):
     # The whole state does not fit on the device, but that of the train-row chunks does: it is not
     # kept on the CPU
@@ -176,10 +188,15 @@ def test_online_summary_matches_summary(chunk):
     assert _rel(got, want) < 1e-5
 
 
-def test_online_summary_needs_rows():
-    block = M.InducedBlock(16, 2, 4, 2, 8)
-    with pytest.raises(ValueError, match="no train rows"):
-        M._OnlineSummary(block, 1, 5, torch.float32).finish()
+def test_online_summary_without_rows_matches_summary():
+    # No chunk added: the same as `InducedBlock.summary` over zero train rows
+    torch.manual_seed(0)
+    block = M.InducedBlock(16, 2, 4, 2, 8).eval()
+    _shake(block)
+    with torch.no_grad():
+        want = block.summary(torch.zeros(3, 0, 16))
+        got = M._OnlineSummary(block, 3, 0, torch.float32).finish()
+    assert torch.isfinite(got).all() and _rel(got, want) < 1e-6
 
 
 def test_registration_is_released_after_success_and_error(monkeypatch):
