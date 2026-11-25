@@ -12,6 +12,7 @@ standard deviations are omitted.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
@@ -792,6 +793,41 @@ def score_fold(
     return float(roc_auc_score(y_true, proba, multi_class="ovr", labels=classes[present]))
 
 
+# per-fold row counts and fit / prediction seconds (`evaluate_task` rows)
+TIME_KEYS = ("train_rows", "test_rows", "fit_rows", "fit_seconds", "predict_seconds")
+
+
+def per_1k(row: dict) -> dict:
+    """One fold's fit time per 1K train rows and prediction time per 1K test rows (s), the unit of
+    the TabArena leaderboard time."""
+    return {
+        "fit_seconds_per_1K": row["fit_seconds"] * 1000.0 / max(row["train_rows"], 1),
+        "predict_seconds_per_1K": row["predict_seconds"] * 1000.0 / max(row["test_rows"], 1),
+    }
+
+
+def time_medians(rows: list[dict]) -> dict[str, float]:
+    """TabArena's leaderboard time (`arena.per_1k_medians`) over `evaluate_task` rows: fit and
+    prediction seconds per 1K of the dataset's mean fold train / test rows, averaged over each
+    dataset's folds, then the median over datasets (`time_train_s_per_1K_median`,
+    `time_infer_s_per_1K_median`, as `arena.run_times`). Empty dict without rows."""
+    from tabsil_train.benchmarks.arena import PER_1K_ROWS, per_1k_medians
+
+    if not rows:
+        return {}
+    df = pd.DataFrame(rows)
+    results = pd.DataFrame(
+        {
+            "dataset": df["task_id"],
+            "time_train_s": df["fit_seconds"],
+            "time_infer_s": df["predict_seconds"],
+        }
+    )
+    sizes = df.groupby("task_id")[["train_rows", "test_rows"]].mean()
+    sizes.columns = [PER_1K_ROWS["time_train_s"], PER_1K_ROWS["time_infer_s"]]
+    return per_1k_medians(results, sizes)
+
+
 def evaluate_task(
     task: OpenMLTask,
     make_estimator: Callable[[OpenMLTask], object],
@@ -801,7 +837,12 @@ def evaluate_task(
     """One score per fold. With `uncertainty=True`, predictive-distribution and uncertainty
     metrics (`tabsil_train.benchmarks.uncertainty`) are added to the same row. Regression estimators
     must provide `predict_full` (mean, bin log-probabilities, borders) or `predict_distribution`
-    (log-probabilities, borders)."""
+    (log-probabilities, borders).
+
+    Each row also has `TIME_KEYS`: the fold's train and test row counts, the rows `fit` actually
+    used (`fit_rows`, fewer with `SubsampledEstimator`), the `fit` time and the prediction time in
+    seconds (the one call on the test rows that gives the scored prediction; a regressor's
+    `predict_full`, used with `uncertainty`, returns the distribution from the same pass)."""
     from tabsil_train.benchmarks import uncertainty as unc
 
     rows = []
@@ -809,10 +850,16 @@ def evaluate_task(
         estimator = make_estimator(task)
         x_train, x_test = task.X.iloc[train_ix], task.X.iloc[test_ix]
         y_train, y_test = task.y.iloc[train_ix].to_numpy(), task.y.iloc[test_ix].to_numpy()
+        start = time.perf_counter()
         estimator.fit(x_train, y_train)
+        fit_seconds = time.perf_counter() - start
+        # rows fit saw: `SubsampledEstimator` records (original, selected)
+        fit_rows = getattr(estimator, "train_rows_", (None, len(train_ix)))[1]
         extra = {}
+        start = time.perf_counter()
         if task.task_type == "classification":
             prediction = estimator.predict_proba(x_test)
+            predict_seconds = time.perf_counter() - start
             score = score_fold("classification", y_test, prediction, estimator.classes_)
             if uncertainty:
                 extra = unc.classification_metrics(
@@ -821,24 +868,46 @@ def evaluate_task(
         else:
             y_test = y_test.astype(float)
             if uncertainty:
-                prediction, log_probs, borders = _predict_full(estimator, x_test)
+                prediction, log_probs, borders, predict_seconds = _predict_full(estimator, x_test)
                 scale = float(np.std(y_train.astype(float))) or 1.0
                 extra = unc.regression_metrics(np.exp(log_probs), borders, y_test, y_scale=scale)
                 # Also record RMSE divided by the training-target std, for same-unit comparison
                 extra["rmse_scaled"] = float(np.sqrt(np.mean((prediction - y_test) ** 2))) / scale
             else:
                 prediction = estimator.predict(x_test)
+                predict_seconds = time.perf_counter() - start
             score = score_fold("regression", y_test, prediction)
+        times = {
+            "train_rows": len(train_ix),
+            "test_rows": len(test_ix),
+            "fit_rows": int(fit_rows),
+            "fit_seconds": fit_seconds,
+            "predict_seconds": predict_seconds,
+        }
         rows.append(
-            {"task_id": task.task_id, "dataset": task.name, "fold": fold, "score": score, **extra}
+            {
+                "task_id": task.task_id,
+                "dataset": task.name,
+                "fold": fold,
+                "score": score,
+                **times,
+                **extra,
+            }
         )
     return rows
 
 
-def _predict_full(estimator, x_test) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _predict_full(estimator, x_test) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """(mean, log probabilities, borders, seconds of the call that gives the mean). Without
+    `predict_full` the distribution is a second call, left out of the time so the prediction time
+    does not depend on `uncertainty`."""
+    start = time.perf_counter()
     if hasattr(estimator, "predict_full"):
         mean, log_probs, borders = estimator.predict_full(x_test)
+        seconds = time.perf_counter() - start
     else:
         mean = estimator.predict(x_test)
+        seconds = time.perf_counter() - start
         log_probs, borders = estimator.predict_distribution(x_test)
-    return np.asarray(mean), np.asarray(log_probs, dtype=np.float64), np.asarray(borders)
+    mean, borders = np.asarray(mean), np.asarray(borders)
+    return mean, np.asarray(log_probs, dtype=np.float64), borders, seconds
