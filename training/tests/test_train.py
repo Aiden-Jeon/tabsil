@@ -415,6 +415,32 @@ def test_train_script_checks_the_source_checkpoint_before_the_run(tmp_path):
     script._check_source(latest, config, resume=False)  # loading weights only ignores the step
 
 
+def test_train_script_takes_weights_from_a_hub_folder(tmp_path, monkeypatch):
+    # --init-hub: a save_pretrained folder (here local) becomes an init_from checkpoint
+    from tabsil.hub import save_pretrained
+    from tabsil.models import load_checkpoint
+
+    _clear_env(monkeypatch)
+    script = _train_script()
+    config = _smoke(steps=2, collapse_threshold=None)
+    train(config, tmp_path / "a", mlflow_log=False)
+    model, borders = load_checkpoint(tmp_path / "a" / "latest.pt")
+    save_pretrained(model, borders, tmp_path / "hub")
+    path = script.hub_init_checkpoint(str(tmp_path / "hub"), config, tmp_path / "init.pt")
+    result = train(config, tmp_path / "b", mlflow_log=False, init_from=path)
+    trained, trained_borders = load_checkpoint(result["final_path"])
+    assert torch.equal(trained_borders, borders)  # the borders carry over
+    # another structure is refused before the run starts
+    with pytest.raises(SystemExit, match="nhead"):
+        script.hub_init_checkpoint(str(tmp_path / "hub"), replace(config, nhead=4), tmp_path / "x")
+    # one weight source at a time; a later stage accepts --init-hub
+    args = script.parse_args(["--config-name", "stage2", "--init-hub", "aiden-jeon/tabsil@x"])
+    assert args.init_hub == "aiden-jeon/tabsil@x"
+    for other in (["--init-run-id", "abc"], ["--resume-run-id", "abc"]):
+        with pytest.raises(SystemExit):
+            script.parse_args(["--config-name", "stage2", "--init-hub", "r", *other])
+
+
 @pytest.mark.parametrize(
     "changes, match",
     [

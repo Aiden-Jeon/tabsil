@@ -9,6 +9,7 @@
 #                 --override env_variables.TABSIL_CONFIG_NAME=stage2 --override env_variables.TABSIL_STEPS=20000 \
 #                 --override env_variables.TABSIL_INIT_RUN_ID=<run_id> --override env_variables.TABSIL_INIT_STEP=<step>
 #                 (TABSIL_STEPS replaces the stage's step count, so give the stage's own count)
+#                 or from Hub weights: --override env_variables.TABSIL_INIT_HUB=aiden-jeon/tabsil@stage1-150k
 #   chunks:       --override env_variables.TABSIL_STOP_STEP=<end of this chunk> --override timeout_minutes=<estimate>
 #   resume:       --override env_variables.TABSIL_RESUME_RUN_ID=<run_id>
 #   prior:        --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_hicard_missing (default graph_scm)
@@ -27,9 +28,11 @@ environment:
   # uv.lock; the workspace lock keeps the same torch (tool.uv.constraint-dependencies in
   # pyproject.toml), so change both together
   version: databricks_ai_v6
-  # Not in the base environment: the TabICL prior that generates the training data
+  # Not in the base environment: the TabICL prior that generates the training data, and the Hub
+  # client for TABSIL_INIT_HUB
   dependencies:
     - tabicl>=2.2
+    - huggingface-hub>=0.34
 compute:
   accelerator_type: GPU_8xH100
   num_accelerators: 8

@@ -53,6 +53,9 @@ With `--resume-step` (or `TABSIL_RESUME_STEP`) it resumes from the
 the weights from that run's checkpoint and trains from step 0. stage2·stage3 need it (the previous
 stage's run). The curriculum warmup is 1% of the step count given with `--steps`
 (`TABSIL_STEPS`).
+`--init-hub` (or `TABSIL_INIT_HUB`) takes the weights and regression borders from a Hub repo or a
+local `save_pretrained` folder instead (`aiden-jeon/tabsil@stage1-150k`: the v1 stage-1 weights,
+whose training run was written by minipfn and no longer loads here).
 The executed code and command are saved in the run's `code/` and tags (`command`,
 `env.TABSIL_*`).
 
@@ -80,6 +83,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import mlflow  # noqa: E402
+import torch  # noqa: E402
 
 from tabsil_train import recipe  # noqa: E402
 from tabsil_train.hub import run_architecture  # noqa: E402
@@ -89,7 +93,11 @@ from tabsil_train.training.config import (  # noqa: E402
     TrainConfig,
     normalize_phases,
 )
-from tabsil_train.training.loop import check_source_checkpoint, train  # noqa: E402
+from tabsil_train.training.loop import (  # noqa: E402
+    check_checkpoint,
+    check_source_checkpoint,
+    train,
+)
 from tabsil_train.utils import log_run_source  # noqa: E402
 
 # Generic sizes (smoke, medium) come from TrainConfig (a TabSil config with reduced size or steps).
@@ -194,20 +202,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume-step", type=int, default=_env("TABSIL_RESUME_STEP", int))
     parser.add_argument("--init-run-id", default=os.environ.get("TABSIL_INIT_RUN_ID"))
     parser.add_argument("--init-step", type=int, default=_env("TABSIL_INIT_STEP", int))
+    parser.add_argument("--init-hub", default=os.environ.get("TABSIL_INIT_HUB") or None)
     parser.add_argument("--out-dir", default=os.environ.get("TABSIL_OUT_DIR", "tabsil_run"))
     args = parser.parse_args(argv)
     if args.resume_step is not None and not args.resume_run_id:
         parser.error("--resume-step requires --resume-run-id")
     if args.init_step is not None and not args.init_run_id:
         parser.error("--init-step requires --init-run-id")
-    if args.init_run_id and args.resume_run_id:
-        parser.error("--init-run-id and --resume-run-id cannot be given together")
+    if sum(bool(v) for v in (args.init_run_id, args.init_hub, args.resume_run_id)) > 1:
+        parser.error("give only one of --init-run-id, --init-hub and --resume-run-id")
     later_stage = CURRICULUM_NAMES.get(args.config_name, 1) > 1
-    if later_stage and not (args.init_run_id or args.resume_run_id):
+    if later_stage and not (args.init_run_id or args.init_hub or args.resume_run_id):
         # Each stage starts from the previous stage's weights with a new optimizer (TabICLv2
         # `--only_load_model True`). The regression borders carry over as well
         parser.error(
-            f"{args.config_name} requires --init-run-id (the previous stage's run)"
+            f"{args.config_name} requires --init-run-id (the previous stage's run), --init-hub"
             " or --resume-run-id"
         )
     return args
@@ -376,6 +385,24 @@ def _check_source(path: str, config: TrainConfig, *, resume: bool) -> float:
         raise SystemExit(str(e)) from None
 
 
+def hub_init_checkpoint(spec: str, config: TrainConfig, path: Path) -> Path:
+    """The weights and regression borders of a Hub repo (`repo@revision`) or a local
+    `save_pretrained` folder, written to `path` as a `save_checkpoint` file for `init_from`, after
+    checking that the model matches the config (before the MLflow run is opened)."""
+    from tabsil.hub import from_pretrained
+    from tabsil.models import save_checkpoint
+
+    model, borders = from_pretrained(spec)
+    if borders is None:
+        raise SystemExit(f"--init-hub {spec} has no regression borders")
+    save_checkpoint(path, model, borders)
+    try:
+        check_checkpoint(torch.load(path, map_location="cpu", weights_only=True), config, spec)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    return path
+
+
 def _optional_float(value: str) -> float | None:
     return None if value.lower() in ("off", "none") else float(value)
 
@@ -427,6 +454,8 @@ def main(argv: list[str] | None = None) -> None:
             dst_path=str(out_dir / f"init_rank{rank}"),
         )
         _check_source(init_path, config, resume=False)
+    elif args.init_hub:
+        init_path = hub_init_checkpoint(args.init_hub, config, out_dir / f"init_rank{rank}.pt")
 
     resume_path = None
     if args.resume_run_id:
