@@ -79,7 +79,11 @@ INFERENCE = {
     "feature_subsampling": "balanced",
 }
 # Member kind presets selectable by name (`resolve_member_kinds`, e.g. `--member-kinds tabsil-v1`)
-MEMBER_KIND_PRESETS = {NAME: INFERENCE["member_kinds"]}
+MEMBER_KIND_PRESETS = {
+    NAME: INFERENCE["member_kinds"],
+    # Kumo-Tabular's round-robin numeric transforms (`tabsil.inference.preprocessing`)
+    "numeric-cycle": ("standard", "power", "robust", "quantile"),
+}
 
 
 def resolve_member_kinds(value: str | tuple[str, ...] | list[str]) -> tuple[str, ...]:

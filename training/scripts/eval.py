@@ -85,8 +85,9 @@ from tabsil.inference.ensemble import (
     max_classes_of,
     max_features_of,
 )
+from tabsil.inference.preprocessing import CATEGORY_ENCODINGS
 from tabsil.inference.subsample import SubsampledEstimator
-from tabsil.recipe import SUPPORTED_SIZE, default_inference
+from tabsil.recipe import SUPPORTED_SIZE, default_inference, resolve_member_kinds
 from tabsil_train.benchmarks import amlb as bm
 from tabsil_train.benchmarks import uncertainty as unc
 from tabsil_train.hub import load_model
@@ -195,6 +196,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--method-name", default="tabsil", help="method name in TabArena / BeyondArena results"
     )
+    # inference options (`tabsil.inference.ensemble`, `tabsil.inference.preprocessing`); the
+    # defaults are the model's
+    parser.add_argument(
+        "--softmax-temperature",
+        type=float,
+        default=None,
+        help="classification: divide the logits by this before the softmax (default: 0.9)",
+    )
+    parser.add_argument(
+        "--member-kinds",
+        default=None,
+        help="member numeric transforms, round robin: a preset (numeric-cycle) or comma-separated"
+        " kinds from standard,power,robust,quantile (default: the model's)",
+    )
+    parser.add_argument(
+        "--flip-sign",
+        action="store_true",
+        help="each member negates each numeric column with probability 1/2",
+    )
+    parser.add_argument(
+        "--categories",
+        choices=CATEGORY_ENCODINGS,
+        default="codes",
+        help="categorical columns that stay codes with more than 20 categories: keep the codes,"
+        " shuffle them per member, or add a log count column",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out-dir", default="tabsil_eval")
     parser.add_argument("--mlflow", action="store_true", help="log to MLflow locally as well")
@@ -234,6 +261,8 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
     # architecture)
     inference = default_inference(model, suite)
     member_kinds = inference["member_kinds"]
+    if getattr(args, "member_kinds", None):
+        member_kinds = resolve_member_kinds(args.member_kinds)
     n_estimators = args.n_estimators or inference["n_estimators"]
     fits_log = fits_path(args)
 
@@ -246,6 +275,7 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
             "random_state": args.seed,
             "max_features_per_member": make.max_features_per_member,
             "feature_subsampling": make.feature_subsampling,
+            **inference_options(args, suite),
         }
         if suite == "classification":
             estimator = EnsembleClassifier(model, **kw)
@@ -271,6 +301,22 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
     make.max_features_per_member, make.feature_subsampling = model_feature_cap(args, inference)
     make.model, make.borders = model, borders  # TabArena / BeyondArena size limits (arena_limits)
     return make
+
+
+def inference_options(args: argparse.Namespace, suite: str | None = None) -> dict:
+    """The inference options given on the command line (`--softmax-temperature`, `--flip-sign`,
+    `--categories`) as estimator arguments; options at their default are left out. With `suite`
+    ("classification" / "regression"), only those of that task (the temperature is
+    classification only)."""
+    out = {}
+    temperature = getattr(args, "softmax_temperature", None)
+    if temperature is not None and suite in (None, "classification"):
+        out["softmax_temperature"] = temperature
+    if getattr(args, "flip_sign", False):
+        out["flip_sign"] = True
+    if getattr(args, "categories", "codes") != "codes":
+        out["categories"] = args.categories
+    return out
 
 
 def model_feature_cap(args: argparse.Namespace, inference: dict) -> tuple[int | None, str]:
@@ -416,6 +462,12 @@ def arena_fingerprint(args: argparse.Namespace, paths: dict, factories: dict) ->
                 if getattr(args, "subsample_train_rows", None) is not None
                 else {}
             ),
+            **(
+                {"member_kinds": list(resolve_member_kinds(args.member_kinds))}
+                if getattr(args, "member_kinds", None)
+                else {}
+            ),
+            **inference_options(args),
         },
         sort_keys=True,
     )
@@ -1032,6 +1084,8 @@ def log_arena_mlflow(args, summary: dict, out_dir: Path, factories: dict) -> Non
             ),
             **{f"n_estimators_{t}": f.n_estimators for t, f in factories.items()},
             "subsample_train_rows": args.subsample_train_rows,
+            "member_kinds": getattr(args, "member_kinds", None) or "default",
+            **inference_options(args),
         }
     )
     paths = {"classifier_path": args.classifier_path, "regressor_path": args.regressor_path}

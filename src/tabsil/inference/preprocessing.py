@@ -16,6 +16,22 @@ values are kept as they are (the model standardizes them with the training rows)
 How the members differ (seeds, class permutations, the regression target transform) is in
 `tabsil.inference.ensemble`.
 
+Options (inference experiments; the defaults are TabSil's):
+
+- `Member.kind` (`MEMBER_KINDS`): a transform of the numeric columns fitted on the training rows,
+  after the outlier clip. `"standard"` keeps the values; the others first standardize the column
+  and clip it to ±100, then `"power"` applies a Yeo-Johnson power transform (standardized),
+  `"robust"` centers on the median, divides by the interquartile range and squashes smoothly into
+  ±3 (x / sqrt(1 + (x / 3)^2)), and `"quantile"` maps the column to standard normal quantiles of
+  its training-row ranks (rank-Gauss). The choices follow the round-robin numeric processor of
+  Kumo-Tabular (NVIDIA structured-data-models `sdm/models/kumo/tabular/recipe.py`)
+- `Member.flip_sign`: each numeric column is negated with probability 1/2 (Kumo's `FlipSign`)
+- `Member.categories` (`CATEGORY_ENCODINGS`), for categorical columns that stay codes and have more
+  than `MAX_ONE_HOT_CATEGORIES` categories: `"codes"` keeps the codes, `"shuffled"` permutes them
+  per member (the order of the codes means nothing), `"counts"` adds a column with log(1 + the
+  number of training rows with that category) (Kumo's `AddCategoryCounts`; a missing or unseen
+  category is missing)
+
 A table with more features than the member cap gives each member a subset of its original columns:
 `feature_subset` draws one per member from the member seed, `balanced_feature_subsets` spreads the
 columns evenly over the members.
@@ -32,7 +48,9 @@ from sklearn.preprocessing import OrdinalEncoder
 
 OUTLIER_SIGMA = 12.0
 MAX_ONE_HOT_CATEGORIES = 20  # benchmark socmob (17) is expanded; colleges (thousands) stays codes
-MEMBER_KINDS = ("standard",)
+MEMBER_KINDS = ("standard", "power", "robust", "quantile")
+CATEGORY_ENCODINGS = ("codes", "shuffled", "counts")
+ROBUST_BOUND = 3.0  # the "robust" kind squashes values into ±this
 FEATURE_SUBSAMPLINGS = ("random", "balanced")
 
 
@@ -184,6 +202,58 @@ class Member:
     seed: int
     one_hot: bool = True
     outlier_sigma: float = OUTLIER_SIGMA  # clip beyond this many std devs from the mean
+    kind: str = "standard"  # numeric column transform (`MEMBER_KINDS`, module docstring)
+    flip_sign: bool = False  # negate each numeric column with probability 1/2
+    categories: str = "codes"  # many-category code columns (`CATEGORY_ENCODINGS`)
+
+
+class _NumericTransform:
+    """A member kind's transform of the numeric columns (module docstring), fitted on the training
+    rows. Missing values stay missing."""
+
+    def __init__(self, kind: str, X: np.ndarray, seed: int) -> None:
+        from sklearn.preprocessing import PowerTransformer, QuantileTransformer
+
+        if kind not in MEMBER_KINDS:
+            raise ValueError(f"the member kind is one of {MEMBER_KINDS}: {kind}")
+        self.kind = kind
+        self.mean = np.nan_to_num(np.nanmean(X, axis=0)) if X.shape[0] else np.zeros(X.shape[1])
+        std = np.nan_to_num(np.nanstd(X, axis=0)) if X.shape[0] else np.ones(X.shape[1])
+        self.std = np.where(std > 1e-12, std, 1.0)
+        z = self._standardize(X)
+        self.fitted = None
+        if kind == "power":
+            self.fitted = PowerTransformer(method="yeo-johnson", standardize=True).fit(z)
+        elif kind == "quantile":
+            n = int(np.isfinite(z).sum(0).max(initial=1))
+            self.fitted = QuantileTransformer(
+                n_quantiles=max(2, min(1000, n)),
+                output_distribution="normal",
+                subsample=10**9,
+                random_state=seed % 2**32,
+            ).fit(z)
+        elif kind == "robust":
+            lo, self.median, hi = np.nanpercentile(z, [25, 50, 75], axis=0)
+            iqr = np.nan_to_num(hi - lo)
+            self.median = np.nan_to_num(self.median)
+            self.iqr = np.where(iqr > 1e-12, iqr, 1.0)
+
+    def _standardize(self, X: np.ndarray) -> np.ndarray:
+        return np.clip((X - self.mean) / self.std, -100.0, 100.0)
+
+    def __call__(self, X: np.ndarray) -> np.ndarray:
+        if self.kind == "standard" or X.shape[1] == 0:
+            return X
+        z = self._standardize(X)
+        if self.kind == "robust":
+            r = (z - self.median) / self.iqr
+            return r / np.sqrt(1.0 + np.square(r / ROBUST_BOUND))
+        with np.errstate(all="ignore"):
+            out = np.asarray(self.fitted.transform(z), dtype=np.float64)
+        # a value the transform cannot map (overflow of the power transform) keeps its z value
+        bad = ~np.isfinite(out) & np.isfinite(z)
+        out[bad] = z[bad]
+        return out
 
 
 class MemberPreprocessor:
@@ -196,6 +266,9 @@ class MemberPreprocessor:
 
     def fit(self, X: np.ndarray) -> MemberPreprocessor:
         rng = np.random.default_rng(self.member.seed)
+        member = self.member
+        if member.categories not in CATEGORY_ENCODINGS:
+            raise ValueError(f"categories is one of {CATEGORY_ENCODINGS}: {member.categories}")
         sigma = self.member.outlier_sigma
         mean, std = np.nanmean(X, axis=0), np.nanstd(X, axis=0)
         self.lower, self.upper = mean - sigma * std, mean + sigma * std
@@ -215,9 +288,62 @@ class MemberPreprocessor:
         self.empty_ix = [
             i for i in range(X.shape[1]) if i not in self.cat_ix and not np.isfinite(X[:, i]).any()
         ]
+        self._fit_options(X, n_categories)
         # column order: shuffle the transformed columns and the one sample identifier together
-        self.order = rng.permutation(self._base(X).shape[1] + 1)
+        self.order = rng.permutation(self._features(X).shape[1] + 1)
         return self
+
+    def _fit_options(self, X: np.ndarray, n_categories: dict[int, int]) -> None:
+        # the member options of the module docstring, from their own random streams (so that the
+        # defaults draw exactly what they drew before the options existed)
+        member = self.member
+        cat = set(self.cat_ix)
+        self.numeric_ix = [i for i in range(X.shape[1]) if i not in cat and i not in self.empty_ix]
+        self.numeric = None
+        if member.kind != "standard" and self.numeric_ix:
+            self.numeric = _NumericTransform(member.kind, X[:, self.numeric_ix], member.seed + 5)
+        self.signs = None
+        if member.flip_sign and self.numeric_ix:
+            flips = np.random.default_rng(member.seed + 6).random(len(self.numeric_ix)) < 0.5
+            self.signs = np.where(flips, -1.0, 1.0)
+        # many-category columns that stay codes
+        many = [
+            i
+            for i in self.cat_ix
+            if i not in self.one_hot_sizes and n_categories[i] > MAX_ONE_HOT_CATEGORIES
+        ]
+        self.code_maps, self.count_maps = {}, {}
+        g = np.random.default_rng(member.seed + 7)
+        for i in many:
+            n = n_categories[i]
+            if member.categories == "shuffled":
+                self.code_maps[i] = g.permutation(n).astype(np.float64)
+            elif member.categories == "counts":
+                codes = X[:, i][np.isfinite(X[:, i])].astype(int)
+                self.count_maps[i] = np.log1p(np.bincount(codes, minlength=n).astype(np.float64))
+
+    @staticmethod
+    def _lookup(codes: np.ndarray, table: np.ndarray) -> np.ndarray:
+        # table[code] for codes 0..len(table)-1; missing and other codes are missing
+        known = np.isfinite(codes) & (codes >= 0) & (codes < len(table))
+        out = np.full(len(codes), np.nan)
+        out[known] = table[codes[known].astype(int)]
+        return out
+
+    def _features(self, X: np.ndarray) -> np.ndarray:
+        """The member's columns for clipped rows X, before the identifier and the shuffle: the
+        numeric transform, sign flips and code maps on X, then `_base`, then the count columns."""
+        counts = [self._lookup(X[:, i], t) for i, t in self.count_maps.items()]
+        if self.numeric is not None or self.signs is not None or self.code_maps:
+            X = X.copy()
+            if self.numeric is not None:
+                X[:, self.numeric_ix] = self.numeric(X[:, self.numeric_ix])
+            if self.signs is not None:
+                X[:, self.numeric_ix] *= self.signs
+            for i, table in self.code_maps.items():
+                X[:, i] = self._lookup(X[:, i], table)
+        base = self._base(X)
+        return np.concatenate([base, np.stack(counts, axis=1)], axis=1) if counts else base
 
     def _clip(self, X: np.ndarray) -> np.ndarray:
         return np.clip(X, self.lower, self.upper)
@@ -245,5 +371,5 @@ class MemberPreprocessor:
     def transform(self, X: np.ndarray, identifier: np.ndarray) -> np.ndarray:
         """The member's input columns for rows `X`; `identifier` is the (n, 1) sample identifier
         column (training rows: drawn from the member seed; test rows: `row_identifier`)."""
-        base = self._base(self._clip(X))
+        base = self._features(self._clip(X))
         return np.concatenate([base, identifier], axis=1)[:, self.order]

@@ -391,7 +391,7 @@ def test_tabsil_inference_defaults_come_from_the_model():
     assert len(clf.preprocessors_) == 8 and clf.member_kinds == ("standard",)
     assert clf.max_features_per_member == 768 and clf.feature_subsampling == "balanced"
     with pytest.raises(ValueError):
-        TabSilClassifier(_tiny_model(), member_kinds=("quantile",))
+        TabSilClassifier(_tiny_model(), member_kinds=("rank",))
     # 2) settings saved with the weights (the Hub config.json `inference`) come first
     model.inference_config = {
         "member_kinds": ["standard"],
@@ -420,7 +420,9 @@ def test_member_kinds_parse_names_and_lists():
     assert resolve_member_kinds("tabsil-v1") == ("standard",)
     assert resolve_member_kinds("standard") == ("standard",)
     assert resolve_member_kinds(["standard", "standard"]) == ("standard", "standard")
-    for bad in ("", "v9", "quantile", "standard,power"):
+    assert resolve_member_kinds("numeric-cycle") == ("standard", "power", "robust", "quantile")
+    assert resolve_member_kinds("standard,power") == ("standard", "power")
+    for bad in ("", "v9", "rank", "standard,yeo"):
         with pytest.raises(ValueError, match="member_kinds"):
             resolve_member_kinds(bad)
 
@@ -666,6 +668,89 @@ def test_train_context_predictions_equal_the_joint_forward_on_cuda():
     got, want = on.predict_proba(X[60:]), off.predict_proba(X[60:])
     print("cuda context vs joint max |diff|", np.abs(got - want).max())
     np.testing.assert_allclose(got, want, atol=5e-3, rtol=0)
+
+
+def _option_table():
+    rng = np.random.default_rng(2)
+    X = np.column_stack(
+        [
+            rng.lognormal(size=300),  # skewed numeric
+            rng.normal(size=300),
+            rng.integers(0, 40, 300),  # 40 categories: stays codes
+            rng.integers(0, 3, 300),  # 3 categories: one-hot
+        ]
+    ).astype(float)
+    X[rng.random(X.shape) < 0.1] = np.nan
+    return X
+
+
+@pytest.mark.parametrize("kind", ["power", "robust", "quantile"])
+def test_numeric_member_kinds_are_monotone_and_keep_missing_values(kind):
+    X = _option_table()
+    base = MemberPreprocessor(Member(None, False, seed=0), [2, 3], 100).fit(X)
+    prep = MemberPreprocessor(Member(None, False, seed=0, kind=kind), [2, 3], 100).fit(X)
+    want, got = base._features(base._clip(X)), prep._features(prep._clip(X))
+    assert got.shape == want.shape
+    assert np.array_equal(np.isnan(got), np.isnan(want))
+    np.testing.assert_array_equal(got[:, 2:], want[:, 2:])  # code and one-hot columns unchanged
+    for j in (0, 1):  # numeric columns: an increasing map of the original values
+        ok = np.isfinite(want[:, j])
+        order = np.argsort(want[ok, j], kind="stable")
+        assert (np.diff(got[ok, j][order]) >= -1e-12).all()
+        assert not np.allclose(got[ok, j], want[ok, j])
+    if kind == "robust":
+        assert np.nanmax(np.abs(got[:, :2])) < 3.0
+    if kind == "quantile":  # rank-Gauss: about standard normal
+        assert abs(np.nanmean(got[:, 0])) < 0.1 and abs(np.nanstd(got[:, 0]) - 1) < 0.15
+
+
+def test_flip_sign_negates_about_half_of_the_numeric_columns():
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(50, 40))
+    base = MemberPreprocessor(Member(None, False, seed=3), [], 100).fit(X)
+    prep = MemberPreprocessor(Member(None, False, seed=3, flip_sign=True), [], 100).fit(X)
+    got, want = prep._features(X), base._features(X)
+    flipped = np.all(got == -want, axis=0)
+    assert np.all(flipped | np.all(got == want, axis=0)) and 10 < flipped.sum() < 30
+
+
+def test_many_category_codes_are_shuffled_or_counted():
+    X = _option_table()
+    base = MemberPreprocessor(Member(None, False, seed=1), [2, 3], 100).fit(X)
+    want = base._features(X)
+    shuffled = MemberPreprocessor(Member(None, False, seed=1, categories="shuffled"), [2, 3], 100)
+    got = shuffled.fit(X)._features(X)
+    codes, mapped = want[:, 2], got[:, 2]  # the 40-category code column (after the numerics)
+    ok = np.isfinite(codes)
+    assert np.array_equal(np.isnan(mapped), ~ok)
+    pairs = set(zip(codes[ok], mapped[ok], strict=True))
+    assert len(pairs) == len(set(codes[ok])) == len({m for _, m in pairs})  # a bijection
+    assert any(a != b for a, b in pairs)
+    counted = MemberPreprocessor(Member(None, False, seed=1, categories="counts"), [2, 3], 100)
+    got = counted.fit(X)._features(X)
+    assert got.shape[1] == want.shape[1] + 1
+    np.testing.assert_array_equal(got[:, :-1], want)
+    n = np.bincount(codes[ok].astype(int), minlength=40)
+    np.testing.assert_allclose(got[ok, -1], np.log1p(n[codes[ok].astype(int)]))
+    assert np.isnan(got[~ok, -1]).all()
+    unseen = X[:1].copy()
+    unseen[0, 2] = 45.0  # a code beyond the training categories is missing
+    assert np.isnan(counted._features(unseen)[0, -1]) and np.isnan(shuffled._features(unseen)[0, 2])
+
+
+def test_member_options_reach_the_members_and_predict():
+    X, y = _context_tables()
+    kw = {"n_estimators": 4, "member_kinds": "numeric-cycle", "flip_sign": True}
+    clf = TabSilClassifier(_tiny_model(), categories="counts", **kw)
+    clf.fit(X[:60], (y[:60] > 0).astype(int))
+    members = [p.member for p in clf.preprocessors_]
+    assert [m.kind for m in members] == ["standard", "power", "robust", "quantile"]
+    assert all(m.flip_sign and m.categories == "counts" for m in members)
+    assert np.allclose(clf.predict_proba(X[60:]).sum(1), 1)
+    reg = TabSilRegressor(_tiny_model(), torch.linspace(-4, 4, 33), categories="shuffled", **kw)
+    assert np.isfinite(reg.fit(X[:60], y[:60]).predict(X[60:])).all()
+    with pytest.raises(ValueError, match="categories"):
+        EnsembleClassifier(_tiny_model(), n_estimators=1, categories="target")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
