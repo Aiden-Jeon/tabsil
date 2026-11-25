@@ -399,7 +399,8 @@ class Attention(nn.Module):
         q = _scale_query(self, q, k.shape[2])
         out = _batched_sdpa(q, k, v)
         dtype = _attention_dtype(v)
-        first = (k[:, :1].to(dtype).contiguous(), v[:, :1].to(dtype).contiguous())
+        # copies: a view of the first head would keep every head's keys and values alive
+        first = (k[:, :1].to(dtype, copy=True), v[:, :1].to(dtype, copy=True))
         return self.out(out.transpose(1, 2).reshape(n, length, dim)), *first
 
     def forward_queries(

@@ -144,6 +144,11 @@ class _Base:
     train_context_device_bytes = 16 << 30
     # Test inputs and logits of the members predicted in one forward (`_iter_logits`)
     predict_batch_bytes = 2 << 30
+    # CUDA forwards whose row ICL attention (query rows x train rows, over the batch) is smaller
+    # than this do not use cuDNN attention: it builds a plan for every new input shape (about
+    # 0.2 s per forward on an H100, paid by every table), and it is faster than the other kernels
+    # only on large attention (15% on a table with 87K train rows)
+    cudnn_attention_pairs = 1 << 31
 
     def __init__(
         self,
@@ -242,12 +247,20 @@ class _Base:
         return self.model.to(self.device).eval()
 
     @contextlib.contextmanager
-    def _forward_mode(self):
-        # bfloat16 autocast on CUDA, as in training; no autograd
-        autocast = self.device.type == "cuda"
+    def _forward_mode(self, attention_pairs: int):
+        # bfloat16 autocast on CUDA, as in training; no autograd; cuDNN attention only for large
+        # attention (`cudnn_attention_pairs`, `attention_pairs` of this forward)
+        cuda = self.device.type == "cuda"
+        kernels = contextlib.nullcontext()
+        if cuda and attention_pairs < self.cudnn_attention_pairs:
+            from torch.nn.attention import SDPBackend, sdpa_kernel
+
+            backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
+            kernels = sdpa_kernel(backends)
         with (
-            torch.autocast(self.device.type, dtype=torch.bfloat16, enabled=autocast),
+            torch.autocast(self.device.type, dtype=torch.bfloat16, enabled=cuda),
             torch.inference_mode(),
+            kernels,
         ):
             yield
 
@@ -290,7 +303,7 @@ class _Base:
         model = self._device_model()
         runs = []
         hold = getattr(model, "hold_host_state", None)
-        with self._forward_mode(), hold() if hold is not None else contextlib.nullcontext():
+        with hold() if hold is not None else contextlib.nullcontext():
             for start, stop in self._member_runs():
                 # members that stay within one unchunked forward go through the model together
                 width = self.X_trains_[start].shape[1]
@@ -305,7 +318,8 @@ class _Base:
                         np.stack(y_trains[a:b]), dtype=torch.float32, device=self.device
                     )
                     y, extra = self._model_targets(y)
-                    parts.append(model.train_context(x, y, self.task, **extra))
+                    with self._forward_mode((b - a) * n_train * n_train):
+                        parts.append(model.train_context(x, y, self.task, **extra))
                     del x, y, extra
                 runs.append((start, stop, TrainContext.cat(parts)))
                 del parts
@@ -328,7 +342,7 @@ class _Base:
                 b = min(a + step, stop)
                 x = np.stack([inputs(i) for i in range(a, b)])
                 x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
-                with self._forward_mode():
+                with self._forward_mode((b - a) * n_test * context.n_train):
                     logits = model.forward_test(x, context.select(a - start, b - start)).float()
                 del x
                 # yielded outside autocast: the consumer's math (e.g. the regression mean matmul)
@@ -347,7 +361,7 @@ class _Base:
         with hold() if hold is not None else contextlib.nullcontext():
             for i, x, y in self._iter_inputs(X, y_trains):
                 y, extra = self._model_targets(y)
-                with self._forward_mode():
+                with self._forward_mode(x.shape[1] * y.shape[1]):
                     logits = model(x, y, **kwargs, **extra)[0].float()
                 # yielded outside autocast: the consumer's math (e.g. the regression mean matmul)
                 # runs in float32

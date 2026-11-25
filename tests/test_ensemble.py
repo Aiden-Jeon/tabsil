@@ -579,6 +579,12 @@ def test_train_context_bytes_counts_the_context():
     assert ctx.nbytes <= estimate
     labels = 2 * 30 * (model.max_classes - 3) * 4
     assert estimate - labels == ctx.nbytes
+    # no tensor keeps a larger storage alive (e.g. every head behind the first head's keys; with
+    # one table the first head is a contiguous view of them)
+    with torch.inference_mode():
+        one = model.train_context(x[:1], y[:1], "classification")
+    for t in ctx.tensors() + one.tensors():
+        assert t.untyped_storage().nbytes() == t.numel() * t.element_size()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -596,3 +602,15 @@ def test_train_context_predictions_equal_the_joint_forward_on_cuda():
     got, want = on.predict_proba(X[60:]), off.predict_proba(X[60:])
     print("cuda context vs joint max |diff|", np.abs(got - want).max())
     np.testing.assert_allclose(got, want, atol=5e-3, rtol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_cudnn_attention_only_for_large_attention():
+    # cuDNN attention builds a plan per new input shape (~0.2 s), so small forwards leave it out
+    clf = EnsembleClassifier(_tiny_model(), n_estimators=1, device="cuda")
+    with clf._forward_mode(clf.cudnn_attention_pairs - 1):
+        assert not torch.backends.cuda.cudnn_sdp_enabled()
+        assert torch.backends.cuda.flash_sdp_enabled()
+    enabled = torch.backends.cuda.cudnn_sdp_enabled()
+    with clf._forward_mode(clf.cudnn_attention_pairs):
+        assert torch.backends.cuda.cudnn_sdp_enabled() == enabled
