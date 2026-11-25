@@ -58,10 +58,15 @@ prerelease = "if-necessary"
 constraint-dependencies = ["torch>=2.11,<2.12"]
 # The workspace has one lock, so every member's extras and groups are resolved together. The dev
 # groups (pandas 3) and tabsil-train's arena extra (tabarena/autogluon need pandas<2.4) are
-# resolved separately and cannot be installed together; see training/pyproject.toml
+# resolved separately and cannot be installed together; see training/pyproject.toml. The same holds for tabsil-train's fev extra and the dev groups (huggingface-hub)
 conflicts = [
     [{ package = "tabsil-train", extra = "arena" }, { package = "tabsil", group = "dev" }],
     [{ package = "tabsil-train", extra = "arena" }, { package = "tabsil-train", group = "dev" }],
+    # tabsil-train's fev extra: fev 0.10.0 needs datasets<5, which needs huggingface-hub<2, so it
+    # is resolved apart from the dev groups (which keep huggingface-hub 2) and the arena extra
+    [{ package = "tabsil-train", extra = "fev" }, { package = "tabsil", group = "dev" }],
+    [{ package = "tabsil-train", extra = "fev" }, { package = "tabsil-train", group = "dev" }],
+    [{ package = "tabsil-train", extra = "fev" }, { package = "tabsil-train", extra = "arena" }],
 ]
 
 [tool.ruff]

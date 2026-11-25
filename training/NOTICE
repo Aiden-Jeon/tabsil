@@ -3,3 +3,15 @@ Copyright 2026 Aiden-Jeon
 
 Third-party code adapted into the TabSil inference package (tabsil, a dependency of this
 package) is listed in its NOTICE.
+
+This product includes material adapted from fev (https://github.com/autogluon/fev), Copyright
+Amazon.com, Inc. or its affiliates, licensed under the Apache License 2.0:
+- src/tabsil_train/benchmarks/fevbench.py `TASKS`: 10 task definitions copied from
+  benchmarks/fev_bench/tasks.yaml at commit ecce67120aae4827e9702b978a9e9327ecde81d0
+- src/tabsil_train/benchmarks/fev_public.csv: public fev-bench results (benchmarks/fev_bench/
+  results/*.csv at the same commit) of 8 methods on those tasks
+- src/tabsil_train/benchmarks/fevbench.py `seasonal_naive`: reimplements the Seasonal Naive of
+  the fev statsforecast model wrapper (models/statsforecast/model.py), which follows statsforecast
+  2.0.1 `SeasonalNaive` (https://github.com/Nixtla/statsforecast, Copyright Nixtla, Apache License
+  2.0), and `freq_seasonality` the frequency table of autogluon.timeseries `get_seasonality`
+  (https://github.com/autogluon/autogluon, Apache License 2.0)

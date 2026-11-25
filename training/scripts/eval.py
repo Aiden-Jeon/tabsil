@@ -1,4 +1,4 @@
-"""Evaluate TabSil on the AMLB benchmark, TabArena-Lite and BeyondArena.
+"""Evaluate TabSil on the AMLB benchmark, TabArena-Lite, BeyondArena and fev-bench forecasting.
 
 The AMLB benchmark is the TabPFN v2 paper's: 29 AMLB classification and 28 AMLB/CTR23 regression
 tasks, each scored as the mean over the OpenML task's 10-fold cross-validation (ROC AUC for
@@ -50,6 +50,19 @@ limit is lifted, so splits wider than the supported size run.
 class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters splits by
 their original training row count.
 
+`--suite fev` is time series forecasting on 10 fev-bench tasks (`tabsil_train.benchmarks.fevbench`,
+needs the `fev` extra, installed apart from the dev group like the arena extra: `uv sync --package
+tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.forecast.TabSilForecaster` with the
+`--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in an Elo
+pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7 methods. Our
+Seasonal Naive is recomputed on the same windows and must match those. `--datasets` picks tasks,
+`--fev-windows N` only the last N windows of each (a quick check; the task-mean Elo pool then
+drops out). A failed series, window or task stops the run (nothing is imputed). Results go to
+`<out-dir>/fev/`.
+
+  $RUN --no-dev --extra fev --group arena-dev python $EVAL --suite fev \
+    --regressor-path hf://aiden-jeon/tabsil@v1 --datasets ecdc_ili --fev-windows 2
+
 `--latency` (arenas) records each fit's one-row prediction time (median of `LATENCY_REPEATS`) in
 `<out-dir>/fits_<suite>.jsonl`, measured in a hook outside TabArena's train and inference timing.
 
@@ -93,13 +106,16 @@ from tabsil_train.hub import load_model
 from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
+FEV_SUITE = "fev"
 LATENCY_REPEATS = 5
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--suite", choices=["classification", "regression", "all", *ARENA_SUITES], default="all"
+        "--suite",
+        choices=["classification", "regression", "all", *ARENA_SUITES, FEV_SUITE],
+        default="all",
     )
     parser.add_argument("--tasks", help="comma-separated OpenML task ids (chosen within the suite)")
     parser.add_argument("--folds", type=int, default=10)
@@ -136,7 +152,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--datasets",
-        help="TabArena / BeyondArena: comma-separated dataset names (the rest imputed)",
+        help="TabArena / BeyondArena: comma-separated dataset names (the rest imputed); fev:"
+        " comma-separated task names (only those are evaluated and ranked)",
+    )
+    parser.add_argument(
+        "--fev-windows",
+        type=int,
+        default=None,
+        help="fev: evaluate only the last N rolling windows of each task (default: all)",
+    )
+    parser.add_argument(
+        "--max-context-length",
+        type=int,
+        default=None,
+        help="fev: context rows per series (default: TabSilForecaster's, 4096; 0: up to the"
+        " supported size)",
     )
     parser.add_argument(
         "--shards",
@@ -1086,7 +1116,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("--shards must be >= 1.")
     if args.shards > 1 and args.suite not in ARENA_SUITES:
         raise SystemExit("--shards is for the TabArena / BeyondArena suites only.")
-    if args.uncertainty and args.suite in ARENA_SUITES:
+    if args.uncertainty and args.suite in (*ARENA_SUITES, FEV_SUITE):
         # the arenas report only the official package's metrics; stop rather than silently ignore
         raise SystemExit("--uncertainty is for AMLB suites only (classification, regression, all).")
     if args.latency and args.suite not in ARENA_SUITES:
@@ -1099,9 +1129,81 @@ def main(argv: list[str] | None = None) -> None:
         with mlflow_run(use_mlflow):
             run_arena(args, out_dir, use_mlflow)
         return
+    if args.suite == FEV_SUITE:
+        with mlflow_run(use_mlflow):
+            run_fev(args, out_dir, use_mlflow)
+        return
     tasks = selected_tasks(args)  # exit on bad task ids before creating a run
     with mlflow_run(use_mlflow):
         run_amlb(args, out_dir, tasks, use_mlflow)
+
+
+def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
+    """Forecasting on fev-bench (`tabsil_train.benchmarks.fevbench`): every window of each task,
+    our Seasonal Naive check, the comparison table and the Elo pools."""
+    from tabsil.forecast import TabSilForecaster
+    from tabsil_train.benchmarks import fevbench
+
+    if args.regressor_path is None:
+        raise SystemExit("--suite fev needs --regressor-path.")
+    tasks = [t.strip() for t in args.datasets.split(",") if t.strip()] if args.datasets else None
+    model, borders = load_model(args.regressor_path, "regression", out_dir / "checkpoints" / "fev")
+    context = {}
+    if args.max_context_length is not None:
+        context["max_context_length"] = args.max_context_length or None
+    forecaster = TabSilForecaster(
+        model,
+        borders,
+        n_estimators=args.n_estimators,
+        device=args.device,
+        random_state=args.seed,
+        **context,
+    )
+    print(
+        f"fev: tasks {tasks or list(fevbench.TASKS)}, windows {args.fev_windows or 'all'},"
+        f" context {forecaster.max_context_length}, device {args.device}",
+        flush=True,
+    )
+    if use_mlflow:
+        mlflow.log_params(
+            {
+                "suite": args.suite,
+                "regressor_path": args.regressor_path,
+                "seed": args.seed,
+                "n_estimators": args.n_estimators
+                or default_inference(model, "regression")["n_estimators"],
+                "max_context_length": forecaster.max_context_length,
+                "fev_windows": args.fev_windows or "all",
+                "fev_tasks": ",".join(tasks or fevbench.TASKS),
+            }
+        )
+    summary = fevbench.run(
+        forecaster, tasks, args.fev_windows, out_dir / FEV_SUITE, log=lambda s: print(s, flush=True)
+    )
+    table = pd.read_csv(out_dir / FEV_SUITE / "comparison.csv")
+    show = ["TabSil", "Seasonal Naive", "TabPFN-TS (v2)", "TabICL-TS", "Chronos-2"]
+    for metric in ("SQL", "MASE"):
+        wide = table.pivot(index="task", columns="method", values=metric)
+        print(f"\ntask mean {metric}:\n{wide[[m for m in show if m in wide]].round(4)}")
+    elo = pd.read_csv(out_dir / FEV_SUITE / "elo.csv")
+    print(f"\nElo (Seasonal Naive = 1000):\n{elo.round(1).to_string(index=False)}")
+    print(f"TabSil time {summary['tabsil_seconds']:.0f}s, total {summary['seconds']['total']:.0f}s")
+    if use_mlflow:
+        mlflow.log_metrics(
+            {
+                **{f"fev_elo_{k}": v["elo"] for k, v in summary["elo"].items()},
+                **{
+                    f"fev_{m}_{t}": v
+                    for m, by_task in summary["task_mean"].items()
+                    for t, v in by_task.items()
+                },
+                "fev_tabsil_seconds": summary["tabsil_seconds"],
+                "fev_imputed_pct": 100 * summary["imputed"],
+            }
+        )
+        for path in sorted((out_dir / FEV_SUITE).glob("*.csv")):
+            mlflow.log_artifact(str(path), f"eval/{FEV_SUITE}")
+        mlflow.log_artifact(str(out_dir / FEV_SUITE / "summary.json"), f"eval/{FEV_SUITE}")
 
 
 def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: bool) -> None:
