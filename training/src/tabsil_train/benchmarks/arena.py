@@ -283,8 +283,15 @@ def run(
     failed = grid["skip_reason"].isna() & was_imputed
     grid.loc[failed, "skip_reason"] = "failed"
     grid.to_csv(out_dir / "tasks.csv", index=False)
-    if failed.any():
-        print(f"{int(failed.sum())} failed splits (imputed): tasks.csv", file=sys.stderr)
+    failed_rows = grid[failed]
+    failed_names = [
+        f"{d} split {s}" for d, s in zip(failed_rows["dataset"], failed_rows["split"], strict=True)
+    ]
+    if failed_names:
+        print(
+            f"{len(failed_names)} failed splits (imputed): {', '.join(failed_names)}; tasks.csv",
+            file=sys.stderr,
+        )
     website = context.leaderboard_to_website_format(leaderboard=leaderboard)
     comparison = compare_with_public(website, try_public_leaderboard(suite.public_csv), name)
     comparison.to_csv(out_dir / "comparison.csv", index=False)
@@ -298,6 +305,8 @@ def run(
         "datasets": int(grid["dataset"].nunique()),
         "run_splits": len(todo),
         "failed_splits": int(failed.sum()),
+        # splits that ran but have no result (the method raised; TabArena imputed them)
+        "failed": failed_names,
         "imputed_pct": 100.0 * float(ours["imputed"].mean()),
         "skip_reasons": _reason_counts(grid["skip_reason"]),
         **(_scores(leaderboard, name) if name else dict.fromkeys(SCORE_KEYS)),

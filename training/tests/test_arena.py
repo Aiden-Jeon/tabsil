@@ -178,6 +178,8 @@ def test_summary_and_cache_folder_record_method_and_fingerprint(monkeypatch, tmp
         results=[],
     )
     assert "bagging" not in summary and summary["run_id"] == arena._run_id("fp", "tabsil")
+    # the split ran (no skip reason) but has no result: a failure, named in the summary
+    assert summary["failed_splits"] == 1 and summary["failed"] == ["d split 0"]
     text = (tmp_path / "runs" / summary["run_id"] / "fingerprint.txt").read_text()
     assert text == "tabsil\nfp\n"
 
@@ -274,10 +276,26 @@ def test_probability_columns_follow_the_natural_label_order():
         pd.DataFrame({"x": np.arange(24.0)}), labels, problem_type="multiclass", random_state=0
     )
     assert list(model._predict_proba(X).columns) == list(range(12))
+    # boolean labels (jm1, online_shoppers_intention): False before True, picked by position
+    flags = pd.Series([True] * 8 + [False] * 2)
+    model._fit_system(X, flags, problem_type="binary", random_state=0)
+    proba = model._predict_proba(X)
+    assert list(proba.columns) == [False, True] and list(proba.index) == list(X.index)
+    np.testing.assert_allclose(proba[True], 0.8)
 
 
 def _eval_script():
     return helpers.load_script("scripts/eval.py", "eval_script_arena")
+
+
+def test_eval_stops_when_a_split_failed():
+    # A split that raised is imputed by TabArena; the run must fail instead of reporting scores
+    script = _eval_script()
+    script.check_failed_splits({"failed": []})
+    script.check_failed_splits({})
+    message = "2 splits failed and were imputed: jm1 split 0, x split 1"
+    with pytest.raises(SystemExit, match=message):
+        script.check_failed_splits({"failed": ["jm1 split 0", "x split 1"]})
 
 
 def test_eval_script_limits_follow_the_supported_size():
@@ -703,7 +721,7 @@ def test_host_state_columns_bound_the_member_input_width(one_hot):
     width = 16
     member = Member(class_permutation=None, target_power=False, seed=0, one_hot=one_hot)
     prep = MemberPreprocessor(member, cat_ix, width).fit(X)
-    actual = prep.transform(X, np.random.default_rng(1)).shape[1]
+    actual = prep.transform(X, np.random.default_rng(1).standard_normal((len(X), 1))).shape[1]
 
     model = types.SimpleNamespace(
         inference_host_state_bytes=lambda rows, columns: columns,  # returns the column count as is

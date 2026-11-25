@@ -113,14 +113,13 @@ class EstimatorSystem(ExternalSystemModel):
         Xp, _ = prepare_frame(X)
         (estimator,) = self.estimators_
         classes = np.asarray(estimator.classes_)
-        proba = estimator.predict_proba(Xp.reset_index(drop=True))
-        proba = pd.DataFrame(np.asarray(proba, dtype=float), columns=list(classes))
+        proba = np.asarray(estimator.predict_proba(Xp.reset_index(drop=True)), dtype=float)
         # columns in the natural label order (np.unique, same as the estimator's LabelEncoder),
         # because TabArena reads the second column for binary and columns by position for
-        # multiclass
-        proba = proba[list(np.unique(classes))]
-        proba.index = X.index
-        return proba
+        # multiclass. Reordered by position: a list of boolean labels (jm1,
+        # online_shoppers_intention) used as column keys would be read as a row mask
+        order = np.argsort(classes, kind="stable")
+        return pd.DataFrame(proba[:, order], columns=list(classes[order]), index=X.index)
 
     def cleanup(self):
         self.estimators_ = []

@@ -22,7 +22,9 @@
 experiment_name: tabsil
 mlflow_run_name: tabsil-v1-timing-300steps-8gpu
 environment:
-  # AI v6: Python 3.12, torch 2.11.0+cu130 (the torch range pinned in pyproject.toml)
+  # AI v6: Python 3.12, torch 2.11.0+cu130. The job runs on this environment's torch, not on
+  # uv.lock; the workspace lock keeps the same torch (tool.uv.constraint-dependencies in
+  # pyproject.toml), so change both together
   version: databricks_ai_v6
   # Not in the base environment: the TabICL prior that generates the training data
   dependencies:

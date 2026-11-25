@@ -24,35 +24,35 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 
 | Method | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
 | --- | --- | --- | --- | --- |
-| Kumo-Tabular (default) | 2048 (+176/−114) | 2.9 | 2.33 | 0.254 |
-| LimiX-2 (default) | 1924 (+168/−118) | 3.2 | 31.16 | 8.935 |
-| Kumo-Tabular-Medium (default) | 1902 (+141/−101) | 4.9 | 1.36 | 0.150 |
-| TabPFN-3.5 (default) | 1858 (+148/−96) | 6.9 | 1.85 | 0.473 |
-| Kumo-Tabular-Small (default) | 1802 (+90/−63) | 8.2 | 0.79 | 0.092 |
-| Causilo (default) | 1798 (+95/−70) | 8.3 | 0.67 | 0.104 |
-| TabFM (default) | 1798 (+130/−108) | 7.1 | 16.13 | 6.663 |
-| TabPFN-3.5-Fast (default) | 1787 (+90/−57) | 8.6 | 0.73 | 0.153 |
-| Mitra-v2 (default) | 1751 (+107/−74) | 7.8 | 59.03 | 0.886 |
+| Kumo-Tabular (default) | 2046 (+179/−113) | 2.9 | 2.33 | 0.254 |
+| LimiX-2 (default) | 1924 (+167/−117) | 3.2 | 31.16 | 8.935 |
+| Kumo-Tabular-Medium (default) | 1902 (+140/−100) | 4.9 | 1.36 | 0.150 |
+| TabPFN-3.5 (default) | 1858 (+147/−96) | 6.9 | 1.85 | 0.473 |
+| Kumo-Tabular-Small (default) | 1801 (+90/−63) | 8.2 | 0.79 | 0.092 |
+| Causilo (default) | 1798 (+95/−71) | 8.3 | 0.67 | 0.104 |
+| TabFM (default) | 1797 (+131/−108) | 7.1 | 16.13 | 6.663 |
+| TabPFN-3.5-Fast (default) | 1786 (+90/−57) | 8.6 | 0.73 | 0.153 |
+| Mitra-v2 (default) | 1751 (+107/−75) | 7.8 | 59.03 | 0.886 |
 | EXAONE-Tabular (default) | 1741 (+72/−50) | 9.3 | 1.98 | 0.582 |
-| **TabSil** | **1727** (+106/−78) | 8.2 | 0.0143 | 0.805 |
+| **TabSil** | **1726** (+104/−77) | 8.2 | 0.0141 | 0.805 |
 | TabPFN-3 (default) | 1619 (+74/−52) | 11.1 | 1.29 | 0.383 |
 | TabICLv2 (default) | 1557 (+68/−58) | 12.6 | 0.73 | 0.137 |
-| RealTabPFN-2.5 (default) | 1514 (+57/−42) | 13.3 | 5.72 | 0.611 |
+| RealTabPFN-2.5 (default) | 1514 (+57/−41) | 13.3 | 5.72 | 0.611 |
 | CatBoost (default) | 1339 (+35/−40) | 17.8 | 5.81 | 0.025 |
 | XGBoost (default) | 1182 (+50/−53) | 21.0 | 2.06 | 0.122 |
 
 - TabArena-Lite has 51 datasets, one split each. TabSil ran on 1×H100 with the default inference (8 preprocessing members). No split is imputed. Elo puts RandomForest (default) at 1000, with a 95% CI. Lower is better for improvability, fit and infer.
 - Every method on the leaderboard is 8-fold bagged; TabSil is fit once per split, and its fit only stores the context. So the Fit column is not like-for-like. The Infer column is comparable.
-- All values come from the same run. The pool is the public leaderboard [v0.1.9.12](https://huggingface.co/spaces/TabArena/leaderboard/blob/3cffdcceb64f9cd6c6cbb5aa852a4f16296749bd/data/entrants_models/imputation_yes/splits_lite/tasks_all/datasets_all/website_leaderboard.csv) (98 methods) plus TabSil, 99 methods. The run recomputes every method's Elo, CI and improvability from the leaderboard's public results with TabSil in the pool, so they differ slightly from v0.1.9.12 (Elo by at most 3 for the methods shown). Fit and infer times are the same as on the leaderboard. The live leaderboard has added methods since, so its numbers differ too.
+- All values come from the same run. The pool is the public leaderboard [v0.1.9.12](https://huggingface.co/spaces/TabArena/leaderboard/blob/3cffdcceb64f9cd6c6cbb5aa852a4f16296749bd/data/entrants_models/imputation_yes/splits_lite/tasks_all/datasets_all/website_leaderboard.csv) (98 methods) plus TabSil, 99 methods. The run recomputes every method's Elo, CI and improvability from the leaderboard's public results with TabSil in the pool, so they differ slightly from v0.1.9.12 (Elo by at most 4 for the methods shown). Fit and infer times are the same as on the leaderboard. The live leaderboard has added methods since, so its numbers differ too.
 - Fit and infer time are defined in [Evaluation](#evaluation). More results (AMLB, per-stage, per-task Elo) are on the [model card](https://huggingface.co/aiden-jeon/tabsil).
 
 ## Install
 
-Inference only:
+Inference only, from PyPI:
 
 ```bash
-uv add "tabsil @ git+https://github.com/Aiden-Jeon/tabsil"
-# once a release is on PyPI: uv add tabsil
+uv add tabsil                     # or: pip install tabsil
+uv add "tabsil @ git+https://github.com/Aiden-Jeon/tabsil"   # the latest main instead of a release
 ```
 
 Training and evaluation, from a clone:
@@ -68,11 +68,11 @@ uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabA
 
 Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3).
 
-Python ≥ 3.12, PyTorch 2.11.
+Python ≥ 3.11, PyTorch ≥ 2.11 (the benchmark results below were measured with PyTorch 2.11).
 
 ## Use
 
-Without a model, `TabSilClassifier()` and `TabSilRegressor()` download the v1 weights from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`, [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil)):
+Without a model, `TabSilClassifier()` and `TabSilRegressor()` download the v1 weights from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`, [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil)) at the tag `v1` (`tabsil.recipe.HUB_REVISION`), so a release keeps downloading the same weights when the repo's `main` changes:
 
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor
@@ -84,7 +84,7 @@ reg = TabSilRegressor(device="cuda").fit(X_train, y_train)
 y_pred = reg.predict(X_test)
 ```
 
-Other weights are given as the first argument: a Hub repo id (`"owner/name"`, or `"aiden-jeon/tabsil@stage2-10k"` for a branch), a folder written by `tabsil.hub.save_pretrained` (`model.safetensors` + `config.json`), or a model:
+Other weights are given as the first argument: a Hub repo id (`"owner/name"` for its `main`, or `"aiden-jeon/tabsil@stage2-10k"` for a branch, tag or commit), a folder written by `tabsil.hub.save_pretrained` (`model.safetensors` + `config.json`), or a model:
 
 ```python
 from tabsil.models import load_checkpoint

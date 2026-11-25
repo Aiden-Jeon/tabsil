@@ -114,9 +114,9 @@ def test_inference_classes_load_weights_without_from_pretrained(tmp_path, monkey
     # Users run public weights, so the inference classes fetch them directly: no argument means
     # TabSil's public repo; a string is a Hub repo id (`owner/name@branch`) or a local folder
     from tabsil import TabSilClassifier, TabSilRegressor
-    from tabsil.recipe import HUB_REPO
+    from tabsil.recipe import HUB_DEFAULT, HUB_REPO
 
-    assert HUB_REPO == "aiden-jeon/tabsil"
+    assert HUB_REPO == "aiden-jeon/tabsil" and HUB_DEFAULT == "aiden-jeon/tabsil@v1"
     model = _model()
     borders = torch.linspace(-3, 3, 5001)
     tabsil_dir, cls_dir = tmp_path / "tabsil", tmp_path / "cls"
@@ -143,7 +143,7 @@ def test_inference_classes_load_weights_without_from_pretrained(tmp_path, monkey
     reg = TabSilRegressor(n_estimators=2)
     _same_weights(model, reg.model)
     assert torch.equal(reg.borders.cpu(), borders) and reg.n_estimators == 2
-    assert asked == [HUB_REPO, HUB_REPO]
+    assert asked == [HUB_DEFAULT, HUB_DEFAULT]  # the tag `v1`, not `main`
     # A branch, local folder or model can also be passed directly
     TabSilClassifier(HUB_REPO + "@step-100k")
     assert asked[-1].endswith("@step-100k")
@@ -190,3 +190,43 @@ def test_from_pretrained_reads_the_branch_after_at(monkeypatch, tmp_path):
     assert set(calls) == {("owner/name", "step-100k"), ("owner/name", "step-200k")}
     with pytest.raises(ValueError, match="revision"):
         hub.from_pretrained("owner/name@step-100k", revision="step-200k")
+
+
+def test_default_weights_are_the_v1_tag_and_other_revisions_pass_through(monkeypatch, tmp_path):
+    # A tabsil release pins the weights it downloads by default: the Hub tag `v1`, so moving `main`
+    # does not change what `TabSilClassifier()` runs. A repo id given by the caller keeps its own
+    # revision: a bare repo id is `main`, `@branch` a branch, and `revision=` is passed as is
+    from tabsil import TabSilClassifier, TabSilRegressor
+    from tabsil.recipe import HUB_REPO, HUB_REVISION
+
+    assert HUB_REVISION == "v1"
+    model = _model()
+    hub.save_pretrained(model, torch.linspace(-3, 3, 5001), tmp_path)
+    calls = []
+
+    def download(repo_id, filename, revision=None):
+        calls.append((repo_id, revision))
+        return str(tmp_path / filename)
+
+    monkeypatch.setattr(hub, "hf_hub_download", download)
+
+    def revisions(load):
+        calls.clear()
+        load()
+        return set(calls)
+
+    assert revisions(TabSilClassifier) == {(HUB_REPO, "v1")}
+    assert revisions(TabSilRegressor) == {(HUB_REPO, "v1")}
+    assert revisions(lambda: TabSilClassifier(HUB_REPO)) == {(HUB_REPO, None)}
+    assert revisions(lambda: TabSilClassifier(f"{HUB_REPO}@stage1-150k")) == {
+        (HUB_REPO, "stage1-150k")
+    }
+    assert revisions(lambda: TabSilRegressor(f"{HUB_REPO}@stage2-10k")) == {
+        (HUB_REPO, "stage2-10k")
+    }
+    assert revisions(lambda: hub.from_pretrained(HUB_REPO, revision="67ef600")) == {
+        (HUB_REPO, "67ef600")
+    }
+    assert revisions(lambda: hub.load_model(f"hf://{HUB_REPO}", "classification")) == {
+        (HUB_REPO, None)
+    }

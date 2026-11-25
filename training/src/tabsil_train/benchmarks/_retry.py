@@ -18,6 +18,7 @@ import http.client
 import re
 import time
 from collections.abc import Callable
+from typing import TypeVar
 
 # Number of attempts and first wait (seconds). The wait doubles each time (30, 60, 120 s)
 ATTEMPTS = 4
@@ -93,7 +94,11 @@ def is_network_error(error: BaseException) -> bool:
     return False
 
 
-def retry[T](
+# a TypeVar rather than `def retry[T]` (PEP 695 needs Python 3.12; the package supports 3.11)
+T = TypeVar("T")
+
+
+def retry(
     fn: Callable[[], T], *, what: str, attempts: int = ATTEMPTS, wait: float = FIRST_WAIT
 ) -> T:
     """Call `fn()`; on a network error (`is_network_error`), wait and retry, up to `attempts`

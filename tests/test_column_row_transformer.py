@@ -221,7 +221,7 @@ def test_standard_members_keep_values():
 
     X = np.random.default_rng(0).normal(size=(50, 3))
     prep = MemberPreprocessor(Member(None, False, seed=0), [], 160).fit(X)
-    out = prep.transform(X, np.random.default_rng(1))
+    out = prep.transform(X, np.random.default_rng(1).standard_normal((len(X), 1)))
     # 3 original columns + 1 sample id, shuffled
     assert out.shape == (50, 4)
     kept = out[:, np.argsort(prep.order)[:3]]
@@ -416,7 +416,7 @@ def test_tabsil_classes_share_the_multitask_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "from_pretrained", fake)
     clf, reg = TabSilClassifier(), TabSilRegressor()
     assert recipe.HUB_REPO == "aiden-jeon/tabsil"
-    assert asked == [recipe.HUB_REPO, recipe.HUB_REPO]
+    assert asked == [recipe.HUB_DEFAULT, recipe.HUB_DEFAULT]  # the same repo, at the tag v1
     for loaded in (clf.model, reg.model):
         assert loaded.config == model.config
         for name, tensor in model.state_dict().items():

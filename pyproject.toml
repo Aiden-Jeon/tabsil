@@ -8,20 +8,29 @@ license-files = ["LICENSE", "NOTICE", "LICENSES/TabICL-BSD-3-Clause.txt"]
 authors = [
     { name = "Aiden-Jeon", email = "aiden.jongseob@gmail.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 # Inference only (model, preprocessing ensembles, Hub download); training and evaluation are the
 # tabsil-train workspace member (`training/pyproject.toml`). Lower bounds follow Databricks
-# Serverless GPU environment v6; torch is pinned to 2.11 (the CUDA 13.0 build tested there). pandas
-# stays at >=2.2 here and is raised to >=3.0.6 in the dev groups; tabsil-train's arena extra
-# (tabarena, autogluon) needs pandas<2.4, so that install gets 2.3 (tool.uv.conflicts below).
+# Serverless GPU environment v6 (torch 2.11, the CUDA 13.0 build the weights were trained and
+# benchmarked with). torch has no upper bound so that tabsil installs next to models that need a
+# newer torch (TabArena installs many models into one environment; causilo needs torch>=2.13); the
+# workspace lock keeps 2.11 (tool.uv.constraint-dependencies below). pandas stays at >=2.2 here
+# and is raised to >=3.0.6 in the dev groups; tabsil-train's arena extra (tabarena, autogluon)
+# needs pandas<2.4, so that install gets 2.3 (tool.uv.conflicts below).
 dependencies = [
     "huggingface-hub>=0.34",
     "numpy>=2.3",
     "pandas>=2.2",
     "safetensors>=0.5",
     "scikit-learn>=1.7",
-    "torch>=2.11,<2.12",
+    "torch>=2.11",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Aiden-Jeon/tabsil"
+Repository = "https://github.com/Aiden-Jeon/tabsil"
+Issues = "https://github.com/Aiden-Jeon/tabsil/issues"
+"Model weights" = "https://huggingface.co/aiden-jeon/tabsil"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
@@ -44,6 +53,9 @@ members = ["training"]
 
 [tool.uv]
 prerelease = "if-necessary"
+# The development and training environment (this lock) stays on the torch of Databricks Serverless
+# GPU environment v6; constraints apply to the lock only, not to the published tabsil metadata
+constraint-dependencies = ["torch>=2.11,<2.12"]
 # The workspace has one lock, so every member's extras and groups are resolved together. The dev
 # groups (pandas 3) and tabsil-train's arena extra (tabarena/autogluon need pandas<2.4) are
 # resolved separately and cannot be installed together; see training/pyproject.toml
@@ -54,7 +66,7 @@ conflicts = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 # first-party packages: tabsil and the tabsil-train workspace member
 src = ["src", "training/src"]
 

@@ -21,7 +21,8 @@ does not import the Hub and inference code).
     from tabsil import TabSilClassifier
 
     clf = TabSilClassifier("path/to/folder").fit(x_train, y_train)  # a save_pretrained folder
-    # without a model: the default Hub repo (`tabsil.recipe.HUB_REPO`, the v1 weights)
+    # without a model: the default Hub repo (`tabsil.recipe.HUB_REPO`) at the tag `HUB_REVISION`
+    # (the v1 weights)
 """
 
 from typing import TYPE_CHECKING
