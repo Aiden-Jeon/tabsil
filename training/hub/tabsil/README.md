@@ -47,7 +47,7 @@ What differs from the TabICLv2 scripts (our choices):
 - **Shorter stages.** The recipe in `tabsil_train.recipe` keeps the per-task table count of the scripts (250k / 20k / 5k steps). These weights were trained for 150k / 10k / 2k steps (`--steps`). A separate 250k stage-1 run did not do better than the 150k run: TabArena-Lite 1423 at 225k vs 1429 at 150k, and AMLB classification 0.9383 in both. In both runs the AMLB regression ratio rose during stage 1 (to 1.137 at 225k and 1.136 at 150k); stage 2 brings it back below 1.
 - **Activation checkpointing** for tables longer than 2,048 rows in stages 2 and 3, to fit long tables in GPU memory. It changes memory and speed only.
 
-Compute: 32×H100 for about 30 hours (stage 1), 10 hours (stage 2) and 9 hours (stage 3), about 1,550 H100-hours. This does not count the 250k stage-1 run or shorter experiments.
+Compute: 32×H100 for about 30 hours (stage 1), 9.6 hours (stage 2) and 9.0 hours (stage 3), about 1,550 H100-hours. This does not count the 250k stage-1 run or shorter experiments.
 
 The weights were trained with the same model code in [minipfn](https://github.com/Aiden-Jeon/minipfn), before TabSil moved to its own repository, and converted to the TabSil format.
 
@@ -123,7 +123,7 @@ pred = reg.predict(x_test)  # mean of the predictive distribution
 Each class above loads its own copy of the 222M weights. To use both tasks with one copy, load the model once and pass it in (the inference settings come with it):
 
 ```python
-from tabsil import from_pretrained
+from tabsil import TabSilClassifier, TabSilRegressor, from_pretrained
 
 model, borders = from_pretrained("aiden-jeon/tabsil")
 clf = TabSilClassifier(model, device="cuda")
