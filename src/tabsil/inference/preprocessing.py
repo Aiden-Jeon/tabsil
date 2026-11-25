@@ -10,8 +10,8 @@ values are kept as they are (the model standardizes them with the training rows)
   one-hot blocks (`one_hot_sizes`)
 - a sample identifier column of standard normal values is appended and the column order is
   shuffled. Training rows draw it from the member seed; a test row's value is a hash of that row's
-  values and the member seed (`row_identifier`), so its prediction does not depend on the other
-  test rows, their order or the batch it is predicted in (inductive predictions)
+  values and the member seed (`row_hashes`, `row_identifier`), so its prediction does not depend
+  on the other test rows, their order or the batch it is predicted in (inductive predictions)
 
 How the members differ (seeds, class permutations, the regression target transform) is in
 `tabsil.inference.ensemble`.
@@ -132,23 +132,29 @@ def _splitmix64(x: np.ndarray) -> np.ndarray:
 
 
 def _unit_interval(h: np.ndarray) -> np.ndarray:
-    # the top 53 bits as a float in (0, 1): never 0 or 1, so log() and the normal tail stay finite
-    return ((h >> np.uint64(11)).astype(np.float64) + 0.5) * 2.0**-53
+    # the top 52 bits as a float in (0, 1): (k + 0.5) * 2^-52 is exact in float64 for k < 2^52,
+    # so the value is never 0 or 1 and log() stays finite
+    return ((h >> np.uint64(12)).astype(np.float64) + 0.5) * 2.0**-52
 
 
-def row_identifier(X: np.ndarray, seed: int) -> np.ndarray:
-    """A sample identifier per row, (n, 1) standard normal values: each is a hash of that row's
-    values and `seed` only, so it does not depend on the other rows or the row's position (equal
-    rows get equal values). The hash reads the float64 bits of each cell (NaN and -0.0 are made
-    canonical first), so it does not change with the pandas or NumPy version."""
-    X = np.array(X, dtype=np.float64, ndmin=2)
-    X[np.isnan(X)] = np.nan  # one NaN bit pattern
-    X += 0.0  # -0.0 becomes 0.0
-    bits = np.ascontiguousarray(X).view(np.uint64)
-    h = np.full(X.shape[0], _splitmix64(np.uint64(seed)), dtype=np.uint64)
-    for j in range(bits.shape[1]):
-        h = _splitmix64(h ^ bits[:, j])
-    # Box-Muller on two uniforms from the row hash
+def row_hashes(X: np.ndarray) -> np.ndarray:
+    """A 64-bit hash per row of its float64 cell values (NaN and -0.0 made canonical first), so
+    it depends on that row only. It reads the bits of the values, not pandas' hashing."""
+    X = np.asarray(X, dtype=np.float64)
+    h = np.zeros(X.shape[0], dtype=np.uint64)
+    for j in range(X.shape[1]):
+        col = X[:, j] + 0.0  # a contiguous copy of the column; -0.0 becomes 0.0
+        col[np.isnan(col)] = np.nan  # one NaN bit pattern
+        h = _splitmix64(h ^ col.view(np.uint64))
+    return h
+
+
+def row_identifier(hashes: np.ndarray, seed: int) -> np.ndarray:
+    """A sample identifier per row, (n, 1) standard normal values from the row hashes
+    (`row_hashes`) and `seed` only: it does not depend on the other rows or the row's position,
+    and equal rows get equal values."""
+    h = _splitmix64(np.asarray(hashes, dtype=np.uint64) ^ _splitmix64(np.uint64(seed)))
+    # Box-Muller on two uniforms from the hash
     u1, u2 = _unit_interval(h), _unit_interval(_splitmix64(h))
     return (np.sqrt(-2.0 * np.log(u1)) * np.cos(2.0 * np.pi * u2))[:, None]
 

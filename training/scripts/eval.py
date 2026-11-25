@@ -38,7 +38,7 @@ limits). One fit uses the whole training split. `--datasets` runs only some data
 imputed). Results go to `<out-dir>/<suite>/`.
 
   $RUN --no-dev --extra arena --group arena-dev python $EVAL --suite tabarena-lite \
-    --classifier-path hf://aiden-jeon/tabsil --regressor-path hf://aiden-jeon/tabsil
+    --classifier-path hf://aiden-jeon/tabsil@v1 --regressor-path hf://aiden-jeon/tabsil@v1
 
 Columns per member: without `--max-features-per-member` the model's setting applies (768 columns
 chosen `balanced`, per task model). `--max-features-per-member 0` turns the cap off (all columns;

@@ -69,6 +69,7 @@ from tabsil.inference.preprocessing import (
     apply_encoder,
     balanced_feature_subsets,
     feature_subset,
+    row_hashes,
     row_identifier,
     select_features,
     to_numeric,
@@ -197,10 +198,12 @@ class _Base:
     def _iter_inputs(self, X: Any, y_trains: list[np.ndarray]):
         """Per member (index, model input x (1, train + test rows, F), y_train (1, train rows))."""
         X_test = apply_encoder(pd.DataFrame(X), self.cat_ix_, self.encoder_)
+        # a test row's identifier depends on that row only (not on the batch or row order): a hash
+        # of all its encoded values, hashed once and mixed with each member's seed
+        hashes = row_hashes(X_test)
         for i, (prep, y_train) in enumerate(zip(self.preprocessors_, y_trains, strict=True)):
             x_test, _ = select_features(X_test, self.cat_ix_, self.feature_subsets_[i])
-            # a test row's identifier depends on that row only (not on the batch or row order)
-            x_test = prep.transform(x_test, row_identifier(x_test, prep.member.seed + 3))
+            x_test = prep.transform(x_test, row_identifier(hashes, prep.member.seed + 3))
             x = np.concatenate([self.X_trains_[i], x_test])
             x = torch.as_tensor(x, dtype=torch.float32, device=self.device).unsqueeze(0)
             y = torch.as_tensor(y_train, dtype=torch.float32, device=self.device).unsqueeze(0)

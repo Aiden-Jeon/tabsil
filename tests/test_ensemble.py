@@ -408,27 +408,33 @@ def test_members_take_feature_subsets_above_the_cap():
 
 
 def test_row_identifier_depends_on_the_row_and_seed_only():
-    from tabsil.inference.preprocessing import row_identifier
+    from tabsil.inference.preprocessing import _unit_interval, row_hashes, row_identifier
+
+    def ident(x, seed):
+        return row_identifier(row_hashes(x), seed)
 
     rng = np.random.default_rng(0)
     x = rng.normal(size=(50, 4))
     x[3, 1] = np.nan
-    ident = row_identifier(x, 7)
-    assert ident.shape == (50, 1) and np.isfinite(ident).all()
+    full = ident(x, 7)
+    assert full.shape == (50, 1) and np.isfinite(full).all()
     # the same row gets the same value alone, in another order and next to a copy of itself
     for i in (0, 3, 49):
-        assert row_identifier(x[i : i + 1], 7)[0, 0] == ident[i, 0]
-    assert np.array_equal(row_identifier(x[::-1], 7), ident[::-1])
-    assert np.array_equal(row_identifier(np.vstack([x[:1], x]), 7)[1:], ident)
+        assert ident(x[i : i + 1], 7)[0, 0] == full[i, 0]
+    assert np.array_equal(ident(x[::-1], 7), full[::-1])
+    assert np.array_equal(ident(np.vstack([x[:1], x]), 7)[1:], full)
     # other seeds and other values give other values; NaN payloads and -0.0 do not matter
-    assert not np.isclose(row_identifier(x, 8), ident).any()
+    assert not np.isclose(ident(x, 8), full).any()
     other = x.copy()
     other[0, 0] += 1e-12
-    assert row_identifier(other, 7)[0, 0] != ident[0, 0]
+    assert ident(other, 7)[0, 0] != full[0, 0]
     signed = np.array([[0.0, np.nan]]), np.array([[-0.0, -np.nan]])
-    assert row_identifier(signed[0], 1)[0, 0] == row_identifier(signed[1], 1)[0, 0]
+    assert ident(signed[0], 1)[0, 0] == ident(signed[1], 1)[0, 0]
+    # the uniforms stay strictly inside (0, 1) at both ends of the hash range
+    ends = _unit_interval(np.array([0, 2**64 - 1], dtype=np.uint64))
+    assert 0 < ends[0] and ends[1] < 1
     # standard normal over many rows
-    many = row_identifier(rng.normal(size=(20000, 3)), 0)[:, 0]
+    many = ident(rng.normal(size=(20000, 3)), 0)[:, 0]
     assert abs(many.mean()) < 0.03 and abs(many.std() - 1) < 0.03
 
 
@@ -471,10 +477,25 @@ def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunke
         model.inference_chunk_cells = 64  # force the row-chunked forward on this small table
     clf = TabSilClassifier(model, n_estimators=3).fit(X[:60], (y[:60] > 0).astype(int))
     reg = TabSilRegressor(model, torch.linspace(-4, 4, 33), n_estimators=3).fit(X[:60], y[:60])
-    # the row-chunked forward splits the test rows at other positions, which changes the float32
-    # rounding (about 1e-6); a position-dependent identifier changed predictions by 1e-3 to 1e-2
-    atol = 1e-5 if chunked else 1e-6
+    # The model inputs of a test row are the same bits alone, in another order or next to a copy
+    for est in (clf, reg):
+        y_trains = [np.zeros(60)] * len(est.preprocessors_)
+        inputs = {
+            name: [x[0, 60:] for _, x, _ in est._iter_inputs(rows, y_trains)]
+            for name, rows in {
+                "full": X[60:],
+                "alone": X[60:61],
+                "reversed": X[60:].iloc[::-1],
+                "twin": pd.concat([X[60:61], X[60:]]),
+            }.items()
+        }
+        for full, alone, rev, twin in zip(*inputs.values(), strict=True):
+            for same in (alone[0], full[0]), (twin[1:], full), (rev.flip(0), full):
+                np.testing.assert_array_equal(*same)  # NaN cells (missing) compare equal
+    # So predictions differ only by float32 rounding, which depends on the batch shape (up to
+    # about 2e-6 on this tiny random model, more with the row-chunked forward); a
+    # position-dependent identifier changed them by 1e-3 to 4e-2
     for predict in (clf.predict_proba, reg.predict):
         full, ways = _predict_ways(predict, X[60:])
         for name, pred in ways.items():
-            np.testing.assert_allclose(pred, full[: len(pred)], atol=atol, rtol=0, err_msg=name)
+            np.testing.assert_allclose(pred, full[: len(pred)], atol=1e-5, rtol=0, err_msg=name)
