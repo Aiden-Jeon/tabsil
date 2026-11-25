@@ -4,6 +4,9 @@
 # ///
 """Generate the TabSil logo, icons, favicon and social preview in this folder.
 
+The Hub model card banner is written to the card's images folder
+(``training/hub/tabsil/images/``), which ``sync_hub_card.py`` uploads with the card.
+
 The mark is a table grid with one thread weaving through its rows (*sil* is Korean
 for thread). The wordmark is DM Sans Bold converted to outlines, so the SVGs need
 no font at view time.
@@ -132,6 +135,19 @@ def build_svgs(font):
             f'<path fill="{MUTED_DARK}" d="{"".join(tagline)}"/></g>'
         ),
     )
+
+    # Hub model card banner: a dark background of its own, so it reads in both Hub themes
+    body, width = lockup(font, INK_DARK, "banner")
+    scale = 3
+    files["tabsil-banner.svg"] = svg(
+        1280,
+        320,
+        (
+            f'<rect width="1280" height="320" rx="24" fill="{SOCIAL_BG}"/>'
+            f'<g transform="translate({(1280 - width * scale) / 2:.1f} 64) scale({scale})">'
+            f"{body}</g>"
+        ),
+    )
     return files
 
 
@@ -142,7 +158,14 @@ def render(src, dst, *size_args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--font", required=True, help="path to the DM Sans variable TTF")
-    parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path(__file__).parent)
+    here = pathlib.Path(__file__).parent
+    parser.add_argument("--out", type=pathlib.Path, default=here)
+    parser.add_argument(
+        "--card-images",
+        type=pathlib.Path,
+        default=here.parent / "training" / "hub" / "tabsil" / "images",
+        help="model card images folder that receives tabsil-banner.png",
+    )
     args = parser.parse_args()
 
     for name, text in build_svgs(args.font).items():
@@ -152,6 +175,8 @@ def main():
     render(args.out / "tabsil-logo.svg", args.out / "tabsil-logo.png", "-h", "128")
     render(args.out / "tabsil-logo-dark.svg", args.out / "tabsil-logo-dark.png", "-h", "128")
     render(args.out / "tabsil-social.svg", args.out / "tabsil-social.png")
+    args.card_images.mkdir(parents=True, exist_ok=True)
+    render(args.out / "tabsil-banner.svg", args.card_images / "tabsil-banner.png")
     with tempfile.TemporaryDirectory() as tmp:
         big = pathlib.Path(tmp) / "favicon-256.png"
         render(args.out / "tabsil-icon-app-small.svg", big, "-w", "256")
