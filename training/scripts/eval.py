@@ -1,4 +1,5 @@
-"""Evaluate TabSil on the AMLB benchmark, TabArena-Lite, BeyondArena and fev-bench forecasting.
+"""Evaluate TabSil on the AMLB benchmark, TabArena-Lite, BeyondArena, fev-bench forecasting and
+ADBench outlier detection.
 
 The AMLB benchmark is the TabPFN v2 paper's: 29 AMLB classification and 28 AMLB/CTR23 regression
 tasks, each scored as the mean over the OpenML task's 10-fold cross-validation (ROC AUC for
@@ -72,6 +73,19 @@ per 1K test rows (s), averaged over a dataset's splits, median over datasets
 and the baselines' value on the same splits, `time_baselines`) and `comparison.csv`; AMLB writes
 each fold's fit and prediction time to `<out-dir>/fits_<suite>.jsonl` and `eval_rows.csv`.
 
+`--suite adbench` is unsupervised outlier detection on 12 ADBench tables x 3 seeds
+(`tabsil_train.benchmarks.adbench`): `tabsil.unsupervised.TabSilUnsupervised` fitted on the
+unlabeled (contaminated) training rows scores the test rows, next to the official TabPFN v2
+extension and pyod's methods from the fm-agent-bench run, with IsolationForest = 1000 Elo. One
+multitask model serves both column kinds (`--regressor-path`, or `--classifier-path`).
+`--adbench-methods` adds IsolationForest (the split check against ADBench Table D4) and the `+clean`
+diagnostic (context = training rows labeled normal; kept out of the Elo); `--datasets` and
+`--adbench-splits` pick tables and seeds. Results go to `<out-dir>/adbench/` and resume from its
+`results.csv`.
+
+  $RUN python $EVAL --suite adbench --regressor-path hf://aiden-jeon/tabsil@v1 \
+    --datasets yeast --adbench-splits s1
+
 On AI Runtime (`training/scripts/eval.yaml`, `training/scripts/eval_arena.yaml`) results are
 logged to the platform's MLflow run (`MLFLOW_RUN_ID`). Locally, `--mlflow` creates a new run in the
 `TABSIL_EXPERIMENT` experiment (default `tabsil`).
@@ -107,6 +121,7 @@ from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
 FEV_SUITE = "fev"
+ADBENCH_SUITE = "adbench"
 LATENCY_REPEATS = 5
 
 
@@ -114,7 +129,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--suite",
-        choices=["classification", "regression", "all", *ARENA_SUITES, FEV_SUITE],
+        choices=["classification", "regression", "all", *ARENA_SUITES, FEV_SUITE, ADBENCH_SUITE],
         default="all",
     )
     parser.add_argument("--tasks", help="comma-separated OpenML task ids (chosen within the suite)")
@@ -153,7 +168,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--datasets",
         help="TabArena / BeyondArena: comma-separated dataset names (the rest imputed); fev:"
-        " comma-separated task names (only those are evaluated and ranked)",
+        " comma-separated task names (only those are evaluated and ranked); ADBench: the tables"
+        " to run",
     )
     parser.add_argument(
         "--fev-windows",
@@ -167,6 +183,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="fev: context rows per series (default: TabSilForecaster's, 4096; 0: up to the"
         " supported size)",
+    )
+    parser.add_argument(
+        "--adbench-splits",
+        default="s1,s2,s3",
+        help="ADBench: comma-separated splits (s1, s2, s3 = ADBench seeds 1, 2, 3)",
+    )
+    parser.add_argument(
+        "--adbench-methods",
+        default="tabsil_unsup,tabsil_unsup+clean,iforest",
+        help="ADBench: comma-separated methods (tabsil_unsup, iforest; +clean = context of the"
+        " training rows labeled normal, a diagnostic outside the Elo)",
+    )
+    parser.add_argument(
+        "--n-permutations",
+        type=int,
+        default=10,
+        help="ADBench: column orders averaged by the chain-rule log density",
     )
     parser.add_argument(
         "--shards",
@@ -1114,9 +1147,9 @@ def main(argv: list[str] | None = None) -> None:
     args.argv = list(sys.argv[1:] if argv is None else argv)  # for `--shards` worker commands
     if args.shards < 1:
         raise SystemExit("--shards must be >= 1.")
-    if args.shards > 1 and args.suite not in ARENA_SUITES:
-        raise SystemExit("--shards is for the TabArena / BeyondArena suites only.")
-    if args.uncertainty and args.suite in (*ARENA_SUITES, FEV_SUITE):
+    if args.shards > 1 and args.suite not in (*ARENA_SUITES, ADBENCH_SUITE):
+        raise SystemExit("--shards is for the TabArena / BeyondArena / ADBench suites only.")
+    if args.uncertainty and args.suite in (*ARENA_SUITES, FEV_SUITE, ADBENCH_SUITE):
         # the arenas report only the official package's metrics; stop rather than silently ignore
         raise SystemExit("--uncertainty is for AMLB suites only (classification, regression, all).")
     if args.latency and args.suite not in ARENA_SUITES:
@@ -1132,6 +1165,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.suite == FEV_SUITE:
         with mlflow_run(use_mlflow):
             run_fev(args, out_dir, use_mlflow)
+        return
+    if args.suite == ADBENCH_SUITE:
+        with mlflow_run(use_mlflow):
+            run_adbench(args, out_dir, use_mlflow)
         return
     tasks = selected_tasks(args)  # exit on bad task ids before creating a run
     with mlflow_run(use_mlflow):
@@ -1204,6 +1241,163 @@ def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
         for path in sorted((out_dir / FEV_SUITE).glob("*.csv")):
             mlflow.log_artifact(str(path), f"eval/{FEV_SUITE}")
         mlflow.log_artifact(str(out_dir / FEV_SUITE / "summary.json"), f"eval/{FEV_SUITE}")
+
+
+def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
+    """ADBench unsupervised outlier detection (`tabsil_train.benchmarks.adbench`). Ends with an
+    error if any (table, split, method) failed, after the others ran and the report was written."""
+    from tabsil_train.benchmarks import adbench
+
+    datasets = list(adbench.DATASETS) if args.datasets is None else args.datasets.split(",")
+    splits = args.adbench_splits.split(",")
+    methods = adbench.check_methods(args.adbench_methods.split(","))
+    if bad := [d for d in datasets if d not in adbench.DATASETS]:
+        raise SystemExit(f"tables not in ADBench's 12: {bad} (known: {list(adbench.DATASETS)})")
+    if bad := [s for s in splits if s not in adbench.SPLITS]:
+        raise SystemExit(f"splits are {list(adbench.SPLITS)}: {bad}")
+    scorers: dict = {"iforest": adbench.iforest_scores}
+    opts = {"iforest": "sklearn IsolationForest = pyod IForest defaults"}
+    params = {
+        "suite": args.suite,
+        "datasets": ",".join(datasets),
+        "splits": ",".join(splits),
+        "methods": ",".join(methods),
+    }
+    if any(adbench.base(m) == adbench.OURS for m in methods):
+        path = args.regressor_path or args.classifier_path
+        if not path:
+            raise SystemExit("adbench needs --regressor-path (a model serving both tasks).")
+        model, borders = load_model(path, "regression", out_dir / "checkpoints" / "regression")
+        if "classification" not in model.tasks:
+            raise SystemExit(f"{path} does not serve classification (categorical columns).")
+        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
+        scorers[adbench.OURS] = adbench.tabsil_scorer(
+            model, borders, args.n_permutations, n_estimators, args.device, 100 * args.seed
+        )
+        opts[adbench.OURS] = f"n_permutations={args.n_permutations} n_estimators={n_estimators}"
+        params |= {"model": path, "n_permutations": args.n_permutations,
+                   "n_estimators": n_estimators, "seed": args.seed}  # fmt: skip
+    print(f"adbench: {len(datasets)} tables x {splits} x {methods}, {args.device}", flush=True)
+    if use_mlflow:
+        mlflow.log_params(params)
+    suite_dir = out_dir / ADBENCH_SUITE
+    t0 = time.time()
+    if args.shards > 1:
+        # IsolationForest (seconds) here, TabSil's (table, split, method) jobs on the GPUs
+        cpu = [m for m in methods if adbench.base(m) != adbench.OURS]
+        _, failures = adbench.run(scorers, datasets, splits, cpu, suite_dir, opts)
+        gpu = [m for m in methods if adbench.base(m) == adbench.OURS]
+        failures += run_adbench_shards(args, datasets, splits, gpu, suite_dir, out_dir)
+        rows = adbench.read_results(suite_dir / "results.csv")
+    else:
+        rows, failures = adbench.run(scorers, datasets, splits, methods, suite_dir, opts)
+    summary = adbench.report(rows, suite_dir, [m for m in methods if m == adbench.OURS])
+    summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
+    (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+    print(json.dumps(summary, indent=1, default=str), flush=True)
+    for name in ("summary.csv", "elo.csv"):
+        if (suite_dir / name).exists():
+            print(f"\n{name}\n{pd.read_csv(suite_dir / name).round(4).to_string(index=False)}")
+    if use_mlflow:
+        metrics = {f"adbench_{k}": v for k, v in summary.items() if isinstance(v, int | float)}
+        metrics |= {f"adbench_elo_{k}": v for k, v in summary.get("elo", {}).items()}
+        mlflow.log_metrics({re.sub(r"[^\w\-. /]", "_", k): float(v) for k, v in metrics.items()})
+        mlflow.log_artifacts(str(suite_dir), ADBENCH_SUITE)
+    if failures:
+        raise SystemExit(f"adbench: {len(failures)} failed (table, split, method): {failures}")
+
+
+def run_adbench_shards(
+    args: argparse.Namespace,
+    datasets: list[str],
+    splits: list[str],
+    methods: list[str],
+    suite_dir: Path,
+    out_dir: Path,
+) -> list[dict]:
+    """ADBench `--shards`: one job per (table, split, method) not yet in `results.csv`, most
+    expensive first, each a worker process (`eval.py --suite adbench` on one GPU, without MLflow)
+    started as soon as a GPU is free. A finished job's rows are appended to `results.csv`; a failed
+    job is returned as a failure (with its log under `shards/`)."""
+    import subprocess
+
+    from tabsil_train.benchmarks import adbench
+    from tabsil_train.hub import download_artifact
+
+    done = adbench.read_results(suite_dir / "results.csv")
+    finished = set(zip(done.dataset, done.split, done.method, strict=True))
+    jobs = [
+        (d, s, m) for d in datasets for s in splits for m in methods if (d, s, m) not in finished
+    ]
+    jobs.sort(key=lambda j: -adbench.job_cost(j[0], j[2]))
+    n_gpus = torch.cuda.device_count()
+    if n_gpus and args.shards > n_gpus:
+        raise SystemExit(f"--shards {args.shards} exceeds the GPU count {n_gpus}.")
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    devices = visible.split(",") if visible else [str(i) for i in range(args.shards)]
+    path = args.regressor_path or args.classifier_path
+    if path.startswith("runs:/"):  # the parent's download, reused by every worker
+        path = str(download_artifact(path, out_dir / "checkpoints" / "regression"))
+    base = _strip_flags(
+        args.argv,
+        {
+            "--shards": 1,
+            "--datasets": 1,
+            "--adbench-splits": 1,
+            "--adbench-methods": 1,
+            "--out-dir": 1,
+            "--device": 1,
+            "--mlflow": 0,
+            "--regressor-path": 1,
+            "--classifier-path": 1,
+            "--heartbeat-minutes": 1,
+        },
+    )
+    # a worker sees one GPU (CUDA_VISIBLE_DEVICES), so cuda:<i> becomes cuda
+    device = "cuda" if args.device.startswith("cuda") else args.device
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_RUN")}
+    log_dir = suite_dir / "shards"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    running: dict[str, tuple] = {}  # device -> (process, job, job dir, start, log file)
+    failures: list[dict] = []
+    t0 = last = time.time()
+    print(f"adbench shards: {len(jobs)} jobs -> {len(devices)} GPUs", flush=True)
+    while jobs or running:
+        for dev in devices:
+            if dev not in running and jobs:
+                d, s, m = job = jobs.pop(0)
+                job_dir = log_dir / f"{d}_{s}_{m}"
+                cmd = [sys.executable, __file__, *base, "--regressor-path", path,
+                       "--datasets", d, "--adbench-splits", s, "--adbench-methods", m,
+                       "--device", device, "--out-dir", str(job_dir)]  # fmt: skip
+                log = open(log_dir / f"{d}_{s}_{m}.log", "w")  # noqa: SIM115 (closed when done)
+                proc = subprocess.Popen(
+                    cmd, stdout=log, stderr=subprocess.STDOUT,
+                    env={**env, "CUDA_VISIBLE_DEVICES": dev},
+                )  # fmt: skip
+                running[dev] = (proc, job, job_dir, time.time(), log)
+        time.sleep(5)
+        for dev, (proc, job, job_dir, start, log) in list(running.items()):
+            if proc.poll() is None:
+                continue
+            del running[dev]
+            log.close()
+            rows = adbench.read_results(job_dir / ADBENCH_SUITE / "results.csv")
+            if proc.returncode == 0 and len(rows):
+                path_out = suite_dir / "results.csv"
+                rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
+                print(f"adbench shards: {job} done in {_clock(time.time() - start)}", flush=True)
+            else:
+                d, s, m = job
+                failures.append(dict(dataset=d, split=s, method=m, error=f"exit {proc.returncode}"))
+                print(f"adbench shards: {job} FAILED (exit {proc.returncode})", flush=True)
+        if time.time() - last >= args.heartbeat_minutes * 60:
+            last = time.time()
+            busy = ", ".join(
+                f"GPU {dev}: {j[1]} {_clock(last - j[3])}" for dev, j in running.items()
+            )
+            print(f"adbench shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}", flush=True)
+    return failures
 
 
 def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: bool) -> None:

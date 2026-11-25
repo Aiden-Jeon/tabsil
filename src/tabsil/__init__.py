@@ -10,6 +10,8 @@ the part they implement (generic nouns); TabSil's numbers and the combination of
 - `hub`: save to and load from the Hugging Face Hub format (`save_pretrained`, `from_pretrained`)
 - `recipe`: TabSil's structure and inference defaults (`TabSilClassifier`, `TabSilRegressor`)
 - `forecast`: time series forecasting with the regression model (`TabSilForecaster`)
+- `unsupervised`: per-column conditional distributions, row log densities and outlier scores
+  (`TabSilUnsupervised`)
 - `utils`: device and seed helpers
 
 Training (priors, training loop, curriculum), evaluation (AMLB/CTR23, TabArena, BeyondArena,
@@ -39,6 +41,7 @@ if TYPE_CHECKING:
     from tabsil.forecast import TabSilForecaster
     from tabsil.hub import from_pretrained
     from tabsil.recipe import TabSilClassifier, TabSilRegressor
+    from tabsil.unsupervised import TabSilUnsupervised
 
 # Names loaded on first use -> the module defining them
 _LAZY = {
@@ -46,6 +49,7 @@ _LAZY = {
     "TabSilClassifier": "tabsil.recipe",
     "TabSilRegressor": "tabsil.recipe",
     "TabSilForecaster": "tabsil.forecast",
+    "TabSilUnsupervised": "tabsil.unsupervised",
 }
 
 
@@ -73,4 +77,5 @@ __all__ = [
     "TabSilClassifier",
     "TabSilRegressor",
     "TabSilForecaster",
+    "TabSilUnsupervised",
 ]
