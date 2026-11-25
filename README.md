@@ -13,7 +13,7 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 
 ## Results
 
-[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard), scored the way the public leaderboard is. TabSil places 11th of 99 methods.
+[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard), scored the way the public leaderboard is. TabSil places 11th of 99 methods; the table lists a few baselines, not every method above it.
 
 | Method | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
 | --- | --- | --- | --- | --- |
@@ -24,9 +24,9 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 | CatBoost (default) | 1340 (+37/−40) | 17.7 | 5.81 | 0.025 |
 | XGBoost (default) | 1182 (+51/−53) | 20.9 | 2.06 | 0.122 |
 
-- TabArena-Lite has 51 datasets, one split each. TabSil ran on 1×H100 with the default inference (8 preprocessing members, fit once per split). Elo puts RandomForest (default) at 1000, with a 95% CI. Lower is better for improvability, fit and infer.
+- TabArena-Lite has 51 datasets, one split each. TabSil ran on 1×H100 with the default inference (8 preprocessing members). Elo puts RandomForest (default) at 1000, with a 95% CI. Lower is better for improvability, fit and infer.
 - Every method on the leaderboard is 8-fold bagged; TabSil is fit once per split, and its fit only stores the context. So the Fit column is not like-for-like. The Infer column is comparable.
-- All Elo values come from the same run, which scores TabSil against the leaderboard's method pool. The baselines' CI, improvability and times are the public leaderboard's (v0.1.9.12, 98 methods). The live leaderboard has added methods since, so its numbers differ slightly.
+- All Elo values come from the same run, which recomputes every method's Elo from the leaderboard's public results with TabSil added to the pool. The baselines' CI, improvability and times are taken from the public leaderboard [v0.1.9.12](https://huggingface.co/spaces/TabArena/leaderboard/blob/3cffdcceb64f9cd6c6cbb5aa852a4f16296749bd/data/entrants_models/imputation_yes/splits_lite/tasks_all/datasets_all/website_leaderboard.csv) (98 methods, without TabSil), so they can differ slightly from the 99-method pool. The live leaderboard has added methods since, so its numbers differ too.
 - Fit and infer time are defined in [Evaluation](#evaluation). More results (AMLB, per-stage, per-task Elo) are on the [model card](https://huggingface.co/aiden-jeon/tabsil).
 
 ## Install
