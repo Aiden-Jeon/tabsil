@@ -11,6 +11,24 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 
 > Status: the TabSil v1 weights are on the Hugging Face Hub: [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil) (model card with the benchmark results).
 
+## Results
+
+[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard), scored the way the public leaderboard is. TabSil places 11th of 99 methods.
+
+| Method | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
+| --- | --- | --- | --- | --- |
+| TabPFN-3.5 (default) | 1858 (+154/−98) | 6.7 | 1.85 | 0.473 |
+| **TabSil** | **1727** (+106/−78) | 8.2 | 0.0143 | 0.805 |
+| TabICLv2 (default) | 1557 (+69/−59) | 12.5 | 0.73 | 0.137 |
+| RealTabPFN-2.5 (default) | 1514 (+58/−42) | 13.2 | 5.72 | 0.611 |
+| CatBoost (default) | 1340 (+37/−40) | 17.7 | 5.81 | 0.025 |
+| XGBoost (default) | 1182 (+51/−53) | 20.9 | 2.06 | 0.122 |
+
+- TabArena-Lite has 51 datasets, one split each. TabSil ran on 1×H100 with the default inference (8 preprocessing members, fit once per split). Elo puts RandomForest (default) at 1000, with a 95% CI. Lower is better for improvability, fit and infer.
+- Every method on the leaderboard is 8-fold bagged; TabSil is fit once per split, and its fit only stores the context. So the Fit column is not like-for-like. The Infer column is comparable.
+- All Elo values come from the same run, which scores TabSil against the leaderboard's method pool. The baselines' CI, improvability and times are the public leaderboard's (v0.1.9.12, 98 methods). The live leaderboard has added methods since, so its numbers differ slightly.
+- Fit and infer time are defined in [Evaluation](#evaluation). More results (AMLB, per-stage, per-task Elo) are on the [model card](https://huggingface.co/aiden-jeon/tabsil).
+
 ## Install
 
 Inference only:
