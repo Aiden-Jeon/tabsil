@@ -1117,7 +1117,7 @@ def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: b
     if use_mlflow:
         for name in artifacts:
             mlflow.log_artifact(str(out_dir / name), "eval")
-            log_fits_artifact(args)
+        log_fits_artifact(args)
 
 
 def summarize_uncertainty(rows: list[dict]) -> pd.DataFrame:
