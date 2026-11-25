@@ -165,6 +165,9 @@ def test_summary_and_cache_folder_keep_bagging_zero(monkeypatch, tmp_path):
     monkeypatch.setattr(arena, "try_public_leaderboard", lambda path: None)
     monkeypatch.setattr(arena, "compare_with_public", lambda *a: pd.DataFrame())
     monkeypatch.setattr(arena, "winrates", lambda per_split, ours: {})
+    sizes = pd.DataFrame(columns=list(arena.PER_1K_ROWS.values()), dtype=float)
+    monkeypatch.setattr(arena, "dataset_sizes", lambda context: sizes)
+    monkeypatch.setattr(arena, "baseline_times", lambda *a: {})
     summary = arena.run(
         tabarena.SUITE,
         None,
