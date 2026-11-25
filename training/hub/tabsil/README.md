@@ -46,7 +46,7 @@ In every stage, tables have at most 100 features (fewer for the longest tables).
 What differs from the TabICLv2 scripts (our choices):
 
 - **One multitask model, batch 256.** TabICLv2 trains separate classification and regression models with batch 64.
-- **Shorter stages.** The recipe in `tabsil_train.recipe` keeps the per-task table count of the scripts (250k / 20k / 5k steps). These weights were trained for 150k / 10k / 2k steps (`--steps`). A separate 250k stage-1 run did not do better than the 150k run: TabArena-Lite 1423 at 225k vs 1429 at 150k, and AMLB classification 0.9383 in both. In both runs the AMLB regression ratio rose during stage 1 (to 1.137 at 225k and 1.136 at 150k); stage 2 brings it back below 1.
+- **Shorter stages.** The recipe in `tabsil_train.recipe` keeps the per-task table count of the scripts (250k / 20k / 5k steps). These weights were trained for 150k / 10k / 2k steps (`--steps`). A separate 250k stage-1 run did not do better than the 150k run: TabArena-Lite 1423 at 225k vs 1429 at 150k, and AMLB classification 0.9383 in both (measured before the tabsil 0.1.0 inference change, which moved the 150k Elo to 1431). In both runs the AMLB regression ratio rose during stage 1 (to 1.137 at 225k and 1.136 at 150k); stage 2 brings it back below 1.
 - **Activation checkpointing** for tables longer than 2,048 rows in stages 2 and 3, to fit long tables in GPU memory. It changes memory and speed only.
 
 Compute: 32×H100 for about 30 hours (stage 1), 9.6 hours (stage 2) and 9.0 hours (stage 3), about 1,550 H100-hours. This does not count the 250k stage-1 run or shorter experiments.
@@ -71,9 +71,9 @@ The 29 AMLB classification and 28 regression datasets from the TabPFN v2 paper, 
 | minipfn TabPFN-3.5 | 0.9371 | 1.005 |
 | TabPFN v2 paper | 0.9323 | 1 |
 
-Classification: this model beats the paper on 25 of 29 datasets, ties on 1 (car, 1.000) and is below on 3: credit-g (−0.006), cmc (−0.002) and Australian (−0.001).
+Classification: this model beats the paper on 25 of 29 datasets, ties on 1 (car, 1.000) and is below on 3: credit-g (−0.005), cmc (−0.003) and Australian (−0.001).
 
-Regression: the median RMSE ratio is 0.983. 21 of 28 datasets are better than the paper and 25 of 28 are within 1.1×. The worst are socmob (1.22), auction_verification (1.21) and energy_efficiency (1.18); the best are SAT11-HAND-runtime-regression (0.87), geographical_origin_of_music (0.92) and cpu_activity (0.92).
+Regression: the median RMSE ratio is 0.982. 21 of 28 datasets are better than the paper and 25 of 28 are within 1.1×. The worst are socmob (1.22), auction_verification (1.21) and energy_efficiency (1.18); the best are SAT11-HAND-runtime-regression (0.87), geographical_origin_of_music (0.92) and cpu_activity (0.92).
 
 Most of the regression gain came from stage 2, the first stage with long tables: the ratio fell from 1.136 to 0.997. Stage 3 changed little on this suite.
 
@@ -83,28 +83,28 @@ Most of the regression gain came from stage 2, the first stage with long tables:
 
 | Method | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
 | --- | --- | --- | --- | --- |
-| Kumo-Tabular (default) | 2048 (+176/−114) | 2.9 | 2.33 | 0.254 |
-| LimiX-2 (default) | 1924 (+168/−118) | 3.2 | 31.16 | 8.935 |
-| Kumo-Tabular-Medium (default) | 1902 (+141/−101) | 4.9 | 1.36 | 0.150 |
-| TabPFN-3.5 (default) | 1858 (+148/−96) | 6.9 | 1.85 | 0.473 |
-| Kumo-Tabular-Small (default) | 1802 (+90/−63) | 8.2 | 0.79 | 0.092 |
-| Causilo (default) | 1798 (+95/−70) | 8.3 | 0.67 | 0.104 |
-| TabFM (default) | 1798 (+130/−108) | 7.1 | 16.13 | 6.663 |
-| TabPFN-3.5-Fast (default) | 1787 (+90/−57) | 8.6 | 0.73 | 0.153 |
-| Mitra-v2 (default) | 1751 (+107/−74) | 7.8 | 59.03 | 0.886 |
+| Kumo-Tabular (default) | 2046 (+179/−113) | 2.9 | 2.33 | 0.254 |
+| LimiX-2 (default) | 1924 (+167/−117) | 3.2 | 31.16 | 8.935 |
+| Kumo-Tabular-Medium (default) | 1902 (+140/−100) | 4.9 | 1.36 | 0.150 |
+| TabPFN-3.5 (default) | 1858 (+147/−96) | 6.9 | 1.85 | 0.473 |
+| Kumo-Tabular-Small (default) | 1801 (+90/−63) | 8.2 | 0.79 | 0.092 |
+| Causilo (default) | 1798 (+95/−71) | 8.3 | 0.67 | 0.104 |
+| TabFM (default) | 1797 (+131/−108) | 7.1 | 16.13 | 6.663 |
+| TabPFN-3.5-Fast (default) | 1786 (+90/−57) | 8.6 | 0.73 | 0.153 |
+| Mitra-v2 (default) | 1751 (+107/−75) | 7.8 | 59.03 | 0.886 |
 | EXAONE-Tabular (default) | 1741 (+72/−50) | 9.3 | 1.98 | 0.582 |
-| **TabSil (this model)** | **1727** (+106/−78) | 8.2 | 0.0143 | 0.805 |
+| **TabSil (this model)** | **1726** (+104/−77) | 8.2 | 0.0141 | 0.805 |
 | TabPFN-3 (default) | 1619 (+74/−52) | 11.1 | 1.29 | 0.383 |
 | TabICLv2 (default) | 1557 (+68/−58) | 12.6 | 0.73 | 0.137 |
-| RealTabPFN-2.5 (default) | 1514 (+57/−42) | 13.3 | 5.72 | 0.611 |
+| RealTabPFN-2.5 (default) | 1514 (+57/−41) | 13.3 | 5.72 | 0.611 |
 | CatBoost (default) | 1339 (+35/−40) | 17.8 | 5.81 | 0.025 |
 | XGBoost (default) | 1182 (+50/−53) | 21.0 | 2.06 | 0.122 |
 
-- All values come from the same run. The pool is the public leaderboard [v0.1.9.12](https://huggingface.co/spaces/TabArena/leaderboard/blob/3cffdcceb64f9cd6c6cbb5aa852a4f16296749bd/data/entrants_models/imputation_yes/splits_lite/tasks_all/datasets_all/website_leaderboard.csv) (98 methods) plus this model, 99 methods. The run recomputes every method's Elo, CI and improvability from the leaderboard's public results with this model in the pool, so they differ slightly from v0.1.9.12 (Elo by at most 3 for the methods shown). Fit and infer times are the same as on the leaderboard. The live leaderboard has added methods since, so its numbers differ too.
+- All values come from the same run. The pool is the public leaderboard [v0.1.9.12](https://huggingface.co/spaces/TabArena/leaderboard/blob/3cffdcceb64f9cd6c6cbb5aa852a4f16296749bd/data/entrants_models/imputation_yes/splits_lite/tasks_all/datasets_all/website_leaderboard.csv) (98 methods) plus this model, 99 methods. The run recomputes every method's Elo, CI and improvability from the leaderboard's public results with this model in the pool, so they differ slightly from v0.1.9.12 (Elo by at most 4 for the methods shown). Fit and infer times are the same as on the leaderboard. The live leaderboard has added methods since, so its numbers differ too.
 - Every method on the public leaderboard is 8-fold bagged; this model is fit once per split, and its fit only stores the context. So the Fit column is not like-for-like. The Infer column is comparable.
 - The Elo CI is 95%. Fit and infer are median seconds per 1K train and test rows. Lower is better for improvability, fit and infer.
 
-By problem type this model's Elo is 1699 (classification) and 2078 (regression). By stage, the Elo was 1429 after stage 1, 1725 after stage 2 and 1727 after stage 3; almost all of the stage-2 gain is regression (1187 → 2074). minipfn TabPFN-3.5 scored 1563 with the same protocol (measured in a separate run, so against a slightly different pool).
+By problem type this model's Elo is 1698 (classification) and 2080 (regression). By stage, the Elo was 1431 after stage 1, 1727 after stage 2 and 1726 after stage 3; almost all of the stage-2 gain is regression (1188 → 2074). minipfn TabPFN-3.5 scored 1563 with the same protocol (measured in a separate run, so against a slightly different pool).
 
 ### BeyondArena
 
@@ -161,9 +161,9 @@ The v1 weights on `main` are also tagged `v1`; `TabSilClassifier()` and `TabSilR
 
 | Branch | Weights | Mean ROC AUC | RMSE ratio | TabArena-Lite Elo |
 | --- | --- | --- | --- | --- |
-| `stage1-150k` | `sha256:46ff015e71f8` | 0.9383 | 1.136 | 1429 |
-| `stage2-10k` | `sha256:f7d460f62732` | 0.9390 | 0.997 | 1725 |
-| `main` (stage 3, +2k) | `sha256:e03c8c32849a` | 0.9390 | 0.996 | 1727 |
+| `stage1-150k` | `sha256:46ff015e71f8` | 0.9383 | 1.136 | 1431 |
+| `stage2-10k` | `sha256:f7d460f62732` | 0.9390 | 0.997 | 1727 |
+| `main` (stage 3, +2k) | `sha256:e03c8c32849a` | 0.9390 | 0.996 | 1726 |
 
 ```python
 clf = TabSilClassifier("aiden-jeon/tabsil@stage2-10k")
