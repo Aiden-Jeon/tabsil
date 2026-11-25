@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/tabsil-logo-dark.svg">
+    <img alt="TabSil" src="assets/tabsil-logo.svg" width="320">
+  </picture>
+</p>
+
 # TabSil
 
 TabSil is a tabular foundation model. One model handles both classification and regression: give it a training table and it predicts test rows in a single forward pass (in-context learning), with no gradient steps on your data. It is trained only on synthetic tables drawn from a structural causal model prior.

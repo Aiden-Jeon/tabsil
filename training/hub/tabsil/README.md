@@ -10,6 +10,8 @@ tags:
   - tabular-regression
 ---
 
+![TabSil](images/tabsil-banner.png)
+
 # TabSil
 
 TabSil is a tabular foundation model. One set of weights handles both classification and regression: give it a training table and it predicts the test rows in a single forward pass (in-context learning), with no gradient steps on your data. It was trained only on synthetic tables from the TabICLv2 graph SCM prior. Code: [Aiden-Jeon/tabsil](https://github.com/Aiden-Jeon/tabsil) (model `src/tabsil/models/column_row_transformer.py`, structure and inference `src/tabsil/recipe.py`, training `training/src/tabsil_train/recipe.py`).
