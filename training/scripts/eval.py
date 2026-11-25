@@ -67,6 +67,12 @@ columns, and `--min-temperature` drops lower temperatures from the pool. The pap
 `--latency` (arenas) records each fit's one-row prediction time (median of `LATENCY_REPEATS`) in
 `<out-dir>/fits_<suite>.jsonl`, measured in a hook outside TabArena's train and inference timing.
 
+Time is reported as on the TabArena leaderboard: train time per 1K train rows and prediction time
+per 1K test rows (s), averaged over a dataset's splits, median over datasets
+(`time_{train,infer}_s_per_1K_median`). The arenas put it in `summary.json` (with the raw seconds
+and the baselines' value on the same splits, `time_baselines`) and `comparison.csv`; AMLB writes
+each fold's fit and prediction time to `<out-dir>/fits_<suite>.jsonl` and `eval_rows.csv`.
+
 On AI Runtime (`training/scripts/eval.yaml`, `training/scripts/eval_arena.yaml`) results are
 logged to the platform's MLflow run (`MLFLOW_RUN_ID`). Locally, `--mlflow` creates a new run in the
 `TABSIL_EXPERIMENT` experiment (default `tabsil`).
@@ -1188,12 +1194,24 @@ def run_shards(
     return results
 
 
+def per_1k_text(t: dict, suffix: str = "") -> str:
+    """TabArena leaderboard time (median s per 1K rows, `arena.run_times`) as "train / infer"."""
+    nan = float("nan")
+    train = t.get(f"time_train_s_per_1K_median{suffix}", nan)
+    infer = t.get(f"time_infer_s_per_1K_median{suffix}", nan)
+
+    def fmt(v: float) -> str:  # 3 significant digits for small times, no exponent for large
+        return f"{v:.0f}" if abs(v) >= 1000 else f"{v:.3g}"
+
+    return f"{fmt(train)}/{fmt(infer)}"
+
+
 def print_arena_summary(summary: dict) -> None:
     def line(label: str, s: dict) -> str:
         if s.get("elo") is None:
             return f"{label:24s} no splits with results (imputed {s['imputed_pct']:.1f}%)"
         xgb = s.get("winrate", {}).get("XGBoost (default)", {})
-        t = s.get("time", {})  # split means
+        t = s.get("time", {})  # split means; per 1K rows as on the leaderboard
         return (
             f"{label:24s} elo {s['elo']:.0f} (+{s['elo_ci_plus']:.0f}/-{s['elo_ci_minus']:.0f}) "
             f"score {s['score']:.3f} improvability {s['improvability']:.2f}% "
@@ -1201,10 +1219,22 @@ def print_arena_summary(summary: dict) -> None:
             f"win vs XGB(default) {xgb.get('all', float('nan')):.3f} "
             f"position {s['position']}/{s['n_methods']} "
             f"time train {t.get('time_train_s_mean', float('nan')):.1f}s "
-            f"infer {t.get('time_infer_s_mean', float('nan')):.1f}s"
+            f"infer {t.get('time_infer_s_mean', float('nan')):.1f}s "
+            # run: splits we ran; leaderboard: all splits, imputed ones with the fill method's time
+            f"s/1K train/infer run {per_1k_text(t)} leaderboard {per_1k_text(t, '_leaderboard')}"
         )
 
+    def baselines(label: str, s: dict) -> str | None:
+        # baselines' leaderboard time on the same splits (run: only the splits we ran)
+        parts = [
+            f"{b} run {per_1k_text(t)} leaderboard {per_1k_text(t, '_leaderboard')}"
+            for b, t in s.get("time_baselines", {}).items()
+        ]
+        return f"{label:24s} s/1K train/infer: " + ", ".join(parts) if parts else None
+
     print(line(summary["suite"], summary))
+    if (text := baselines(f"  {summary['suite']} vs", summary)) is not None:
+        print(text)
     for label, s in summary["breakdown"].items():
         print(line(f"  {label}", s))
 
@@ -1343,11 +1373,14 @@ def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: b
             task, factories[suite], n_folds=args.folds, uncertainty=args.uncertainty
         )
         rows.extend({**r, "suite": suite} for r in task_rows)
+        write_amlb_fits(args, suite, task, task_rows)
         score = float(np.nanmean([r["score"] for r in task_rows]))
         paper = bm.paper_scores(suite)[task_id]
+        t = bm.time_medians(task_rows)
         print(
             f"[{i}/{len(tasks)}] {suite:14s} {task.name:40s} {task.X.shape} "
-            f"score {score:.4f} paper {paper:.4f} ({time.time() - start:.0f}s)",
+            f"score {score:.4f} paper {paper:.4f} s/1K train/infer {per_1k_text(t)} "
+            f"({time.time() - start:.0f}s)",
             flush=True,
         )
         pd.DataFrame(rows).to_csv(out_dir / "eval_rows.csv", index=False)
@@ -1357,14 +1390,17 @@ def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: b
     print(per_dataset.round(4).to_string(index=False))
     for suite, group in per_dataset.groupby("suite"):
         metric = "roc_auc" if suite == "classification" else "neg_rmse"
+        times = bm.time_medians([r for r in rows if r["suite"] == suite])
         print(
             f"{suite}: datasets {len(group)}, mean score {group['score'].mean():.4f}, "
-            f"paper {group['paper'].mean():.4f}, mean |diff| {group['diff'].abs().mean():.4f}"
+            f"paper {group['paper'].mean():.4f}, mean |diff| {group['diff'].abs().mean():.4f}, "
+            f"s/1K train/infer {per_1k_text(times)}"
         )
         if use_mlflow:
             mlflow.log_metric(f"{suite}_mean_{metric}", group["score"].mean())
             mlflow.log_metric(f"{suite}_paper_mean_{metric}", group["paper"].mean())
             mlflow.log_metric(f"{suite}_mean_abs_diff", group["diff"].abs().mean())
+            mlflow.log_metrics({f"{suite}_{k}": v for k, v in times.items()})
     artifacts = ["eval_rows.csv", "eval_per_dataset.csv"]
     if args.uncertainty:
         report_uncertainty(rows, out_dir, use_mlflow)
@@ -1376,9 +1412,35 @@ def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: b
         log_fits_artifact(args)
 
 
+def write_amlb_fits(args: argparse.Namespace, suite: str, task, task_rows: list[dict]) -> None:
+    """Append one line per fold to `fits_<suite>.jsonl`, in the arena fit record's format
+    (`RecordedEstimator`: suite, task, dataset, rows fit saw, features, fit_seconds) plus the task
+    id, fold, the fold's train / test rows, prediction time and both times per 1K fold rows
+    (`amlb.per_1k`)."""
+    path = fits_path(args)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        for r in task_rows:
+            record = {
+                "suite": args.suite,
+                "task": suite,
+                "dataset": task.name,
+                "task_id": task.task_id,
+                "fold": r["fold"],
+                "rows": r["fit_rows"],  # as the arena record: rows fit saw
+                "features": int(task.X.shape[1]),
+                "fit_seconds": r["fit_seconds"],
+                "train_rows": r["train_rows"],
+                "test_rows": r["test_rows"],
+                "predict_seconds": r["predict_seconds"],
+                **bm.per_1k(r),
+            }
+            f.write(json.dumps(record, default=float) + "\n")
+
+
 def summarize_uncertainty(rows: list[dict]) -> pd.DataFrame:
     """Per-dataset fold means of the uncertainty metrics (`tabsil_train.benchmarks.uncertainty`)."""
-    return unc.dataset_means(rows, exclude=("score",))
+    return unc.dataset_means(rows, exclude=("score", *bm.TIME_KEYS))
 
 
 def report_uncertainty(rows: list[dict], out_dir: Path, use_mlflow: bool) -> None:

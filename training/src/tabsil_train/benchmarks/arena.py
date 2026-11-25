@@ -14,6 +14,9 @@ and validation), the rules for skipping datasets the model cannot handle, and th
   method per dataset 1, median method 0, negatives clipped to 0), improvability (mean % error
   above the best method), and rank. Per-split results of ~100 baseline methods are downloaded on
   first use into `~/.cache/tabarena`.
+- Time follows the leaderboard (`run_times`): train time per 1K train rows and inference time
+  per 1K test rows, averaged over each dataset's splits, median over datasets. The raw seconds
+  (mean, total) of the splits actually run are kept too.
 - Splits beyond the model limits (`ModelLimits`: train rows, features, classes, problem type) are
   not run. As on the leaderboard, they are filled with RandomForest (default) results (imputed)
   and the imputed fraction is reported.
@@ -236,11 +239,13 @@ def run(
     - `results_per_split.csv`: this method's split results (`metric_error` etc., incl. imputed)
     - `leaderboard.csv`: leaderboard with baselines (`tabarena` format, all methods)
     - `leaderboard_<name>.csv`: per-subset leaderboards (`breakdown`)
-    - `comparison.csv`: public leaderboard (same splits) and this run's scores side by side per
-      method
-    - `summary.json`: this method's scores, imputed fraction, win rates, train/inference time of
-      the splits actually run, and settings (if the public CSV cannot be fetched, the public
-      columns of `comparison.csv` are empty)
+    - `comparison.csv`: public leaderboard (same splits) and this run's scores and median
+      train/predict time per 1K rows side by side per method
+    - `summary.json`: this method's scores, imputed fraction, win rates, train/inference time
+      (`run_times`: raw seconds of the splits actually run, and TabArena's median seconds per 1K
+      rows), the same per-1K time of `TIME_BASELINES` on the same splits (`time_baselines`), and
+      settings (if the public CSV cannot be fetched, the public columns of `comparison.csv` are
+      empty)
     - `compare.log`: output of the `tabarena` aggregation
 
     When splitting across GPUs (`dataset_queue`, the eval script's `--shards`):
@@ -310,6 +315,7 @@ def run(
     if results:
         context.register(results, scope_to_valid_tasks=False)
     pool = model_pool(context, method)
+    sizes = dataset_sizes(context)
 
     log = out_dir / "compare.log"
     leaderboard, per_split = _quiet(
@@ -359,12 +365,13 @@ def run(
         "skip_reasons": _reason_counts(grid["skip_reason"]),
         **(_scores(leaderboard, name) if name else dict.fromkeys(SCORE_KEYS)),
         "winrate": winrates(per_split, ours),
-        "time": run_times(ours),
+        "time": run_times(ours, sizes, _board_row(leaderboard, name)),
+        "time_baselines": baseline_times(leaderboard, per_split, ours, sizes),
         "breakdown": {},
     }
     if breakdown and name:
         for label, (subset, public_csv) in suite.breakdown.items():
-            part = _quiet(_breakdown, log, context, pool, subset, name, public_csv)
+            part = _quiet(_breakdown, log, context, pool, subset, name, public_csv, sizes)
             if part is None:
                 continue
             board, scores = part
@@ -506,7 +513,7 @@ SCORE_KEYS = (
 def _scores(leaderboard: pd.DataFrame, name: str) -> dict:
     """This method's scores from the leaderboard, in public leaderboard units: score is
     1 - normalized error, improvability and imputed are %, harmonic rank is 1 / mrr."""
-    row = leaderboard[leaderboard["method"] == name].iloc[0]
+    row = _board_row(leaderboard, name)
     return {
         "elo": float(row["elo"]),
         "elo_ci_plus": float(row["elo+"]),
@@ -536,17 +543,110 @@ def with_imputed(per_split: pd.DataFrame, name: str, fillna: str) -> pd.DataFram
 
 
 TIME_COLUMNS = ("time_train_s", "time_infer_s")
+# TabArena's leaderboard time: seconds per 1K rows, train time over train rows and inference time
+# over test rows. {time column: row count column of `dataset_sizes`}
+PER_1K_ROWS = {"time_train_s": "num_instances_train", "time_infer_s": "num_instances_test"}
+# methods whose time is put next to ours in `summary.json` (`time_baselines`)
+TIME_BASELINES = WINRATE_BASELINES
 
 
-def run_times(ours: pd.DataFrame) -> dict:
-    """Mean and total train/inference time (s) of splits actually run (not imputed). `ours` is the
-    output of `with_imputed`. Empty dict if there are no time columns."""
+def dataset_sizes(context) -> pd.DataFrame:
+    """Per dataset (index), the mean train and test row count over all its splits in the task
+    metadata (`num_instances_train`, `num_instances_test`), the row counts TabArena divides times
+    by (`LeaderboardReporter.compute_results`, "add times per 1K samples"). The mean is over all
+    of the dataset's splits, not only those of the suite's subset, as in TabArena."""
+    columns = list(PER_1K_ROWS.values())
+    frame = context.task_metadata_collection.to_dataframe()  # one row per split, as `split_rows`
+    if frame.empty or not {"tabarena_task_name", *columns} <= set(frame.columns):
+        return pd.DataFrame(columns=columns, dtype=float)
+    sizes = frame.groupby("tabarena_task_name")[columns].mean().astype(float)
+    return sizes.rename_axis("dataset")
+
+
+def per_1k_medians(results: pd.DataFrame, sizes: pd.DataFrame) -> dict:
+    """TabArena's leaderboard time (`median_time_train_s_per_1K`, `median_time_infer_s_per_1K`)
+    of one method's split results: each split's time x 1000 / the dataset's row count
+    (`dataset_sizes`), averaged over the splits of each dataset, then the median over datasets
+    (`bencheval.BenchmarkEvaluator.aggregate`). Keys `time_{train,infer}_s_per_1K_median`; a key
+    is missing if no split has that time or a row count."""
+    out = {}
+    if not len(results) or "dataset" not in results:
+        return out
+    for col, size_col in PER_1K_ROWS.items():
+        if col not in results or size_col not in sizes:
+            continue
+        per_1k = results[col] * 1000.0 / results["dataset"].map(sizes[size_col])
+        per_dataset = per_1k.groupby(results["dataset"]).mean().dropna()
+        if len(per_dataset):
+            out[f"{col}_per_1K_median"] = float(per_dataset.median())
+    return out
+
+
+def run_times(
+    ours: pd.DataFrame,
+    sizes: pd.DataFrame | None = None,
+    leaderboard_row: pd.Series | None = None,
+) -> dict:
+    """Train/inference time of this method. `ours` is the output of `with_imputed`.
+
+    - `time_{train,infer}_s_mean`, `_total`: mean and total seconds of splits actually run (not
+      imputed). Empty dict if there are no time columns.
+    - With `sizes` (`dataset_sizes`), `time_{train,infer}_s_per_1K_median`: TabArena's leaderboard
+      time (`per_1k_medians`) over the splits actually run.
+    - With `leaderboard_row` (this method's row of the `tabarena` leaderboard),
+      `time_{train,infer}_s_per_1K_median_leaderboard`: the leaderboard's own value. It covers all
+      splits, so imputed splits count with the time of the method they were filled from
+      (RandomForest (default)); this is the value in `comparison.csv` and the public table.
+    """
     run = ours[~ours["imputed"].astype(bool)]
     out = {}
     for col in TIME_COLUMNS:
         if col in run and len(run):
             out[f"{col}_mean"] = float(run[col].mean())
             out[f"{col}_total"] = float(run[col].sum())
+    if sizes is not None:
+        out.update(per_1k_medians(run, sizes))
+    if leaderboard_row is not None:
+        out.update(_leaderboard_times(leaderboard_row))
+    return out
+
+
+def _leaderboard_times(row: pd.Series) -> dict:
+    # a `tabarena` leaderboard row's own per-1K times (`median_time_*_per_1K`), NaN skipped
+    out = {}
+    for col in TIME_COLUMNS:
+        value = row.get(f"median_{col}_per_1K")
+        if value is not None and not pd.isna(value):
+            out[f"{col}_per_1K_median_leaderboard"] = float(value)
+    return out
+
+
+def baseline_times(
+    leaderboard: pd.DataFrame,
+    per_split: pd.DataFrame,
+    ours: pd.DataFrame,
+    sizes: pd.DataFrame,
+) -> dict:
+    """Each of `TIME_BASELINES`' TabArena leaderboard time on the same splits as ours, keyed like
+    `run_times`: `_leaderboard` is the baseline's leaderboard value (all splits, same scope as our
+    `_leaderboard` value), the plain keys cover only the splits we actually ran (same scope as our
+    plain keys). `ours` is the output of `with_imputed`. Baselines without results are skipped."""
+    ran = ours[~ours["imputed"].astype(bool)]
+    ran_splits = set(zip(ran["dataset"], ran["fold"], strict=True))
+    split_keys = per_split["method"].map(_method_key)
+    board_keys = leaderboard["method"].map(_method_key)
+    out = {}
+    for baseline, internal in TIME_BASELINES.items():
+        rows = per_split[split_keys == _method_key(internal)]
+        board = leaderboard[board_keys == _method_key(internal)]
+        if not len(rows) and not len(board):
+            continue
+        on_ours = rows[[k in ran_splits for k in zip(rows["dataset"], rows["fold"], strict=True)]]
+        times = per_1k_medians(on_ours, sizes)
+        if len(board):
+            times.update(_leaderboard_times(board.iloc[0]))
+        times["run_splits"] = len(on_ours)
+        out[baseline] = times
     return out
 
 
@@ -578,7 +678,19 @@ def winrates(per_split: pd.DataFrame, ours: pd.DataFrame) -> dict:
     return out
 
 
-def _breakdown(context, pool, subset: tuple[str, ...], name: str, public_csv: str | None):
+def _board_row(leaderboard: pd.DataFrame, name: str | None) -> pd.Series | None:
+    rows = leaderboard[leaderboard["method"] == name] if name else leaderboard.iloc[:0]
+    return rows.iloc[0] if len(rows) else None
+
+
+def _breakdown(
+    context,
+    pool,
+    subset: tuple[str, ...],
+    name: str,
+    public_csv: str | None,
+    sizes: pd.DataFrame,
+):
     try:
         board, per_split = context.compare(
             output_dir=None, subset=list(subset), ta_results=pool, return_results=True
@@ -595,7 +707,8 @@ def _breakdown(context, pool, subset: tuple[str, ...], name: str, public_csv: st
         "splits": int(len(ours)),
         "imputed_pct": 100.0 * float(ours["imputed"].mean()),
         "winrate": winrates(per_split, ours),
-        "time": run_times(ours),
+        "time": run_times(ours, sizes, _board_row(board, name)),
+        "time_baselines": baseline_times(board, per_split, ours, sizes),
     }
     if public_csv:
         website = context.leaderboard_to_website_format(leaderboard=board)
@@ -632,7 +745,8 @@ def display_name(model: str) -> str:
 def compare_with_public(
     website: pd.DataFrame, public: pd.DataFrame | None, name: str | None
 ) -> pd.DataFrame:
-    """Per method, public leaderboard Elo/scores next to the values recomputed in this run.
+    """Per method, public leaderboard Elo/scores and median train/predict time per 1K rows next to
+    the values recomputed in this run.
     This run's method (`name`) has empty public values. If `public` is None, all public columns
     are empty. Sorted by Elo."""
     cols = {
@@ -641,6 +755,9 @@ def compare_with_public(
         "Score [⬆️]": "score",
         "Improvability (%) [⬇️]": "improvability",
         "Imputed (%) [⬇️]": "imputed_pct",
+        # TabArena leaderboard time (`median_time_{train,infer}_s_per_1K`, `run_times`)
+        "Median Train Time (s/1K) [⬇️]": "train_s_per_1K",
+        "Median Predict Time (s/1K) [⬇️]": "infer_s_per_1K",
     }
     ours = website.copy()
     ours["name"] = ours["Model"].map(display_name)
