@@ -467,21 +467,23 @@ def _predict_ways(predict, X_test):
     return full, {"alone": alone, "reversed": reversed_, "twin": twin}
 
 
+@pytest.mark.parametrize("train_context", [True, False], ids=["context", "joint"])
 @pytest.mark.parametrize("chunked", [False, True])
 @pytest.mark.parametrize("table", [0, 1], ids=["numeric", "nan_and_categorical"])
-def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunked):
+def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunked, train_context):
     X, y = _inductive_tables()[table]
     X = pd.DataFrame(X)
     model = _tiny_model()
     if chunked:
         model.inference_chunk_cells = 64  # force the row-chunked forward on this small table
-    clf = TabSilClassifier(model, n_estimators=3).fit(X[:60], (y[:60] > 0).astype(int))
-    reg = TabSilRegressor(model, torch.linspace(-4, 4, 33), n_estimators=3).fit(X[:60], y[:60])
+    kw = {"n_estimators": 3, "train_context": train_context}
+    clf = TabSilClassifier(model, **kw).fit(X[:60], (y[:60] > 0).astype(int))
+    reg = TabSilRegressor(model, torch.linspace(-4, 4, 33), **kw).fit(X[:60], y[:60])
+    assert (clf.contexts_ is not None) == train_context
     # The model inputs of a test row are the same bits alone, in another order or next to a copy
     for est in (clf, reg):
-        y_trains = [np.zeros(60)] * len(est.preprocessors_)
         inputs = {
-            name: [x[0, 60:] for _, x, _ in est._iter_inputs(rows, y_trains)]
+            name: est._test_inputs(rows)
             for name, rows in {
                 "full": X[60:],
                 "alone": X[60:61],
@@ -489,8 +491,9 @@ def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunke
                 "twin": pd.concat([X[60:61], X[60:]]),
             }.items()
         }
-        for full, alone, rev, twin in zip(*inputs.values(), strict=True):
-            for same in (alone[0], full[0]), (twin[1:], full), (rev.flip(0), full):
+        for i in range(len(est.preprocessors_)):
+            full, alone, rev, twin = (get(i) for get in inputs.values())
+            for same in (alone[0], full[0]), (twin[1:], full), (rev[::-1], full):
                 np.testing.assert_array_equal(*same)  # NaN cells (missing) compare equal
     # So predictions differ only by float32 rounding, which depends on the batch shape (up to
     # about 2e-6 on this tiny random model, more with the row-chunked forward); a
@@ -499,3 +502,97 @@ def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunke
         full, ways = _predict_ways(predict, X[60:])
         for name, pred in ways.items():
             np.testing.assert_allclose(pred, full[: len(pred)], atol=1e-5, rtol=0, err_msg=name)
+
+
+def _context_tables():
+    rng = np.random.default_rng(1)
+    X = pd.DataFrame(rng.normal(size=(90, 7)), columns=[f"x{i}" for i in range(7)])
+    X["cat"] = pd.Categorical(rng.choice(list("pqrs"), 90))  # one-hot in members that pick it
+    X.loc[rng.random(90) < 0.1, "x1"] = np.nan
+    y = X["x0"].to_numpy() + 0.3 * rng.normal(size=90)
+    return X, y
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+@pytest.mark.parametrize(
+    "setting", ["all_columns", "column_subsets", "one_per_forward", "many_classes"]
+)
+def test_train_context_predictions_equal_the_joint_forward(setting, chunked):
+    # Fit-time train contexts (`train_context=True`, the default) give the predictions of running
+    # the training and test rows together (`train_context=False`) within float32 rounding
+    X, y = _context_tables()
+    kw = {"n_estimators": 4}
+    if setting == "column_subsets":  # members with and without the one-hot column: several runs
+        kw.update(max_features_per_member=4, feature_subsampling="random")
+    model = _tiny_model() if setting != "many_classes" else tiny_model(n_out=10)
+    if chunked:
+        model.inference_chunk_cells = 64
+    labels = (y > 0).astype(int) if setting != "many_classes" else np.digitize(y, [-1, 0, 1]) * 4
+    if setting == "many_classes":  # 13 classes over 10 target embeddings (grouped)
+        labels = np.arange(90) % 13
+    borders = torch.linspace(-4, 4, 33)
+    estimators = {}
+    for on in (True, False):
+        clf = EnsembleClassifier(model, train_context=on, **kw).fit(X[:60], labels[:60])
+        reg = TabSilRegressor(model, borders, train_context=on, **kw).fit(X[:60], y[:60])
+        if setting == "one_per_forward":
+            clf.predict_batch_bytes = reg.predict_batch_bytes = 1
+        estimators[on] = clf, reg
+    clf, reg = estimators[True]
+    assert clf.contexts_ is not None and reg.contexts_ is not None
+    assert estimators[False][0].contexts_ is None
+    if setting == "column_subsets":
+        assert len({p.order.size for p in clf.preprocessors_}) > 1 and len(clf.contexts_) > 1
+    else:
+        assert [(a, b) for a, b, _ in clf.contexts_] == [(0, 4)]  # one batch of 4 members
+    (clf_joint, reg_joint), X_test = estimators[False], X[60:]
+    np.testing.assert_allclose(
+        clf.predict_proba(X_test), clf_joint.predict_proba(X_test), atol=1e-5, rtol=0
+    )
+    np.testing.assert_allclose(reg.predict(X_test), reg_joint.predict(X_test), atol=1e-5, rtol=0)
+    log_p, b = reg.predict_distribution(X_test)
+    log_p_joint, b_joint = reg_joint.predict_distribution(X_test)
+    assert torch.equal(b, b_joint)
+    torch.testing.assert_close(log_p.exp(), log_p_joint.exp(), atol=1e-5, rtol=0)
+
+
+def test_train_context_falls_back_to_the_joint_forward_above_its_budget():
+    X, y = _context_tables()
+    clf = EnsembleClassifier(_tiny_model(), n_estimators=2)
+    clf.train_context_device_bytes = 0  # no room: predict runs the training rows each time
+    clf.fit(X[:60], (y[:60] > 0).astype(int))
+    assert clf.contexts_ is None and clf.X_trains_ is not None
+    full = EnsembleClassifier(_tiny_model(), n_estimators=2).fit(X[:60], (y[:60] > 0).astype(int))
+    assert full.X_trains_ is None  # the contexts replace the transformed training rows
+    np.testing.assert_allclose(
+        clf.predict_proba(X[60:]), full.predict_proba(X[60:]), atol=1e-5, rtol=0
+    )
+
+
+def test_train_context_bytes_counts_the_context():
+    model = _tiny_model()
+    with torch.inference_mode():
+        x, y = torch.randn(2, 30, 5), torch.randint(0, 3, (2, 30)).float()
+        ctx = model.train_context(x, y, "classification")
+    # an upper bound: the labels are counted at the class cap
+    estimate = model.train_context_bytes(30, 5, batch=2, attention_itemsize=4)
+    assert ctx.nbytes <= estimate
+    labels = 2 * 30 * (model.max_classes - 3) * 4
+    assert estimate - labels == ctx.nbytes
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_train_context_predictions_equal_the_joint_forward_on_cuda():
+    # Under bfloat16 autocast the training rows go through other matrix shapes with and without
+    # the train context, so predictions differ by bf16 rounding (as when the test rows are
+    # predicted in another batch)
+    X, y = _context_tables()
+    model = _tiny_model()
+    labels = (y > 0).astype(int)
+    kw = {"n_estimators": 4, "device": "cuda"}
+    on = EnsembleClassifier(model, **kw).fit(X[:60], labels[:60])
+    off = EnsembleClassifier(model, train_context=False, **kw).fit(X[:60], labels[:60])
+    assert on.contexts_ is not None and on.contexts_[0][2].icl_kv[0][0].dtype == torch.bfloat16
+    got, want = on.predict_proba(X[60:]), off.predict_proba(X[60:])
+    print("cuda context vs joint max |diff|", np.abs(got - want).max())
+    np.testing.assert_allclose(got, want, atol=5e-3, rtol=0)

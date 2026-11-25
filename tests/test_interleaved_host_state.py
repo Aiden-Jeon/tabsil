@@ -170,9 +170,9 @@ def test_held_state_stays_on_device_when_it_fits(monkeypatch):
     offload = []
     real = ColumnRowTransformer._rows_interleaved_offload
 
-    def spy(self, *args):
+    def spy(self, *args, **kwargs):
         offload.append(True)
-        return real(self, *args)
+        return real(self, *args, **kwargs)
 
     monkeypatch.setattr(ColumnRowTransformer, "_rows_interleaved_offload", spy)
     assert _rel(_forward(model, x, yc, "classification"), want) < OUTPUT_TOL
@@ -320,7 +320,7 @@ def test_hold_host_state_grows_and_releases_on_error(monkeypatch):
     assert model._held_host_state is None and not model._holding_host_state
 
 
-def test_ensemble_holds_one_state_per_predict(monkeypatch):
+def test_ensemble_holds_one_state_per_pass_over_the_training_rows(monkeypatch):
     import numpy as np
 
     from tabsil.inference.ensemble import EnsembleClassifier
@@ -329,13 +329,23 @@ def test_ensemble_holds_one_state_per_predict(monkeypatch):
     model.inference_chunk_cells = 37
     rng = np.random.default_rng(0)
     X, y = rng.normal(size=(40, 4)), rng.integers(0, 3, size=40)
-    clf = EnsembleClassifier(model, n_estimators=3, member_kinds=("standard",)).fit(X, y)
+    kw = {"n_estimators": 3, "member_kinds": ("standard",)}
+    clf = EnsembleClassifier(model, train_context=False, **kw).fit(X, y)
     want = clf.predict_proba(X[:9])
     events = _counting(monkeypatch)
     got = clf.predict_proba(X[:9])
     assert np.array_equal(got, want)
-    # Three members share one buffer, released when predict ends
+    # Without train contexts every predict runs the training rows: three members share one
+    # buffer, released when predict ends
     assert [e[0] for e in events] == ["state", "release"]
+    # With train contexts the training rows run once, at fit (one buffer for the three members),
+    # and predict carries no state
+    events.clear()
+    ctx = EnsembleClassifier(model, **kw).fit(X, y)
+    assert [e[0] for e in events] == ["state", "release"]
+    events.clear()
+    np.testing.assert_allclose(ctx.predict_proba(X[:9]), want, atol=1e-5, rtol=0)
+    assert events == []
 
 
 def test_state_stays_on_device_without_offload(monkeypatch):
