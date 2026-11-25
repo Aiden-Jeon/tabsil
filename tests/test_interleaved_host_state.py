@@ -192,7 +192,6 @@ def test_split_attention_matches_forward(temperature):
     torch.manual_seed(0)
     att = M.Attention(16, 2, temperature=temperature, gate_hidden=8).eval()
     _shake(att)
-    att.diag_scale = torch.nn.Parameter(torch.randn(2, 8) * 0.1)
     x, ctx = torch.randn(3, 4, 16), torch.randn(3, 9, 16)
     with torch.no_grad():
         want = att(x, context=ctx)

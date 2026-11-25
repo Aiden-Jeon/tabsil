@@ -93,7 +93,7 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 
 ## Evaluation
 
-`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration) and test-time compute options (greedy ensemble selection, DiagScale).
+`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration).
 
 ## Acknowledgements
 

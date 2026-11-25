@@ -9,9 +9,7 @@
 #     --override "env_variables.TABSIL_CHECKPOINTS=--classifier-path runs:/<run_id>/checkpoints/latest.pt \
 #       --regressor-path runs:/<run_id>/checkpoints/latest.pt" \
 #     --override "env_variables.TABSIL_EXTRA_ARGS=--method-name tabsil-v1-stage3"
-# Test-time compute (classification only): `--test-time greedy` (diagscale, diagscale+greedy) with
-# another --method-name in TABSIL_EXTRA_ARGS; it takes longer, so raise timeout_minutes too. Space
-# several BeyondArena runs more than 5 minutes apart (Hugging Face rate limit, 429).
+# Space several BeyondArena runs more than 5 minutes apart (Hugging Face rate limit, 429).
 experiment_name: tabsil
 mlflow_run_name: tabsil-v1-eval-arena
 environment:

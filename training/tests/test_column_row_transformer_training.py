@@ -270,7 +270,6 @@ def test_tabsil_default_feature_cap_in_eval(monkeypatch, tmp_path):
     assert printed["max_features_per_member"] == 768
     assert caps(["--max-features-per-member", "6000"]) == (6000, "balanced")
     assert caps(["--max-features-per-member", "0"]) == (None, "balanced")  # off: all columns
-    assert caps(["--test-time", "greedy"]) == (None, "balanced")
     with pytest.raises(SystemExit):
         script.parse_args(["--max-features-per-member", "-1"])
     # Off keeps the old default fingerprint and the arena feature limit

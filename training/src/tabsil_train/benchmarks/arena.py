@@ -18,9 +18,7 @@ and validation), the rules for skipping datasets the model cannot handle, and th
   not run. As on the leaderboard, they are filled with RandomForest (default) results (imputed)
   and the imputed fraction is reported.
 - Difference from the public leaderboard: TabArena runs every method with 8-fold bagging inside
-  the train split, while here the default is a single fit on the whole train split. With
-  `bagging=k`, the train split is divided into k folds, k models are fit (each on the k-1 other
-  folds) and their predictions are averaged.
+  the train split, while here one fit uses the whole train split.
 - Text/datetime columns are not passed as-is: datetime columns become seconds, and non-numeric
   columns (including text) are passed as categorical (the estimator encodes them).
 
@@ -60,65 +58,6 @@ WINRATE_BASELINES = {
     "RealTabPFN-2.5 (default)": "REALTABPFN-V2.5 (default)",
     "TabICLv2 (default)": "TABICLV2 (default)",
 }
-
-
-# temporal split: the time column is cut into this many contiguous intervals used as groups.
-# Same as the default fold count of greedy selection (`ensemble_selection.N_FOLDS`). Missing
-# times form their own group (-1), which may share a fold with another interval
-TIME_INTERVALS = 8
-
-
-def _time_values(t: pd.Series) -> pd.Series:
-    """Time column as order-preserving numbers (missing/unparseable -> NaN). Ordered categoricals
-    use category order, datetimes and date strings use timestamps, everything else is numeric."""
-    import warnings
-
-    if isinstance(t.dtype, pd.CategoricalDtype) and t.cat.ordered:
-        return t.cat.codes.where(t.cat.codes >= 0).astype(float)
-    if pd.api.types.is_bool_dtype(t) or pd.api.types.is_numeric_dtype(t):
-        return pd.to_numeric(t, errors="coerce").astype(float)
-    if not pd.api.types.is_datetime64_any_dtype(t):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)  # date format inference warning
-            t = pd.to_datetime(t.astype(object), errors="coerce", utc=True)
-    if getattr(t.dt, "tz", None) is not None:
-        t = t.dt.tz_convert(None)
-    return (t - pd.Timestamp(0)) / pd.Timedelta(seconds=1)
-
-
-def split_groups(X: pd.DataFrame, metadata, n_intervals: int = TIME_INTERVALS) -> np.ndarray | None:
-    """Per-row group ids from the task's split info. Grouped split: the group column (the value
-    combination if several columns). Temporal split: contiguous intervals of the time column with
-    similar row counts (equal times share an interval, missing times are -1). Neither (random
-    split): None. Uses the same columns AutoGluon uses to build bagging folds on TabArena
-    (`resolve_validation_splits`). If a column is missing or the time column cannot yield at
-    least 2 intervals, warns and returns None (random folds)."""
-    group_on = getattr(metadata, "group_on", None)
-    time_on = getattr(metadata, "time_on", None)
-    named = [*(group_on if isinstance(group_on, list | tuple) else [group_on]), time_on]
-    missing = [c for c in named if c is not None and c not in X.columns]
-    if missing:  # column absent from train rows: random folds (do not fail the split)
-        print(
-            f"split_groups: split columns {missing} not in train rows, using random folds",
-            file=sys.stderr,
-        )
-        return None
-    if group_on is not None:
-        columns = list(group_on) if isinstance(group_on, list | tuple) else [group_on]
-        codes = np.stack([pd.factorize(X[c], use_na_sentinel=False)[0] for c in columns], axis=1)
-        return np.unique(codes, axis=0, return_inverse=True)[1].reshape(-1)
-    if time_on is not None:
-        ranks = _time_values(X[time_on]).rank(method="min")
-        codes = pd.qcut(ranks, q=n_intervals, labels=False, duplicates="drop")
-        if codes.nunique() < 2:
-            print(
-                f"split_groups: time column {time_on!r} ({X[time_on].dtype}) gives fewer than 2"
-                " intervals, using random folds",
-                file=sys.stderr,
-            )
-            return None
-        return codes.fillna(-1).astype(int).to_numpy()
-    return None
 
 
 def _method_key(method: str) -> str:
@@ -214,7 +153,6 @@ def run(
     limits: Limits,
     out_dir: str | Path,
     method: str = "tabsil",
-    bagging: int = 0,
     datasets: list[str] | None = None,
     breakdown: bool = True,
     fingerprint: str = "",
@@ -225,10 +163,10 @@ def run(
 
     Split results are cached per split under `out_dir/runs/<id>`; calling again with the same
     `out_dir` skips finished splits. `<id>` is derived from `fingerprint` (whatever determines the
-    estimator: checkpoint, inference settings, etc.; supplied by the caller), `method` and
-    `bagging`, so results from a different checkpoint are never reused. With `datasets`, only
-    those datasets are run (the rest are imputed). If no split was run or all failed, scores are
-    left empty (None) and the other files are still written.
+    estimator: checkpoint, inference settings, etc.; supplied by the caller) and `method`, so
+    results from a different checkpoint are never reused. With `datasets`, only those datasets are
+    run (the rest are imputed). If no split was run or all failed, scores are left empty (None) and
+    the other files are still written.
 
     Files written:
     - `tasks.csv`: whether each split was run (`skip_reason`; "failed" for splits that ran but
@@ -271,16 +209,16 @@ def run(
         flush=True,
     )
 
-    run_id = _run_id(fingerprint, method, bagging)
+    run_id = _run_id(fingerprint, method)
     run_dir = out_dir / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "fingerprint.txt").write_text(f"{method}\nbagging={bagging}\n{fingerprint}\n")
+    (run_dir / "fingerprint.txt").write_text(f"{method}\nbagging=0\n{fingerprint}\n")
 
     if results is not None:
         results = list(results)
     elif len(todo):
         key = system.register_factory(make_estimator)
-        experiments = system.experiments(suite, method, key, bagging)
+        experiments = system.experiments(suite, method, key)
         jobs = context.build_jobs(
             experiments,
             subset=list(suite.subset),
@@ -349,7 +287,7 @@ def run(
         "suite": suite.name,
         "method": name or method,
         "run_id": run_id,
-        "bagging": bagging,
+        "bagging": 0,  # one fit per split (key kept to match earlier summaries)
         "limits": _limits_dict(limits),
         "splits": len(grid),
         "datasets": int(grid["dataset"].nunique()),
@@ -410,10 +348,11 @@ def split_rows(context, subsample_rows: int | None = None) -> dict[str, int]:
     return {d: int(n) for d, n in rows.groupby(frame["tabarena_task_name"]).max().items()}
 
 
-def _run_id(fingerprint: str, method: str, bagging: int) -> str:
+def _run_id(fingerprint: str, method: str) -> str:
     import hashlib
 
-    text = json.dumps([method, bagging, fingerprint])
+    # 0: the bagging fold count, removed from the harness; kept so earlier caches keep their ids
+    text = json.dumps([method, 0, fingerprint])
     return hashlib.sha1(text.encode()).hexdigest()[:12]
 
 

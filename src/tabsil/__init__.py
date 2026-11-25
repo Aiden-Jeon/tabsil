@@ -6,7 +6,7 @@ the part they implement (generic nouns); TabSil's numbers and the combination of
 
 - `models`: the model and its registry (column-row transformer, bar and quantile distributions,
   checkpoint save and load)
-- `inference`: sklearn-style inference (preprocessing member ensembles, test-time methods)
+- `inference`: sklearn-style inference (preprocessing member ensembles)
 - `hub`: save to and load from the Hugging Face Hub format (`save_pretrained`, `from_pretrained`)
 - `recipe`: TabSil's structure and inference defaults (`TabSilClassifier`, `TabSilRegressor`)
 - `utils`: device and seed helpers

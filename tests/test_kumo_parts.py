@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from tabsil import recipe
-from tabsil.inference.ensemble import EnsembleClassifier, EnsembleRegressor
+from tabsil.inference.ensemble import EnsembleRegressor
 from tabsil.models import config_dict
 from tabsil.models.column_row_transformer import ColumnRowTransformer, ColumnRowTransformerConfig
 from tabsil.models.quantile_distribution import (
@@ -162,16 +162,6 @@ def test_quantile_regressor_predicts_through_the_ensemble():
     assert log_p.shape == (7, 100)
     torch.testing.assert_close(log_p.exp().sum(-1), torch.ones(7))
     assert out_borders.dtype == torch.float64
-
-
-def test_test_time_methods_refuse_regression():
-    from tabsil.inference.diag_scale import DiagScale
-
-    borders = torch.linspace(-3, 3, 11)
-    model = ColumnRowTransformer(_config())
-    with pytest.raises(ValueError, match="DiagScale"):
-        DiagScale(EnsembleRegressor(model, borders, n_estimators=2))
-    DiagScale(EnsembleClassifier(model, n_estimators=2))  # the classification side works
 
 
 # --- Training config, training script, smoke training ----------------------------------------
