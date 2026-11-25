@@ -9,6 +9,7 @@ the part they implement (generic nouns); TabSil's numbers and the combination of
 - `inference`: sklearn-style inference (preprocessing member ensembles)
 - `hub`: save to and load from the Hugging Face Hub format (`save_pretrained`, `from_pretrained`)
 - `recipe`: TabSil's structure and inference defaults (`TabSilClassifier`, `TabSilRegressor`)
+- `forecast`: time series forecasting with the regression model (`TabSilForecaster`)
 - `utils`: device and seed helpers
 
 Training (priors, training loop, curriculum), evaluation (AMLB/CTR23, TabArena, BeyondArena,
@@ -35,6 +36,7 @@ from tabsil.models.bar_distribution import (
 from tabsil.utils import get_device, set_seed
 
 if TYPE_CHECKING:
+    from tabsil.forecast import TabSilForecaster
     from tabsil.hub import from_pretrained
     from tabsil.recipe import TabSilClassifier, TabSilRegressor
 
@@ -43,6 +45,7 @@ _LAZY = {
     "from_pretrained": "tabsil.hub",
     "TabSilClassifier": "tabsil.recipe",
     "TabSilRegressor": "tabsil.recipe",
+    "TabSilForecaster": "tabsil.forecast",
 }
 
 
@@ -69,4 +72,5 @@ __all__ = [
     "from_pretrained",
     "TabSilClassifier",
     "TabSilRegressor",
+    "TabSilForecaster",
 ]
