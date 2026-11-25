@@ -9,7 +9,7 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 - `tabsil` (`src/tabsil/`): inference only. The model, the scikit-learn style estimators, and loading weights from the Hugging Face Hub.
 - `tabsil-train` (`training/`, imported as `tabsil_train`): the synthetic-data prior, the training curriculum, the benchmark harness, and the Hub upload scripts. It is a uv workspace member that depends on `tabsil`.
 
-> Status: the code is complete; trained weights are not published yet.
+> Status: the TabSil v1 weights are on the Hugging Face Hub: [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil) (model card with the benchmark results).
 
 ## Install
 
@@ -37,21 +37,26 @@ Python ≥ 3.12, PyTorch 2.11.
 
 ## Use
 
-The trained weights are not published yet. Until they are, pass weights you trained yourself (see [Training](#training)): a folder written by `tabsil.hub.save_pretrained` (`model.safetensors` + `config.json`), or a model loaded from a training checkpoint.
+Without a model, `TabSilClassifier()` and `TabSilRegressor()` download the v1 weights from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`, [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil)):
 
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor
-from tabsil.models import load_checkpoint
 
-clf = TabSilClassifier("path/to/folder").fit(X_train, y_train)  # a save_pretrained folder
+clf = TabSilClassifier(device="cuda").fit(X_train, y_train)
 proba = clf.predict_proba(X_test)
 
-model, borders = load_checkpoint("tabsil_run/final.pt")  # a training checkpoint
-reg = TabSilRegressor(model, borders).fit(X_train, y_train)
+reg = TabSilRegressor(device="cuda").fit(X_train, y_train)
 y_pred = reg.predict(X_test)
 ```
 
-Once the weights are published, `TabSilClassifier()` and `TabSilRegressor()` without a model will download them from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`). Until then, constructing them without a model fails with `huggingface_hub.errors.RepositoryNotFoundError` (401, "Repository Not Found"): the repo does not exist yet.
+Other weights are given as the first argument: a Hub repo id (`"owner/name"`, or `"aiden-jeon/tabsil@stage2-10k"` for a branch), a folder written by `tabsil.hub.save_pretrained` (`model.safetensors` + `config.json`), or a model:
+
+```python
+from tabsil.models import load_checkpoint
+
+model, borders = load_checkpoint("tabsil_run/final.pt")  # a training checkpoint
+reg = TabSilRegressor(model, borders).fit(X_train, y_train)
+```
 
 Both are scikit-learn style estimators over an ensemble of 8 preprocessing members; each member sees at most 768 of the original columns.
 
@@ -79,6 +84,8 @@ Synthetic tables come from the TabICLv2 graph SCM prior (`tabicl` package) with 
 | 2 | 400–10,240 (80%) | 20K | 1e-4 | stage 1 weights |
 | 3 | 400–60,000 (80%) | 5K | 2e-5 | stage 2 weights |
 
+The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps (`--steps`; warmup and cosine follow the stage length): a separate 250K stage-1 run, measured up to 225K, did no better than 150K on TabArena-Lite. Their intermediate stages are branches of the Hub repo (`stage1-150k`, `stage2-10k`); see the [model card](https://huggingface.co/aiden-jeon/tabsil).
+
 ```bash
 # local check (CPU, about a minute)
 uv run --package tabsil-train python training/scripts/train.py --config-name smoke
@@ -87,6 +94,8 @@ uv run --package tabsil-train python training/scripts/train.py --config-name smo
 uv run --package tabsil-train python training/scripts/train.py --config-name stage1
 uv run --package tabsil-train python training/scripts/train.py --config-name stage2 --init-run-id <stage 1 run>
 uv run --package tabsil-train python training/scripts/train.py --config-name stage3 --init-run-id <stage 2 run>
+
+# the v1 weights: the same stages with --steps 150000 / 10000 / 2000
 ```
 
 Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a set of strings, so its tables depend on the hash seed.

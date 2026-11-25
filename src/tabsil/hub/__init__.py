@@ -8,17 +8,17 @@ The regression borders (the buckets the quantile outputs are turned into) go int
 
     from tabsil import from_pretrained
     model, borders = from_pretrained("aiden-jeon/tabsil")
-    model, borders = from_pretrained("aiden-jeon/tabsil@step-100k")
+    model, borders = from_pretrained("aiden-jeon/tabsil@stage2-10k")
 
 For inference alone this function is not needed: `TabSilClassifier()`·`TabSilRegressor()`
-(`tabsil.recipe`) download from the default Hub repo (`HUB_REPO`; weights not published yet)
+(`tabsil.recipe`) download from the default Hub repo (`HUB_REPO`)
 (`model_or_pretrained`).
 
 `load_model` reads a Hub repo, a local `save_pretrained` folder or a checkpoint file the same way
 (the evaluation and upload scripts use it through `tabsil_train.hub.load_model`, which also reads
 MLflow run artifacts, `runs:/...`). Hub repos are written as `hf://owner/name`, so a mistyped local
 path is not sent to the Hub. Intermediate checkpoints live on branches of the same repo
-(`step-100k`, ...) and are loaded as `hf://owner/name@step-100k`.
+(`stage1-150k`, `stage2-10k`) and are loaded as `hf://owner/name@stage2-10k`.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def from_pretrained(
     repo_id_or_path: str | Path, revision: str | None = None
 ) -> tuple[nn.Module, torch.Tensor | None]:
     """Load (model, regression borders) from a Hub repo id or a local `save_pretrained` folder.
-    Pass an intermediate checkpoint branch as `revision` or as `owner/name@step-100k`."""
+    Pass an intermediate checkpoint branch as `revision` or as `owner/name@stage2-10k`."""
     if _is_local_path(repo_id_or_path):
         local = Path(repo_id_or_path).expanduser()
         weights_path, config_path = local / WEIGHTS_NAME, local / CONFIG_NAME
