@@ -81,6 +81,11 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--max-repeat-seconds", type=float, default=10.0, help="no repeats above this predict time"
     )
     parser.add_argument("--out-dir", default="tabsil_profile")
+    parser.add_argument(
+        "--first-call",
+        action="store_true",
+        help="instead: the cost of the first predict on a new input shape (`first_call`)",
+    )
     return parser.parse_args(argv)
 
 
@@ -273,6 +278,120 @@ def markdown(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+SDPA_BACKENDS = ("cudnn", "flash", "mem_efficient", "math")
+
+
+@contextlib.contextmanager
+def sdpa_backends(enabled: tuple[str, ...]):
+    """Only the `enabled` SDPA backends (torch.backends.cuda flags), restored afterwards."""
+    cuda = torch.backends.cuda
+    flags = {
+        "cudnn": (cuda.cudnn_sdp_enabled, cuda.enable_cudnn_sdp),
+        "flash": (cuda.flash_sdp_enabled, cuda.enable_flash_sdp),
+        "mem_efficient": (cuda.mem_efficient_sdp_enabled, cuda.enable_mem_efficient_sdp),
+        "math": (cuda.math_sdp_enabled, cuda.enable_math_sdp),
+    }
+    before = {name: get() for name, (get, _) in flags.items()}
+    for name, (_, set_) in flags.items():
+        set_(name in enabled)
+    try:
+        yield
+    finally:
+        for name, (_, set_) in flags.items():
+            set_(before[name])
+
+
+def first_call(model, borders, args, device, out_dir: Path) -> None:
+    """Per table and path: the predict time on test-row counts not seen before (cold) and again
+    (warm), with the default SDPA backends and with cuDNN attention off; a profiler table of one
+    cold predict; and the prediction difference from predicting the test rows in two halves (the
+    rounding that depends on the batch shape, as a reference for the joint/context difference)."""
+    from torch.profiler import ProfilerActivity, profile
+
+    names = args.tables.split(",") if args.tables else ["diabetes", "taiwanese", "credit_card"]
+    backends = {
+        "default": SDPA_BACKENDS,
+        "no_cudnn": ("flash", "mem_efficient", "math"),
+    }
+    report, rows = [], []
+    report.append(
+        "sdpa flags: "
+        + ", ".join(
+            f"{b}={getattr(torch.backends.cuda, f'{b}_sdp_enabled')()}" for b in SDPA_BACKENDS
+        )
+    )
+    for name in names:
+        spec = TABLES[name]
+        task, _, n_train, n_test = spec[:4]
+        X, y, cat = make_table(spec)
+        X_test = X[n_train:]
+        for path in args.paths.split(","):
+            for label, enabled in backends.items():
+                with sdpa_backends(enabled):
+                    inference = default_inference(
+                        model, "regression" if task == "regression" else "classification"
+                    )
+                    kw = {
+                        "n_estimators": inference["n_estimators"],
+                        "categorical_features_indices": cat,
+                        "max_features_per_member": inference["max_features_per_member"],
+                        "feature_subsampling": inference["feature_subsampling"],
+                        "device": str(device),
+                        "train_context": path == "context",
+                    }
+                    est = (
+                        EnsembleRegressor(model, borders, **kw)
+                        if task == "regression"
+                        else EnsembleClassifier(model, **kw)
+                    )
+                    t = Timers(device)
+                    with t.timed("fit"):
+                        est.fit(X[:n_train], y[:n_train])
+                    predict = predict_fn(est, task)
+                    times = {}
+                    # test-row counts this process has not predicted yet (cold), then the same
+                    # count again (warm)
+                    for k in (n_test, n_test - 1, 5, 7) if device.type == "cuda" else (5,):
+                        for when in ("cold", "warm"):
+                            tt = Timers(device)
+                            with tt.timed("p"):
+                                full = predict(X_test[:k])
+                            times[f"{k}_{when}"] = tt.seconds["p"]
+                    halves = np.concatenate(
+                        [predict(X_test[: n_test // 2]), predict(X_test[n_test // 2 :])]
+                    )
+                    full = np.asarray(predict(X_test))
+                    row = {
+                        "table": name,
+                        "path": path,
+                        "sdpa": label,
+                        "fit_s": t.seconds["fit"],
+                        **times,
+                        "halves_max_diff": float(np.abs(halves - full).max()),
+                    }
+                    rows.append(row)
+                    print(json.dumps(row), flush=True)
+                    if label == "default":
+                        k = 11  # a new test-row count: profile one cold predict
+                        with profile(
+                            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]
+                        ) as prof:
+                            predict(X_test[:k])
+                            sync(device)
+                        table = prof.key_averages().table(sort_by="cpu_time_total", row_limit=25)
+                        report.append(f"## {name} {path}: one cold predict ({k} rows)\n{table}")
+                        print(report[-1], flush=True)
+                    del est
+    (out_dir / "first_call.json").write_text(json.dumps(rows, indent=1))
+    (out_dir / "first_call.txt").write_text("\n\n".join(report))
+    if "MLFLOW_RUN_ID" in os.environ:
+        import mlflow
+
+        with mlflow.start_run(run_id=os.environ["MLFLOW_RUN_ID"]):
+            mlflow.log_artifact(str(out_dir / "first_call.json"), "profile")
+            mlflow.log_artifact(str(out_dir / "first_call.txt"), "profile")
+
+
 def main(argv=None) -> None:
     args = parse_args(argv)
     device = torch.device(args.device)
@@ -282,6 +401,8 @@ def main(argv=None) -> None:
     model.to(device)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if args.first_call:
+        return first_call(model, borders, args, device, out_dir)
     # warm up the device and kernels outside the timings (TabArena warms up before the timed fit)
     warm = make_table(("binary", 2, 64, 16, 4, 0, 0))
     for path in paths:
