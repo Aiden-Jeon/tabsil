@@ -320,14 +320,7 @@ class Attention(nn.Module):
       q through the `log_scale` module (`gate_hidden`: its gate MLP width)
     - `rope_base`: RoPE on q and k
     - `zero_out`: the output layer starts at 0 (at first it adds nothing to the residual)
-    - When DiagScale (`tabsil.inference.diag_scale`) attaches the parameter `diag_scale` (δ,
-      heads x head dim), the q·k similarity becomes qᵀ(I + diag(δ))k: δ multiplies q after the
-      RMSNorm, RoPE and temperature. Without it the computation is unchanged
     """
-
-    # q, k and v come from the `qkv` weight rather than its forward, so DiagScale's δ is applied
-    # here (`tabsil.inference.diag_scale.add_diag_scale` does not hook the forward of qkv)
-    diag_scale_in_forward = True
 
     def __init__(
         self,
@@ -372,10 +365,6 @@ class Attention(nn.Module):
             # Even when the queries are a prefix (CLS), their positions start at 0 like the keys
             q, k = _rope(q, self.rope_base), _rope(k, self.rope_base)
         q = _scale_query(self, q, k.shape[2])
-        delta = getattr(self, "diag_scale", None)  # δ attached by DiagScale (class docstring)
-        if delta is not None:
-            h, d = q.shape[1], q.shape[3]
-            q = (q.float() * (1.0 + delta.view(1, h, 1, d))).to(q.dtype)
         if n_context is None:
             out = _batched_sdpa(q, k, v)
         else:
@@ -396,18 +385,13 @@ class Attention(nn.Module):
     # it is, so that training and unchunked inference keep their computation order)
 
     def split_queries(self, x: torch.Tensor, n_keys: int) -> torch.Tensor:
-        """Queries (N, H, L, d): q RMSNorm, temperature (for `n_keys` keys), DiagScale. RoPE is not
-        supported: the key positions would differ per chunk."""
+        """Queries (N, H, L, d): q RMSNorm, temperature (for `n_keys` keys). RoPE is not supported:
+        the key positions would differ per chunk."""
         if self.rope_base is not None:
             raise ValueError("RoPE attention cannot be computed over chunks of keys")
         dim = x.shape[-1]
         q = self.q_norm(self._heads(F.linear(x, self.qkv.weight[:dim])))
-        q = _scale_query(self, q, n_keys)
-        delta = getattr(self, "diag_scale", None)
-        if delta is not None:
-            h, d = q.shape[1], q.shape[3]
-            q = (q.float() * (1.0 + delta.view(1, h, 1, d))).to(q.dtype)
-        return q
+        return _scale_query(self, q, n_keys)
 
     def split_keys(self, context: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Keys and values (N, H, L, d) of `context` (k RMSNorm)."""

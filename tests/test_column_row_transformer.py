@@ -399,50 +399,6 @@ def test_forward_rejects_labels_outside_the_target_embeddings():
     assert model.max_classes == 160
 
 
-def test_diag_scale_scales_queries_inside_the_attention_forward():
-    # qkv weights are used directly, so forward hooks do not fire: attention applies δ in forward
-    import copy
-
-    from tabsil.inference.diag_scale import add_diag_scale
-
-    model = _model()
-    adapted = copy.deepcopy(model)
-    deltas = add_diag_scale(adapted)
-    n_attention = sum(1 for m in model.modules() if type(m).__name__ == "Attention")
-    assert len(deltas) == n_attention > 0
-    assert all(not m.qkv._forward_hooks for m in adapted.modules() if hasattr(m, "diag_scale"))
-    x, yc = _data("classification")
-    _, yr = _data("regression")
-    with torch.no_grad():
-        for task, y in (("classification", yc), ("regression", yr)):
-            assert torch.equal(model(x, y, task=task), adapted(x, y, task=task))  # δ = 0
-        for d in deltas:
-            d.normal_(0, 0.5)
-        task = "classification"
-        assert not torch.allclose(model(x, yc, task=task), adapted(x, yc, task=task))
-    adapted(x, yr, task="regression").square().mean().backward()
-    assert all(d.grad is not None for d in deltas)
-    assert set(adapted.state_dict()) - set(model.state_dict()) == {
-        n for n, _ in adapted.named_parameters() if n.endswith("diag_scale")
-    }
-
-
-def test_diag_scale_trains_the_model():
-    from tabsil.inference.diag_scale import DiagScale
-
-    rng = np.random.default_rng(0)
-    X = rng.normal(size=(120, 4))
-    model = _model()
-    y = np.arange(120) % 13  # more classes than target embeddings (10): forward with grouped labels
-    estimator = EnsembleClassifier(model, n_estimators=2)
-    before = {k: v.clone() for k, v in model.state_dict().items()}
-    fitted = DiagScale(estimator, epochs=2, patience=2).fit(X[:90], y[:90])
-    info = fitted.adaptation_
-    assert info["train_loss"] and len(info["val_curve"]) == 3 and info["n_params"] > 0
-    assert fitted.predict_proba(X[90:]).shape == (30, 13)
-    assert all(torch.equal(before[k], v) for k, v in model.state_dict().items())  # original model
-
-
 def test_tabsil_classes_share_the_multitask_repo(tmp_path, monkeypatch):
     # The published weights are one multitask model: both classes download the same repo
     from tabsil import TabSilClassifier, TabSilRegressor
@@ -477,17 +433,6 @@ def test_tabsil_classes_share_the_multitask_repo(tmp_path, monkeypatch):
         TabSilRegressor(str(cls_only))
     with pytest.raises(ValueError, match="borders"):
         TabSilRegressor(model)
-
-
-def test_diag_scale_views_keep_feature_subsampling():
-    from tabsil.inference.diag_scale import _views
-
-    model = _model()
-    est = EnsembleClassifier(
-        model, n_estimators=2, max_features_per_member=3, feature_subsampling="balanced"
-    )
-    views = _views(est, model, n_views=4, random_state=0)
-    assert views.max_features_per_member == 3 and views.feature_subsampling == "balanced"
 
 
 def test_tabsil_default_feature_cap_in_classes():

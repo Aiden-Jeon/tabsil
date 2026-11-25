@@ -114,13 +114,6 @@ def max_classes_of(model: nn.Module) -> int:
     return int(getattr(model, "max_classes", model.config.n_out))
 
 
-def check_classification_only(task: str, method: str) -> None:
-    """`method` (greedy selection, DiagScale) is for classification only: the regression output is
-    999 quantiles, which only the basic `EnsembleRegressor` reads."""
-    if task != "classification":
-        raise ValueError(f"{method} takes classification only (regression outputs are quantiles)")
-
-
 def forward_kwargs(model: nn.Module, task: str) -> dict:
     """Keyword arguments for the model forward: the task, and `inference=True` (the
     memory-saving computation of large tables) for a model that takes inference options

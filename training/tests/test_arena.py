@@ -3,7 +3,7 @@ baseline results are downloaded. System tests wrapping the estimator run only wi
 (tabarena)."""
 
 import argparse
-import importlib.util
+import types
 from pathlib import Path
 
 import numpy as np
@@ -117,10 +117,82 @@ def test_public_table_failure_does_not_raise(monkeypatch):
 
 
 def test_run_id_changes_with_the_estimator_fingerprint():
-    a = arena._run_id("clf=step_100k", "tabsil", 0)
-    assert a == arena._run_id("clf=step_100k", "tabsil", 0)
-    assert a != arena._run_id("clf=step_200k", "tabsil", 0)
-    assert a != arena._run_id("clf=step_100k", "tabsil", 8)
+    a = arena._run_id("clf=step_100k", "tabsil")
+    assert a == arena._run_id("clf=step_100k", "tabsil")
+    assert a != arena._run_id("clf=step_200k", "tabsil")
+    assert a != arena._run_id("clf=step_100k", "tabsil-v2")
+    # pinned: the hash still covers bagging 0 (removed option), so earlier caches keep their ids
+    assert a == "1e35d210049f"
+
+
+def test_default_arena_fingerprint_and_run_id_are_pinned(monkeypatch, tmp_path):
+    # the default settings' fingerprint and run id from before bagging and test-time methods were
+    # removed: finished splits in existing arena caches stay reusable
+    script = _eval_script()
+    model = helpers.tiny_model()
+    monkeypatch.setattr(script, "load_model", lambda *a, **k: (model, None))
+    hub = "hf://aiden-jeon/tabsil"
+    argv = ["--suite", "tabarena-lite", "--classifier-path", hub, "--regressor-path", hub]
+    args = script.parse_args([*argv, "--out-dir", str(tmp_path)])
+    paths = {"classification": hub, "regression": hub}
+    _, factories = script.arena_estimator_factory(args, paths)
+    fingerprint = script.arena_fingerprint(args, paths, factories)
+    assert fingerprint == (
+        '{"max_features_per_member": 768, "n_estimators": {"classification": 8, "regression": 8},'
+        ' "paths": {"classification": "hf://aiden-jeon/tabsil", "regression":'
+        ' "hf://aiden-jeon/tabsil"}}'
+    )
+    assert arena._run_id(fingerprint, "tabsil") == "5179fc12fa8d"
+
+
+def test_summary_and_cache_folder_keep_bagging_zero(monkeypatch, tmp_path):
+    # summary.json keeps its "bagging" key (0: one fit per split), the cache folder its run id
+    pytest.importorskip("tabarena")
+    grid = pd.DataFrame({"dataset": ["d"], "split": [0], "fold": [0], "repeat": [0]})
+    grid["skip_reason"] = None
+    ours = pd.DataFrame({"dataset": ["d"], "fold": [0], "imputed": [True]})
+    context = types.SimpleNamespace(
+        fillna_method="RF",
+        compare=None,
+        leaderboard_to_website_format=lambda leaderboard: leaderboard,
+    )
+    monkeypatch.setattr(arena, "make_context", lambda suite: context)
+    monkeypatch.setattr(arena, "task_grid", lambda context, suite, limits: grid.copy())
+    monkeypatch.setattr(arena, "model_pool", lambda context, method: None)
+    monkeypatch.setattr(arena, "_quiet", lambda *a, **k: (pd.DataFrame(), pd.DataFrame()))
+    monkeypatch.setattr(arena, "_new_method_name", lambda leaderboard, method: None)
+    monkeypatch.setattr(arena, "with_imputed", lambda per_split, name, fillna: ours)
+    monkeypatch.setattr(arena, "try_public_leaderboard", lambda path: None)
+    monkeypatch.setattr(arena, "compare_with_public", lambda *a: pd.DataFrame())
+    monkeypatch.setattr(arena, "winrates", lambda per_split, ours: {})
+    sizes = pd.DataFrame(columns=list(arena.PER_1K_ROWS.values()), dtype=float)
+    monkeypatch.setattr(arena, "dataset_sizes", lambda context: sizes)
+    monkeypatch.setattr(arena, "baseline_times", lambda *a: {})
+    summary = arena.run(
+        tabarena.SUITE,
+        None,
+        limits=arena.ModelLimits(),
+        out_dir=tmp_path,
+        fingerprint="fp",
+        results=[],
+    )
+    assert summary["bagging"] == 0 and summary["run_id"] == arena._run_id("fp", "tabsil")
+    text = (tmp_path / "runs" / summary["run_id"] / "fingerprint.txt").read_text()
+    assert text == "tabsil\nbagging=0\nfp\n"
+
+
+def test_run_times_average_the_splits_that_ran():
+    ours = pd.DataFrame(
+        {
+            "imputed": [False, False, True],
+            "time_train_s": [1.0, 3.0, 100.0],
+            "time_infer_s": [0.5] * 3,
+        }
+    )
+    t = arena.run_times(ours)
+    assert t["time_train_s_mean"] == 2.0 and t["time_train_s_total"] == 4.0
+    assert t["time_infer_s_mean"] == 0.5
+    assert arena.run_times(ours.drop(columns=list(arena.TIME_COLUMNS))) == {}
 
 
 def test_method_without_results_has_no_name():
@@ -189,7 +261,7 @@ def test_probability_columns_follow_the_natural_label_order():
     system = _system()
     key = system.register_factory(lambda problem_type, categorical: _Constant())
     model = object.__new__(system.EstimatorSystem)
-    model.factory, model.bagging = key, 0
+    model.factory = key
     X = pd.DataFrame({"x": np.arange(10.0)})
     y = pd.Series([2] * 8 + [10] * 2)
     model._fit_system(X, y, problem_type="binary", random_state=0)
@@ -201,104 +273,6 @@ def test_probability_columns_follow_the_natural_label_order():
         pd.DataFrame({"x": np.arange(24.0)}), labels, problem_type="multiclass", random_state=0
     )
     assert list(model._predict_proba(X).columns) == list(range(12))
-
-
-def test_bagging_fits_k_estimators_and_aligns_their_classes():
-    system = _system()
-    key = system.register_factory(lambda problem_type, categorical: _Constant())
-    model = object.__new__(system.EstimatorSystem)
-    model.factory, model.bagging = key, 4
-    X = pd.DataFrame({"x": np.arange(20.0)}, index=np.arange(100, 120))
-    y = pd.Series(["a"] * 17 + ["b"] * 3, index=X.index)  # b has < 4 rows: not stratified
-    model._fit_system(X, y, problem_type="binary", random_state=0)
-    assert [e.n_fit_ for e in model.estimators_] == [15, 15, 15, 15]
-    proba = model._predict_proba(X.iloc[:5])
-    assert list(proba.columns) == ["a", "b"]
-    assert list(proba.index) == list(X.index[:5])
-    np.testing.assert_allclose(proba.sum(axis=1), 1.0)
-    np.testing.assert_allclose(proba["b"], 3 / 20, atol=0.06)
-
-    model.bagging = 0
-    model._fit_system(X, y, problem_type="binary", random_state=None)
-    assert [e.n_fit_ for e in model.estimators_] == [20]
-
-
-_POOL_SCRIPT = """
-import numpy as np
-
-
-class Constant:
-    def fit(self, X, y, groups=None):
-        if len(X) == 0:
-            raise ValueError("empty bag")
-        self.classes_, counts = np.unique(y, return_counts=True)
-        self.p_ = counts / counts.sum()
-        self.groups_ = None if groups is None else len(groups)
-        return self
-
-    def predict_proba(self, X):
-        return np.tile(self.p_, (len(X), 1))
-
-    def predict(self, X):
-        return np.full(len(X), float(self.p_[-1]))
-
-
-def build(argv):
-    def make(problem_type, categorical):
-        return Constant()
-
-    return make
-"""
-
-
-def test_bag_pool_matches_in_process_bagging(tmp_path):
-    from tabsil_train.benchmarks.bag_pool import BagPool
-
-    system = _system()
-    script = tmp_path / "pool_script.py"
-    script.write_text(_POOL_SCRIPT)
-    X = pd.DataFrame({"x": np.arange(40.0)}, index=np.arange(200, 240))
-    y = pd.Series(["a"] * 30 + ["b"] * 7 + ["c"] * 3, index=X.index)
-    models = {}
-    pool = BagPool(str(script), "build", [[], []], ["", ""])  # 4 bags → 2 workers, 2 each
-    try:
-        for name, with_pool in (("local", False), ("pool", True)):
-            spec = importlib.util.spec_from_file_location(f"pool_script_{name}", script)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            make = module.build([])
-            make.bag_pool = pool if with_pool else None
-            model = object.__new__(system.EstimatorSystem)
-            model.factory, model.bagging = system.register_factory(make), 4
-            model._fit_system(X, y, problem_type="multiclass", random_state=0)
-            models[name] = model
-        assert models["pool"].estimators_ == [] and len(models["pool"].handles_) == 4
-        pd.testing.assert_frame_equal(
-            models["pool"]._predict_proba(X.iloc[:5]), models["local"]._predict_proba(X.iloc[:5])
-        )
-        pd.testing.assert_series_equal(
-            models["pool"]._predict(X.iloc[:5]), models["local"]._predict(X.iloc[:5])
-        )
-        models["pool"].cleanup()
-        assert models["pool"].pool_ is None
-        # An exception inside a worker fails only that split (the pool stays usable)
-        with pytest.raises(RuntimeError, match="empty bag"):
-            pool.fit("binary", [], [(X.iloc[:0], y.iloc[:0].to_numpy(), None)] * 2)
-        handles, classes = pool.fit("binary", [], [(X, y.to_numpy(), np.zeros(40))])
-        assert [list(c) for c in classes] == [["a", "b", "c"]]
-        assert pool.predict(handles, X.iloc[:3], proba=True)[0].shape == (3, 3)
-    finally:
-        pool.close()
-
-
-def test_bag_gpus_worker_command_and_checks():
-    script = _eval_script()
-    argv = ["--suite", "tabarena-lite", "--bagging", "8", "--bag-gpus", "8", "--mlflow"]
-    cmd = script.bag_worker_command([*argv, "--out-dir", "x"], Path("w0"))
-    assert cmd == [*argv[:4], "--out-dir", "w0", "--device", "cuda"]
-    for bad in (["--bagging", "0"], ["--shards", "2"], ["--latency"], ["--bag-gpus", "-1"]):
-        with pytest.raises(SystemExit):
-            script.main(["--suite", "tabarena-lite", "--bagging", "8", "--bag-gpus", "2", *bad])
 
 
 def _eval_script():
@@ -326,8 +300,12 @@ def test_eval_script_limits_follow_the_supported_size():
 
 def test_eval_script_accepts_arena_suites():
     script = _eval_script()
-    args = script.parse_args(["--suite", "beyondarena-lite", "--bagging", "8"])
-    assert (args.suite, args.bagging) == ("beyondarena-lite", 8)
+    args = script.parse_args(["--suite", "beyondarena-lite"])
+    assert args.suite == "beyondarena-lite"
+    # bagging and the test-time methods were removed
+    for gone in (["--bagging", "8"], ["--bag-gpus", "2"], ["--test-time", "greedy"]):
+        with pytest.raises(SystemExit):
+            script.parse_args(["--suite", "beyondarena-lite", *gone])
     assert script.arena_suite("beyondarena").subset == ("core2k",)
     assert script.arena_suite("tabarena-lite").name == "tabarena-lite"
 
@@ -342,7 +320,7 @@ def test_post_predict_calls_after_predict_with_one_test_row():
 
     key = system.register_factory(lambda problem_type, categorical: _Hooked())
     model = object.__new__(system.EstimatorSystem)
-    model.factory, model.bagging = key, 0
+    model.factory = key
     X = pd.DataFrame({"x": np.arange(10.0), "when": pd.date_range("2020-01-01", periods=10)})
     y = pd.Series([0, 1] * 5)
     model._fit_system(X, y, problem_type="binary", random_state=0)

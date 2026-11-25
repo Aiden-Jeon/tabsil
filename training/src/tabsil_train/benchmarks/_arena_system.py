@@ -4,13 +4,6 @@ This module imports `tabarena`, so it is loaded only when `tabsil_train.benchmar
 System configs may be saved as yaml, so estimator factories live in this module's registry and
 only their names are passed (`debug_mode=True` runs in the same process, so the registry stays
 visible).
-
-If the factory has `fit_groups = True`, fit also receives `groups` (a group id per row), built
-from the task's split info (group/time columns in `validation_metadata`;
-`tabsil_train.benchmarks.arena.split_groups`). If it has `bag_pool`
-(`tabsil_train.benchmarks.bag_pool.BagPool`), the bagging bags are fit and predicted concurrently by
-the pool's GPU workers instead of this process. Bag splitting and prediction averaging are the
-same.
 """
 
 from __future__ import annotations
@@ -20,10 +13,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import KFold, StratifiedKFold
 from tabarena.benchmark.exec_models import ExternalSystemModel
-
-from tabsil_train.benchmarks.arena import split_groups
 
 _FACTORIES: dict[str, Callable[[str, list[int]], Any]] = {}
 
@@ -39,7 +29,7 @@ def register_factory(make_estimator: Callable[[str, list[int]], Any]) -> str:
     return key
 
 
-def experiments(suite, method: str, key: str, bagging: int) -> list:
+def experiments(suite, method: str, key: str) -> list:
     from tabarena.benchmark.experiment import (
         BeyondArenaExperimentBundle,
         TabArenaV0pt1ExperimentBundle,
@@ -49,7 +39,7 @@ def experiments(suite, method: str, key: str, bagging: int) -> list:
     generator = SystemConfigGenerator(
         model_cls=EstimatorSystem,
         name=method,
-        manual_configs=[{"factory": key, "bagging": bagging}],
+        manual_configs=[{"factory": key}],
     )
     bundle = (
         BeyondArenaExperimentBundle
@@ -78,63 +68,22 @@ def prepare_frame(X: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
 
 
 class EstimatorSystem(ExternalSystemModel):
-    """Fit one estimator from a registry factory (k of them if `bagging` >= 2) on the train
-    split."""
+    """Fit one estimator from a registry factory on the train split."""
 
     warmup_torch_device = True
 
-    def __init__(self, *, factory: str, bagging: int = 0, **kwargs):
+    def __init__(self, *, factory: str, **kwargs):
         super().__init__(**kwargs)
         self.factory = factory
-        self.bagging = bagging
         self.estimators_: list = []
 
-    def _fit_system(
-        self,
-        X: pd.DataFrame,
-        y: pd.Series,
-        *,
-        problem_type: str,
-        random_state,
-        validation_metadata=None,
-        **_,
-    ):
+    def _fit_system(self, X: pd.DataFrame, y: pd.Series, *, problem_type: str, **_):
         make = _FACTORIES[self.factory]
-        X = X.reset_index(drop=True)
-        groups = (
-            split_groups(X, validation_metadata) if getattr(make, "fit_groups", False) else None
-        )
-        self.grouped_ = groups is not None
-        X, categorical = prepare_frame(X)
-        y = y.reset_index(drop=True)
+        X, categorical = prepare_frame(X.reset_index(drop=True))
         self.problem_type_ = problem_type
         self.categorical_ = categorical
-        if self.bagging and self.bagging > 1:
-            parts = self._bags(X, y, problem_type, random_state)
-        else:
-            parts = [np.arange(len(X))]
-        self.pool_, self.handles_, self.pool_classes_ = None, [], []
-        pool = getattr(make, "bag_pool", None)
-        if pool is not None and len(parts) > 1:  # GPU workers fit the bags concurrently
-            self.estimators_ = []
-            self.handles_, self.pool_classes_ = pool.fit(
-                problem_type,
-                categorical,
-                [
-                    (X.iloc[ix], y.iloc[ix].to_numpy(), None if groups is None else groups[ix])
-                    for ix in parts
-                ],
-            )
-            self.pool_ = pool
-            return self
-        self.estimators_ = [
-            make(problem_type, categorical).fit(
-                X.iloc[ix],
-                y.iloc[ix].to_numpy(),
-                **({} if groups is None else {"groups": groups[ix]}),
-            )
-            for ix in parts
-        ]
+        estimator = make(problem_type, categorical).fit(X, y.reset_index(drop=True).to_numpy())
+        self.estimators_ = [estimator]
         return self
 
     def post_fit(self, X: pd.DataFrame, y: pd.Series, X_test: pd.DataFrame):
@@ -154,57 +103,24 @@ class EstimatorSystem(ExternalSystemModel):
             if hook is not None:
                 hook(Xp)
 
-    def _bags(self, X, y, problem_type: str, random_state) -> list[np.ndarray]:
-        seed = 0 if random_state is None else int(random_state)
-        splitter = KFold(self.bagging, shuffle=True, random_state=seed)
-        if problem_type != "regression" and y.value_counts().min() >= self.bagging:
-            splitter = StratifiedKFold(self.bagging, shuffle=True, random_state=seed)
-        return [train_ix for train_ix, _ in splitter.split(X, y)]
-
     def _predict(self, X: pd.DataFrame) -> pd.Series:
         Xp, _ = prepare_frame(X)
-        Xp = Xp.reset_index(drop=True)
-        if getattr(self, "pool_", None) is not None:
-            preds = self._pool_predict(Xp, proba=False)
-        else:
-            preds = [e.predict(Xp) for e in self.estimators_]
-        pred = np.mean(preds, axis=0)
+        (estimator,) = self.estimators_
+        pred = estimator.predict(Xp.reset_index(drop=True))
         return pd.Series(pred, index=X.index)
 
     def _predict_proba(self, X: pd.DataFrame) -> pd.DataFrame:
         Xp, _ = prepare_frame(X)
-        Xp = Xp.reset_index(drop=True)
-        # bags may see different classes: align columns to the union of all bags' classes, with
-        # 0 for missing ones. Column order must be the natural label order (np.unique, same as
-        # the estimator's LabelEncoder), because TabArena reads the second column for binary and
-        # columns by position for multiclass
-        if getattr(self, "pool_", None) is not None:
-            bag_classes = [np.asarray(c) for c in self.pool_classes_]
-            probas = self._pool_predict(Xp, proba=True)
-        else:
-            bag_classes = [np.asarray(e.classes_) for e in self.estimators_]
-            probas = (e.predict_proba(Xp) for e in self.estimators_)
-        classes = list(np.unique(np.concatenate(bag_classes)))
-        total = pd.DataFrame(0.0, index=range(len(Xp)), columns=classes)
-        for bag, p in zip(bag_classes, probas, strict=True):
-            proba = pd.DataFrame(np.asarray(p), columns=list(bag))
-            total = total.add(proba.reindex(columns=classes, fill_value=0.0))
-        total = total / len(bag_classes)
-        total.index = X.index
-        return total
-
-    def _pool_predict(self, X: pd.DataFrame, proba: bool) -> list[np.ndarray]:
-        # if prediction fails, TabArena does not call cleanup (`cleanup_on_failure` defaults to
-        # False): drop the bags left on the workers here (in-process estimators go away with the
-        # system)
-        try:
-            return self.pool_.predict(self.handles_, X, proba=proba)
-        except Exception:
-            self.cleanup()
-            raise
+        (estimator,) = self.estimators_
+        classes = np.asarray(estimator.classes_)
+        proba = estimator.predict_proba(Xp.reset_index(drop=True))
+        proba = pd.DataFrame(np.asarray(proba, dtype=float), columns=list(classes))
+        # columns in the natural label order (np.unique, same as the estimator's LabelEncoder),
+        # because TabArena reads the second column for binary and columns by position for
+        # multiclass
+        proba = proba[list(np.unique(classes))]
+        proba.index = X.index
+        return proba
 
     def cleanup(self):
         self.estimators_ = []
-        if getattr(self, "pool_", None) is not None:
-            self.pool_.drop(self.handles_)
-            self.pool_, self.handles_, self.pool_classes_ = None, [], []

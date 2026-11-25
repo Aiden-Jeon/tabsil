@@ -34,35 +34,21 @@ with the same options for `uv run`). The official splits run and Elo, normalized
 improvability and win rates are computed as on the public leaderboard. Splits of a task without a
 checkpoint, or beyond TabSil's supported size (`tabsil.recipe.SUPPORTED_SIZE`; classes up to what
 the model takes, `max_classes_of`), are imputed (`--max-train-rows`, `--max-features` change the
-limits). By default one fit uses the whole training split; `--bagging 8` splits it 8-fold like
-TabArena and averages the 8 predictions. `--datasets` runs only some datasets (the rest imputed).
-Results go to `<out-dir>/<suite>/`.
+limits). One fit uses the whole training split. `--datasets` runs only some datasets (the rest
+imputed). Results go to `<out-dir>/<suite>/`.
 
   $RUN --no-dev --extra arena --group arena-dev python $EVAL --suite tabarena-lite \
     --classifier-path hf://aiden-jeon/tabsil --regressor-path hf://aiden-jeon/tabsil
 
 Columns per member: without `--max-features-per-member` the model's setting applies (768 columns
-chosen `balanced`, per task model; test-time methods use all columns). `--max-features-per-member
-0` turns the cap off (all columns; the arena feature limit is then the supported size). With a cap,
-the TabArena / BeyondArena feature limit is lifted, so splits wider than the supported size run.
+chosen `balanced`, per task model). `--max-features-per-member 0` turns the cap off (all columns;
+the arena feature limit is then the supported size). With a cap, the TabArena / BeyondArena feature
+limit is lifted, so splits wider than the supported size run.
 
 `--subsample-train-rows N` uses at most N random training rows per fit as the context
 (`tabsil.inference.subsample`; stratified by class for classification with at least one row per
-class, drawn with `--seed`, the same rows for every member, per bag with `--bagging`).
-`--max-train-rows` filters splits by their original training row count.
-
-`--test-time` spends more compute at inference (classification only): `greedy` selects from a
-member pool by out-of-fold loss within the training rows (`tabsil.inference.ensemble_selection`,
-`--selection`, `--pool-size`), `diagscale` learns only the attention diagonal scale per dataset
-(`tabsil.inference.diag_scale`), `diagscale+greedy` does both. Each fit's selection / adaptation
-record goes to `<out-dir>/test_time.jsonl`. Against out-of-fold overfitting, `--min-improvement`
-(default 0.01) keeps the default ensemble unless the out-of-fold loss is that fraction lower,
-`--oof-split task` (default) splits the out-of-fold folds by the arena split's group / time
-columns, and `--min-temperature` drops lower temperatures from the pool. The paper's method is
-`--min-improvement 0 --oof-split random`.
-
-  $RUN --no-dev --extra arena --group arena-dev python $EVAL --suite tabarena-lite \
-    --classifier-path hf://aiden-jeon/tabsil --test-time greedy --method-name tabsil-v1-greedy
+class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters splits by
+their original training row count.
 
 `--latency` (arenas) records each fit's one-row prediction time (median of `LATENCY_REPEATS`) in
 `<out-dir>/fits_<suite>.jsonl`, measured in a hook outside TabArena's train and inference timing.
@@ -93,19 +79,11 @@ import numpy as np
 import pandas as pd
 import torch
 
-from tabsil.inference.diag_scale import DiagScale
 from tabsil.inference.ensemble import (
     EnsembleClassifier,
     EnsembleRegressor,
     max_classes_of,
     max_features_of,
-)
-from tabsil.inference.ensemble_selection import (
-    MIN_IMPROVEMENT,
-    POOL_SIZE,
-    SELECTIONS,
-    GreedyEnsembleClassifier,
-    check_selection,
 )
 from tabsil.inference.subsample import SubsampledEstimator
 from tabsil.recipe import SUPPORTED_SIZE, default_inference
@@ -115,8 +93,6 @@ from tabsil_train.hub import load_model
 from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
-TEST_TIME = ("none", "greedy", "diagscale", "diagscale+greedy")
-OOF_SPLITS = ("random", "task")
 LATENCY_REPEATS = 5
 
 
@@ -153,52 +129,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         " CRPS, coverage, PIT; classification ECE, conformal)",
     )
     parser.add_argument(
-        "--test-time",
-        choices=TEST_TIME,
-        default="none",
-        help="spend more compute at inference: greedy member pool selection, DiagScale, or both",
-    )
-    parser.add_argument(
-        "--selection",
-        choices=SELECTIONS,
-        default="greedy",
-        help="selection method of --test-time greedy (best: one member, uniform: plain mean)",
-    )
-    parser.add_argument(
-        "--pool-size", type=int, default=POOL_SIZE, help="pool members of --test-time greedy"
-    )
-    parser.add_argument(
-        "--min-improvement",
-        type=float,
-        default=None,
-        help="--test-time greedy: keep the default ensemble unless the selected combination's"
-        " out-of-fold loss is at least this fraction lower"
-        f" (default {MIN_IMPROVEMENT}; 0: no condition, the paper's method)",
-    )
-    parser.add_argument(
-        "--min-temperature",
-        type=float,
-        default=None,
-        help="--test-time greedy: drop softmax temperatures below this from the pool"
-        " (default: keep all)",
-    )
-    parser.add_argument(
-        "--oof-split",
-        choices=OOF_SPLITS,
-        default=None,
-        help="out-of-fold folds of --test-time greedy (default task: split by the TabArena /"
-        " BeyondArena split's group / time columns; random splits and AMLB stay random."
-        " random: the paper's method. With diagscale+greedy, DiagScale's validation split"
-        " is still random)",
-    )
-    parser.add_argument(
         "--latency",
         action="store_true",
         help="TabArena / BeyondArena: record each fit's one-row prediction time in"
         " fits_<suite>.jsonl",
-    )
-    parser.add_argument(
-        "--bagging", type=int, default=0, help="TabArena / BeyondArena: k-fold bagging (0: off)"
     )
     parser.add_argument(
         "--datasets",
@@ -210,14 +144,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1,
         help="TabArena / BeyondArena: start one worker per GPU and hand out datasets one at a"
         " time from a queue (most expensive first; at most the GPU count, 1: one process)",
-    )
-    parser.add_argument(
-        "--bag-gpus",
-        type=int,
-        default=0,
-        help="TabArena / BeyondArena --bagging: start one worker per GPU to fit and predict"
-        " one split's bags concurrently (datasets in turn; 0: bags in turn in this process;"
-        " independent of --shards)",
     )
     parser.add_argument(
         "--heartbeat-minutes",
@@ -249,7 +175,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="per fit, use at most this many random training rows as the context"
         " (classification stratified by class, at least one row per class, drawn with --seed,"
-        " the same rows for every member, per bag with --bagging). Applies to the splits left"
+        " the same rows for every member). Applies to the splits left"
         " after --max-train-rows (default: no subsampling)",
     )
     parser.add_argument(
@@ -273,18 +199,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-dir", default="tabsil_eval")
     parser.add_argument("--mlflow", action="store_true", help="log to MLflow locally as well")
     args = parser.parse_args(argv)
-    # greedy settings are for greedy only (when not given, greedy's defaults)
-    given = [
-        n
-        for n in ("min_improvement", "min_temperature", "oof_split")
-        if getattr(args, n) is not None
-    ]
-    if given and "greedy" not in args.test_time:
-        parser.error("--min-improvement, --min-temperature and --oof-split are for greedy only.")
-    if args.min_improvement is None:
-        args.min_improvement = MIN_IMPROVEMENT
-    if args.oof_split is None:
-        args.oof_split = "task"
     if args.max_features_per_member is not None and args.max_features_per_member < 0:
         parser.error("--max-features-per-member must be >= 0 (0: off).")
     if args.subsample_train_rows is not None and args.subsample_train_rows < 1:
@@ -316,37 +230,11 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
         raise SystemExit(f"{suite} evaluation needs {flag}.")
     # load on the CPU; only the model moves to the device at inference
     model, borders = load_model(path, suite, Path(args.out_dir) / "checkpoints" / suite)
-    if suite == "regression" and args.test_time != "none":
-        # greedy selection and DiagScale take classification only (the regression output is
-        # quantiles, `check_classification_only`). Stop here: in the arenas a failing estimator
-        # turns every split into an imputed one without a word
-        raise SystemExit("regression takes --test-time none only (its outputs are quantiles).")
     # defaults: the model's inference setting (Hub config.json `inference`, else from the
     # architecture)
     inference = default_inference(model, suite)
     member_kinds = inference["member_kinds"]
     n_estimators = args.n_estimators or inference["n_estimators"]
-    if "greedy" in args.test_time:
-        # stop here: in the arenas a failure while building the estimator silently imputes
-        # every split
-        try:
-            check_selection(
-                n_estimators=n_estimators,
-                pool_size=args.pool_size,
-                selection=args.selection,
-                min_improvement=args.min_improvement,
-                min_temperature=args.min_temperature,
-            )
-        except ValueError as e:
-            raise SystemExit(f"{suite}: {e}") from e
-    log_path = Path(args.out_dir) / "test_time.jsonl"
-    # on every line, so records of different methods in one out-dir stay distinguishable
-    log_fields = {
-        "suite": suite,
-        "method": args.method_name,
-        "seed": args.seed,
-        **test_time_params(args),
-    }
     fits_log = fits_path(args)
 
     def make(task: bm.OpenMLTask):
@@ -359,31 +247,15 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
             "max_features_per_member": make.max_features_per_member,
             "feature_subsampling": make.feature_subsampling,
         }
-        if "greedy" in args.test_time:
-            # the default ensemble (candidate 0, the pool's first members) has n_estimators
-            kw.update(
-                selection=args.selection,
-                pool_size=args.pool_size,
-                min_improvement=args.min_improvement,
-                min_temperature=args.min_temperature,
-            )
-            estimator = GreedyEnsembleClassifier(model, **kw)  # classification only (above)
-        elif suite == "classification":
+        if suite == "classification":
             estimator = EnsembleClassifier(model, **kw)
         else:
             estimator = EnsembleRegressor(model, borders, **kw)
-        if args.test_time.startswith("diagscale"):
-            estimator = DiagScale(estimator)
-        if args.test_time != "none":
-            fields = dict(log_fields)
-            if getattr(task, "name", None):  # only AMLB tasks have a name
-                fields["dataset"] = task.name
-            record_fits(estimator, log_path, **fields)
         if args.latency:
             record = {"suite": args.suite, "task": suite, "dataset": getattr(task, "name", None)}
             estimator = RecordedEstimator(estimator, record, fits_log, latency=args.latency)
         if args.subsample_train_rows is not None:
-            # outermost: test-time methods and records all see only the chosen rows
+            # outermost: the ensemble and the fit records all see only the chosen rows
             estimator = SubsampledEstimator(
                 estimator,
                 args.subsample_train_rows,
@@ -392,8 +264,6 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
             )
         return estimator
 
-    # the arena system passes the split's group ids (groups) to fit
-    make.fit_groups = "greedy" in args.test_time and args.oof_split == "task"
     make.max_one_hot_width = max_features_of(model)  # the host memory estimate uses the same cap
     make.n_estimators = n_estimators
     # this task's columns-per-member cap and subsampling method (`model_feature_cap`, TabSil
@@ -406,14 +276,12 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
 def model_feature_cap(args: argparse.Namespace, inference: dict) -> tuple[int | None, str]:
     """A task's (columns per member cap, subsampling method). `--max-features-per-member` if given
     (0 turns it off: all columns), otherwise the model's inference setting (the recipe's
-    `default_inference`, TabSil 768 `balanced`). Test-time methods (greedy, DiagScale) do not take
-    the model's cap: a greedy member's columns must not depend on which pool members are refit, so
-    they use all columns unless the flag gives a cap."""
+    `default_inference`, TabSil 768 `balanced`)."""
     cap = args.max_features_per_member
     subsampling = inference.get("feature_subsampling", "balanced")
     if cap == 0:
         return None, subsampling
-    if cap is not None or args.test_time != "none":
+    if cap is not None:
         return cap, subsampling
     return inference.get("max_features_per_member"), subsampling
 
@@ -430,45 +298,6 @@ def _one_or_by_task(values: dict):
     # one value if equal across tasks, else a per-task dict (fingerprint, MLflow param)
     distinct = set(values.values())
     return distinct.pop() if len(distinct) == 1 else dict(sorted(values.items()))
-
-
-def record_fits(estimator, path: Path, **fields) -> None:
-    """On every fit, append one line to `path` (JSONL): `fields` (suite, method, test-time
-    settings, ...), the test-time method's record (greedy selection `selection_`, DiagScale
-    `adaptation_`), the table size and the fit time."""
-    fit = estimator.fit
-
-    def fit_and_record(X, y, **fit_kwargs):
-        start = time.perf_counter()
-        fitted = fit(X, y, **fit_kwargs)
-        record = {**fields, "rows": len(X), "features": int(np.shape(X)[1])}
-        for key in ("selection_", "adaptation_"):
-            value = getattr(fitted, key, None)
-            if value is not None:
-                record[key.rstrip("_")] = value
-        record["fit_seconds"] = time.perf_counter() - start
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as f:
-            f.write(json.dumps(record, default=float) + "\n")
-        return fitted
-
-    estimator.fit = fit_and_record
-
-
-def test_time_params(args: argparse.Namespace) -> dict:
-    """Arguments that define the test-time method (MLflow params, part of the arena reuse key)."""
-    params = {"test_time": args.test_time}
-    if "greedy" in args.test_time:
-        params.update(selection=args.selection, pool_size=args.pool_size)
-        # guard settings only when they differ from the paper's method (arena result caches of
-        # the paper's method stay reusable)
-        if args.min_improvement:
-            params["min_improvement"] = args.min_improvement
-        if args.min_temperature is not None:
-            params["min_temperature"] = args.min_temperature
-        if args.oof_split != "random":
-            params["oof_split"] = args.oof_split
-    return params
 
 
 def fits_path(args: argparse.Namespace) -> Path:
@@ -576,7 +405,6 @@ def arena_fingerprint(args: argparse.Namespace, paths: dict, factories: dict) ->
         {
             "paths": {t: paths[t] for t in factories},
             "n_estimators": {t: f.n_estimators for t, f in factories.items()},
-            **({} if args.test_time == "none" else test_time_params(args)),
             **({"seed": args.seed} if args.seed else {}),
             **(
                 {"max_features_per_member": _one_or_by_task(caps)}
@@ -609,68 +437,17 @@ def arena_estimator_factory(args: argparse.Namespace, paths: dict):
         task = "regression" if problem_type == "regression" else "classification"
         return factories[task](types.SimpleNamespace(categorical_indices=categorical))
 
-    # the arena system takes this function, so whether to pass split group ids is set on it
-    make.fit_groups = any(getattr(f, "fit_groups", False) for f in factories.values())
     return make, factories
 
 
-def bag_worker_make(argv: list[str]):
-    """Called by `--bag-gpus` workers (`tabsil_train.benchmarks.bag_pool`): the
-    `make(problem_type, categorical)` built from the parent's arguments. A worker sees one GPU
-    (`CUDA_VISIBLE_DEVICES`)."""
-    args = parse_args(argv)
-    paths = {"classification": args.classifier_path, "regression": args.regressor_path}
-    return arena_estimator_factory(args, paths)[0]
-
-
-def bag_worker_command(argv: list[str], worker_dir: Path) -> list[str]:
-    """A bag worker's arguments: the original ones without the GPU-splitting flags and MLflow
-    logging, plus its own out-dir."""
-    base = _strip_flags(
-        argv, {"--bag-gpus": 1, "--shards": 1, "--out-dir": 1, "--mlflow": 0, "--device": 1}
-    )
-    return [*base, "--out-dir", str(worker_dir), "--device", "cuda"]
-
-
-def start_bag_pool(args: argparse.Namespace, out_dir: Path):
-    """`--bag-gpus`: one bag worker per GPU (`tabsil_train.benchmarks.bag_pool.BagPool`). Workers
-    write test-time and fit records to `<out-dir>/bag_gpus/worker<i>/`, appended to this run's files
-    at the end."""
-    from tabsil_train.benchmarks.bag_pool import BagPool
-
-    n_gpus = torch.cuda.device_count()
-    if args.bag_gpus > n_gpus:
-        raise SystemExit(f"--bag-gpus {args.bag_gpus} exceeds the GPU count {n_gpus}.")
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    devices = (visible.split(",") if visible else [str(i) for i in range(n_gpus)])[: args.bag_gpus]
-    checkpoints = (out_dir / "checkpoints").resolve()
-    commands = []
-    for i in range(len(devices)):
-        worker_dir = out_dir / "bag_gpus" / f"worker{i}"
-        worker_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("test_time.jsonl", fits_path(args).name):
-            (worker_dir / name).unlink(missing_ok=True)  # keep out records of earlier runs
-        link = worker_dir / "checkpoints"  # reuse checkpoints (runs:/) the parent downloaded
-        if checkpoints.is_dir() and not link.exists():
-            link.symlink_to(checkpoints, target_is_directory=True)
-        commands.append(bag_worker_command(args.argv, worker_dir))
-    threads = max(1, (os.cpu_count() or 1) // len(devices))
-    print(f"bag gpus: {len(devices)} workers (GPU {','.join(devices)})", flush=True)
-    return BagPool(
-        str(Path(__file__).resolve()), "bag_worker_make", commands, devices, threads=threads
-    )
-
-
 def merge_worker_logs(args: argparse.Namespace, out_dir: Path, worker_dirs: list[Path]) -> None:
-    """Append the test-time and fit records (jsonl) of this run's workers (`worker_dirs`) to this
-    run's files. No folder glob: if an earlier run had more workers, their leftover folders would
-    mix in."""
+    """Append the fit records (jsonl) of this run's workers (`worker_dirs`) to this run's file.
+    No folder glob: if an earlier run had more workers, their leftover folders would mix in."""
     for worker_dir in worker_dirs:
-        for name in ("test_time.jsonl", fits_path(args).name):
-            part = worker_dir / name
-            if part.exists():
-                with open(out_dir / name, "a") as f:
-                    f.write(part.read_text())
+        part = worker_dir / fits_path(args).name
+        if part.exists():
+            with open(out_dir / part.name, "a") as f:
+                f.write(part.read_text())
 
 
 def run_arena(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> dict:
@@ -689,9 +466,7 @@ def run_arena(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> dict
     datasets = None if args.datasets is None else args.datasets.split(",")
     limits = arena_limits(models, args, feature_caps(args, factories))
     args.feature_caps_logged = _one_or_by_task(feature_caps(args, factories))
-    common = dict(
-        limits=limits, method=args.method_name, bagging=args.bagging, fingerprint=fingerprint
-    )
+    common = dict(limits=limits, method=args.method_name, fingerprint=fingerprint)
     if args.shard_worker:  # worker: run datasets received on stdin one at a time, save results
         for line in iter(sys.stdin.readline, ""):
             job = json.loads(line)
@@ -710,21 +485,12 @@ def run_arena(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> dict
         return {}
     results = None
     if args.shards > 1:
-        cache_id = arena._run_id(fingerprint, args.method_name, args.bagging)  # for progress
+        cache_id = arena._run_id(fingerprint, args.method_name)  # for progress
         estimate = host_state_estimator(factories, feature_caps(args, factories))
         results = run_shards(args, suite, limits, datasets, out_dir, cache_id, estimate)
-    pool = start_bag_pool(args, out_dir) if args.bag_gpus else None
-    make.bag_pool = pool
-    try:
-        summary = arena.run(
-            suite, make, out_dir=out_dir / args.suite, datasets=datasets, results=results, **common
-        )
-    finally:
-        if pool is not None:
-            worker_dirs = [out_dir / "bag_gpus" / f"worker{i}" for i in range(len(pool))]
-            pool.close()
-            make.bag_pool = None
-            merge_worker_logs(args, out_dir, worker_dirs)
+    summary = arena.run(
+        suite, make, out_dir=out_dir / args.suite, datasets=datasets, results=results, **common
+    )
     print_arena_summary(summary)
     if use_mlflow:
         log_arena_mlflow(args, summary, out_dir / args.suite, factories)
@@ -1089,9 +855,9 @@ def run_shards(
     """Start one worker process per GPU and hand out datasets one at a time from a queue, most
     expensive first (`arena.dataset_queue`, `run_queue`). A worker takes the next dataset as soon
     as it finishes one, so no GPU idles early. Returns the workers' collected split results.
-    Worker output goes to `<out-dir>/shards/shard<i>.log`; test-time and fit records (jsonl) are
-    appended to this run's files at the end. Stops if any worker fails or any dataset has no
-    results (so that dataset is not silently imputed).
+    Worker output goes to `<out-dir>/shards/shard<i>.log`; fit records (jsonl) are appended to
+    this run's files at the end. Stops if any worker fails or any dataset has no results (so that
+    dataset is not silently imputed).
 
     Large tables that `host_estimate(problem_type, rows, features)` (`host_state_estimator`) says
     keep cell state on the CPU are handed out only while the concurrent total fits in
@@ -1142,8 +908,6 @@ def run_shards(
     def spawn(i: int):
         worker_dir = worker_dirs[i]
         worker_dir.mkdir(parents=True, exist_ok=True)
-        # keep earlier runs' records out of this run's files (the worker's main clears fit records)
-        (worker_dir / "test_time.jsonl").unlink(missing_ok=True)
         link = worker_dir / "checkpoints"
         if checkpoints.is_dir() and not link.exists():
             link.symlink_to(checkpoints, target_is_directory=True)
@@ -1244,14 +1008,13 @@ def log_arena_mlflow(args, summary: dict, out_dir: Path, factories: dict) -> Non
     mlflow.log_params(
         {
             "suite": args.suite,
-            "bagging": args.bagging,
+            "bagging": 0,
             "method_name": args.method_name,
             "run_id_cache": summary["run_id"],
             "seed": args.seed,
             "max_features_per_member": getattr(
                 args, "feature_caps_logged", args.max_features_per_member
             ),
-            **test_time_params(args),
             **{f"n_estimators_{t}": f.n_estimators for t, f in factories.items()},
             "subsample_train_rows": args.subsample_train_rows,
         }
@@ -1276,14 +1039,7 @@ def log_arena_mlflow(args, summary: dict, out_dir: Path, factories: dict) -> Non
         mlflow.log_metrics(metrics(f"{prefix}_{label.replace('-', '_')}", s))
     for path in sorted(out_dir.glob("*.csv")) + [out_dir / "summary.json"]:
         mlflow.log_artifact(str(path), f"eval/{summary['suite']}")
-    log_test_time_artifact(args)
     log_fits_artifact(args)
-
-
-def log_test_time_artifact(args: argparse.Namespace) -> None:
-    path = Path(args.out_dir) / "test_time.jsonl"
-    if path.exists():
-        mlflow.log_artifact(str(path), "eval")
 
 
 def log_fits_artifact(args: argparse.Namespace) -> None:
@@ -1315,16 +1071,6 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("--shards must be >= 1.")
     if args.shards > 1 and args.suite not in ARENA_SUITES:
         raise SystemExit("--shards is for the TabArena / BeyondArena suites only.")
-    if args.bag_gpus < 0:
-        raise SystemExit("--bag-gpus must be >= 0.")
-    if args.bag_gpus:
-        if args.suite not in ARENA_SUITES or args.bagging < 2:
-            raise SystemExit("--bag-gpus is for TabArena / BeyondArena with --bagging >= 2 only.")
-        if args.shards > 1:
-            raise SystemExit("--bag-gpus does not combine with --shards (both: a worker per GPU).")
-        if args.latency:
-            # one-row prediction time is measured on this process's estimator (bags live in workers)
-            raise SystemExit("--latency cannot be combined with --bag-gpus.")
     if args.uncertainty and args.suite in ARENA_SUITES:
         # the arenas report only the official package's metrics; stop rather than silently ignore
         raise SystemExit("--uncertainty is for AMLB suites only (classification, regression, all).")
@@ -1358,7 +1104,6 @@ def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: b
                 "seed": args.seed,
                 "max_features_per_member": _one_or_by_task(feature_caps(args, factories)),
                 "subsample_train_rows": args.subsample_train_rows,
-                **test_time_params(args),
                 **{f"n_estimators_{suite}": f.n_estimators for suite, f in factories.items()},
             }
         )
@@ -1408,7 +1153,6 @@ def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: b
     if use_mlflow:
         for name in artifacts:
             mlflow.log_artifact(str(out_dir / name), "eval")
-        log_test_time_artifact(args)
         log_fits_artifact(args)
 
 

@@ -8,8 +8,14 @@ import torch
 from helpers import tiny_model
 from sklearn.datasets import load_breast_cancer, load_diabetes
 
-from tabsil.inference.ensemble import _probs_on_borders
-from tabsil.inference.preprocessing import balanced_feature_subsets
+from tabsil.inference.ensemble import EnsembleClassifier, _probs_on_borders
+from tabsil.inference.preprocessing import (
+    Member,
+    MemberPreprocessor,
+    balanced_feature_subsets,
+    feature_subset,
+    select_features,
+)
 from tabsil.models import load_checkpoint, save_checkpoint
 from tabsil.recipe import TabSilClassifier, TabSilRegressor
 
@@ -363,3 +369,39 @@ def test_regressor_halves_the_target_power():
     reg.fit(X[:60], y[:60])
     powers = [p.member.target_power for p in reg.preprocessors_]
     assert powers == [False, False, True, True, False, False]
+
+
+def test_outlier_sigma_of_a_member_sets_the_clip():
+    x = np.concatenate([np.zeros((99, 1)), [[100.0]]])
+
+    def clipped(sigma):
+        m = Member(None, False, seed=0, outlier_sigma=sigma)
+        return MemberPreprocessor(m, [], 10).fit(x)._clip(x).max()
+
+    assert clipped(12.0) == 100.0  # default: within 12 std (~119), so unchanged
+    assert np.isclose(clipped(3.0), x.mean() + 3 * x.std())
+
+
+def test_members_take_feature_subsets_above_the_cap():
+    # None (all) within the cap; above it, cap columns chosen by member seed (sorted, unique)
+    assert feature_subset(8, None, 0) is None and feature_subset(8, 8, 0) is None
+    cols = feature_subset(30, 6, 5)
+    assert len(cols) == 6 and np.array_equal(cols, np.unique(cols))
+    assert np.array_equal(cols, feature_subset(30, 6, 5))
+    assert not np.array_equal(cols, feature_subset(30, 6, 6))
+    x, cat = select_features(np.arange(12.0).reshape(2, 6), [1, 4], np.array([0, 4, 5]))
+    assert x.tolist() == [[0, 4, 5], [6, 10, 11]] and cat == [1]
+
+    X, y = load_breast_cancer(return_X_y=True)
+    X, y = X[:120, :8], y[:120]
+    model = _tiny_model()
+    full = EnsembleClassifier(model, n_estimators=3).fit(X[:90], y[:90])
+    # a cap >= the feature count behaves as before
+    same = EnsembleClassifier(model, n_estimators=3, max_features_per_member=8).fit(X[:90], y[:90])
+    assert np.array_equal(same.predict_proba(X[90:]), full.predict_proba(X[90:]))
+    sub = EnsembleClassifier(model, n_estimators=3, max_features_per_member=3).fit(X[:90], y[:90])
+    proba = sub.predict_proba(X[90:])
+    assert proba.shape == (30, 2) and np.allclose(proba.sum(1), 1)
+    assert all(len(c) == 3 for c in sub.feature_subsets_)
+    assert len({tuple(c) for c in sub.feature_subsets_}) > 1  # differs per member
+    assert not np.allclose(proba, full.predict_proba(X[90:]))

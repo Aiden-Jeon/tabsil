@@ -65,7 +65,7 @@ def feature_subset(n_features: int, max_features: int | None, seed: int) -> np.n
 
     Drawn per member, like the "random" method (`_subsample_features_random`) of the official TabPFN
     inference code. `seed` comes from the member (`Member.seed`), so a member uses the same columns
-    in every fit (the greedy folds and the final fit). No randomness for tables within the cap."""
+    in every fit. No randomness for tables within the cap."""
     if max_features is None or n_features <= max_features:
         return None
     rng = np.random.default_rng(seed)

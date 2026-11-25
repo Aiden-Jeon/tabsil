@@ -227,11 +227,9 @@ def test_mlflow_metrics_include_per_1k_times(monkeypatch, tmp_path):
     monkeypatch.setattr(script, "mlflow", fake)
     args = argparse.Namespace(
         suite="tabarena-lite",
-        bagging=0,
         method_name="tabsil",
         seed=0,
         max_features_per_member=None,
-        test_time="none",
         subsample_train_rows=None,
         classifier_path="clf.pt",
         regressor_path=None,
