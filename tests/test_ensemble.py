@@ -219,7 +219,7 @@ def test_one_hot_expands_small_categorical_columns_only():
     assert np.array_equal(block[1:].argmax(1), x[1:, 0]) and (block[1:].sum(1) == 1).all()
     assert np.array_equal(base[:, 5], x[:, 1])
     assert np.array_equal(base[:, 1], x[:, 3])  # standard members keep the numeric values
-    out = prep.transform(x, np.random.default_rng(1))
+    out = prep.transform(x, np.random.default_rng(1).standard_normal((len(x), 1)))
     assert out.shape == (200, base.shape[1] + 1)  # sample identifier column
 
 
@@ -405,3 +405,76 @@ def test_members_take_feature_subsets_above_the_cap():
     assert all(len(c) == 3 for c in sub.feature_subsets_)
     assert len({tuple(c) for c in sub.feature_subsets_}) > 1  # differs per member
     assert not np.allclose(proba, full.predict_proba(X[90:]))
+
+
+def test_row_identifier_depends_on_the_row_and_seed_only():
+    from tabsil.inference.preprocessing import row_identifier
+
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(50, 4))
+    x[3, 1] = np.nan
+    ident = row_identifier(x, 7)
+    assert ident.shape == (50, 1) and np.isfinite(ident).all()
+    # the same row gets the same value alone, in another order and next to a copy of itself
+    for i in (0, 3, 49):
+        assert row_identifier(x[i : i + 1], 7)[0, 0] == ident[i, 0]
+    assert np.array_equal(row_identifier(x[::-1], 7), ident[::-1])
+    assert np.array_equal(row_identifier(np.vstack([x[:1], x]), 7)[1:], ident)
+    # other seeds and other values give other values; NaN payloads and -0.0 do not matter
+    assert not np.isclose(row_identifier(x, 8), ident).any()
+    other = x.copy()
+    other[0, 0] += 1e-12
+    assert row_identifier(other, 7)[0, 0] != ident[0, 0]
+    signed = np.array([[0.0, np.nan]]), np.array([[-0.0, -np.nan]])
+    assert row_identifier(signed[0], 1)[0, 0] == row_identifier(signed[1], 1)[0, 0]
+    # standard normal over many rows
+    many = row_identifier(rng.normal(size=(20000, 3)), 0)[:, 0]
+    assert abs(many.mean()) < 0.03 and abs(many.std() - 1) < 0.03
+
+
+def _inductive_tables():
+    rng = np.random.default_rng(0)
+    numeric = rng.normal(size=(80, 5))
+    mixed = pd.DataFrame(
+        {
+            "a": pd.Categorical(rng.choice(list("xyz"), 80)),
+            "b": rng.normal(size=80),
+            "c": rng.choice(["p", "q", None], 80),
+            "d": rng.normal(size=80),
+        }
+    )
+    mixed.loc[rng.random(80) < 0.2, "b"] = np.nan
+    y = rng.normal(size=80)
+    return [(numeric, y), (mixed, y)]
+
+
+def _predict_ways(predict, X_test):
+    """Each test row's predictions: in the full test set, alone, reversed and next to a copy of
+    row 0. TabArena accepts inductive predictions only (`audit_transduction`)."""
+    X_test = pd.DataFrame(X_test).reset_index(drop=True)
+    n = len(X_test)
+    full = predict(X_test)
+    alone = np.concatenate([predict(X_test.iloc[[i]]) for i in range(10)])
+    reversed_ = predict(X_test.iloc[::-1])[::-1]
+    twin = predict(pd.concat([X_test.iloc[[0]], X_test]))[1:]
+    assert len(full) == len(reversed_) == len(twin) == n
+    return full, {"alone": alone, "reversed": reversed_, "twin": twin}
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+@pytest.mark.parametrize("table", [0, 1], ids=["numeric", "nan_and_categorical"])
+def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunked):
+    X, y = _inductive_tables()[table]
+    X = pd.DataFrame(X)
+    model = _tiny_model()
+    if chunked:
+        model.inference_chunk_cells = 64  # force the row-chunked forward on this small table
+    clf = TabSilClassifier(model, n_estimators=3).fit(X[:60], (y[:60] > 0).astype(int))
+    reg = TabSilRegressor(model, torch.linspace(-4, 4, 33), n_estimators=3).fit(X[:60], y[:60])
+    # the row-chunked forward splits the test rows at other positions, which changes the float32
+    # rounding (about 1e-6); a position-dependent identifier changed predictions by 1e-3 to 1e-2
+    atol = 1e-5 if chunked else 1e-6
+    for predict in (clf.predict_proba, reg.predict):
+        full, ways = _predict_ways(predict, X[60:])
+        for name, pred in ways.items():
+            np.testing.assert_allclose(pred, full[: len(pred)], atol=atol, rtol=0, err_msg=name)

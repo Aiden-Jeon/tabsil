@@ -69,6 +69,7 @@ from tabsil.inference.preprocessing import (
     apply_encoder,
     balanced_feature_subsets,
     feature_subset,
+    row_identifier,
     select_features,
     to_numeric,
 )
@@ -186,7 +187,8 @@ class _Base:
             prep = MemberPreprocessor(m, cat_ix, self.max_one_hot_width).fit(x)
             self.preprocessors_.append(prep)
             # the transformed training rows do not change, so compute them once per member
-            self.X_trains_.append(prep.transform(x, np.random.default_rng(m.seed + 2)))
+            identifier = np.random.default_rng(m.seed + 2).standard_normal((x.shape[0], 1))
+            self.X_trains_.append(prep.transform(x, identifier))
 
     def _model_targets(self, y: torch.Tensor) -> tuple[torch.Tensor, dict]:
         """The training-row targets for the model (1, train rows) and extra forward kwargs."""
@@ -197,7 +199,8 @@ class _Base:
         X_test = apply_encoder(pd.DataFrame(X), self.cat_ix_, self.encoder_)
         for i, (prep, y_train) in enumerate(zip(self.preprocessors_, y_trains, strict=True)):
             x_test, _ = select_features(X_test, self.cat_ix_, self.feature_subsets_[i])
-            x_test = prep.transform(x_test, np.random.default_rng(prep.member.seed + 3))
+            # a test row's identifier depends on that row only (not on the batch or row order)
+            x_test = prep.transform(x_test, row_identifier(x_test, prep.member.seed + 3))
             x = np.concatenate([self.X_trains_[i], x_test])
             x = torch.as_tensor(x, dtype=torch.float32, device=self.device).unsqueeze(0)
             y = torch.as_tensor(y_train, dtype=torch.float32, device=self.device).unsqueeze(0)

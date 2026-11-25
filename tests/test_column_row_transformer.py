@@ -221,7 +221,7 @@ def test_standard_members_keep_values():
 
     X = np.random.default_rng(0).normal(size=(50, 3))
     prep = MemberPreprocessor(Member(None, False, seed=0), [], 160).fit(X)
-    out = prep.transform(X, np.random.default_rng(1))
+    out = prep.transform(X, np.random.default_rng(1).standard_normal((len(X), 1)))
     # 3 original columns + 1 sample id, shuffled
     assert out.shape == (50, 4)
     kept = out[:, np.argsort(prep.order)[:3]]

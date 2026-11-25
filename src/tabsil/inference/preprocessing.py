@@ -8,7 +8,10 @@ values are kept as they are (the model standardizes them with the training rows)
   column mean are clipped to that bound
 - (`Member.one_hot`) categorical columns with at most `MAX_ONE_HOT_CATEGORIES` categories become
   one-hot blocks (`one_hot_sizes`)
-- a sample identifier column of standard normal noise is appended and the column order is shuffled
+- a sample identifier column of standard normal values is appended and the column order is
+  shuffled. Training rows draw it from the member seed; a test row's value is a hash of that row's
+  values and the member seed (`row_identifier`), so its prediction does not depend on the other
+  test rows, their order or the batch it is predicted in (inductive predictions)
 
 How the members differ (seeds, class permutations, the regression target transform) is in
 `tabsil.inference.ensemble`.
@@ -118,6 +121,38 @@ def _one_hot_width(n: int) -> int:
     return 1 if n == 2 else n  # 2 categories become a single 0/1 column
 
 
+def _splitmix64(x: np.ndarray) -> np.ndarray:
+    """SplitMix64 finalizer: a bijective mix of 64-bit integers (wraps around on overflow)."""
+    x = np.asarray(x, dtype=np.uint64)
+    with np.errstate(over="ignore"):
+        x = x + np.uint64(0x9E3779B97F4A7C15)
+        x = (x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        x = (x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        return x ^ (x >> np.uint64(31))
+
+
+def _unit_interval(h: np.ndarray) -> np.ndarray:
+    # the top 53 bits as a float in (0, 1): never 0 or 1, so log() and the normal tail stay finite
+    return ((h >> np.uint64(11)).astype(np.float64) + 0.5) * 2.0**-53
+
+
+def row_identifier(X: np.ndarray, seed: int) -> np.ndarray:
+    """A sample identifier per row, (n, 1) standard normal values: each is a hash of that row's
+    values and `seed` only, so it does not depend on the other rows or the row's position (equal
+    rows get equal values). The hash reads the float64 bits of each cell (NaN and -0.0 are made
+    canonical first), so it does not change with the pandas or NumPy version."""
+    X = np.array(X, dtype=np.float64, ndmin=2)
+    X[np.isnan(X)] = np.nan  # one NaN bit pattern
+    X += 0.0  # -0.0 becomes 0.0
+    bits = np.ascontiguousarray(X).view(np.uint64)
+    h = np.full(X.shape[0], _splitmix64(np.uint64(seed)), dtype=np.uint64)
+    for j in range(bits.shape[1]):
+        h = _splitmix64(h ^ bits[:, j])
+    # Box-Muller on two uniforms from the row hash
+    u1, u2 = _unit_interval(h), _unit_interval(_splitmix64(h))
+    return (np.sqrt(-2.0 * np.log(u1)) * np.cos(2.0 * np.pi * u2))[:, None]
+
+
 def one_hot_sizes(n_categories: dict[int, int], n_features: int, max_width: int) -> dict[int, int]:
     """The columns to one-hot encode and their category counts.
 
@@ -201,7 +236,8 @@ class MemberPreprocessor:
         block[np.flatnonzero(known), codes[known].astype(int)] = 1.0
         return block[:, 1:] if n == 2 else block
 
-    def transform(self, X: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    def transform(self, X: np.ndarray, identifier: np.ndarray) -> np.ndarray:
+        """The member's input columns for rows `X`; `identifier` is the (n, 1) sample identifier
+        column (training rows: drawn from the member seed; test rows: `row_identifier`)."""
         base = self._base(self._clip(X))
-        ident = rng.standard_normal((X.shape[0], 1))  # sample identifier column
-        return np.concatenate([base, ident], axis=1)[:, self.order]
+        return np.concatenate([base, identifier], axis=1)[:, self.order]

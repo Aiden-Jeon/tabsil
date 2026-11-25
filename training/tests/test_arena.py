@@ -703,7 +703,7 @@ def test_host_state_columns_bound_the_member_input_width(one_hot):
     width = 16
     member = Member(class_permutation=None, target_power=False, seed=0, one_hot=one_hot)
     prep = MemberPreprocessor(member, cat_ix, width).fit(X)
-    actual = prep.transform(X, np.random.default_rng(1)).shape[1]
+    actual = prep.transform(X, np.random.default_rng(1).standard_normal((len(X), 1))).shape[1]
 
     model = types.SimpleNamespace(
         inference_host_state_bytes=lambda rows, columns: columns,  # returns the column count as is
