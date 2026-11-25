@@ -274,6 +274,12 @@ def test_probability_columns_follow_the_natural_label_order():
         pd.DataFrame({"x": np.arange(24.0)}), labels, problem_type="multiclass", random_state=0
     )
     assert list(model._predict_proba(X).columns) == list(range(12))
+    # boolean labels (jm1, online_shoppers_intention): False before True, picked by position
+    flags = pd.Series([True] * 8 + [False] * 2)
+    model._fit_system(X, flags, problem_type="binary", random_state=0)
+    proba = model._predict_proba(X)
+    assert list(proba.columns) == [False, True] and list(proba.index) == list(X.index)
+    np.testing.assert_allclose(proba[True], 0.8)
 
 
 def _eval_script():
