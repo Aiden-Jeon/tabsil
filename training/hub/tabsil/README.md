@@ -46,7 +46,7 @@ In every stage, tables have at most 100 features (fewer for the longest tables).
 What differs from the TabICLv2 scripts (our choices):
 
 - **One multitask model, batch 256.** TabICLv2 trains separate classification and regression models with batch 64.
-- **Shorter stages.** The recipe in `tabsil_train.recipe` keeps the per-task table count of the scripts (250k / 20k / 5k steps). These weights were trained for 150k / 10k / 2k steps (`--steps`). A separate 250k stage-1 run did not do better than the 150k run: TabArena-Lite 1423 at 225k vs 1429 at 150k, and AMLB classification 0.9383 in both (measured before the tabsil 0.1.0 inference change, which moved the 150k Elo to 1431). In both runs the AMLB regression ratio rose during stage 1 (to 1.137 at 225k and 1.136 at 150k); stage 2 brings it back below 1.
+- **Shorter stages.** The recipe in `tabsil_train.recipe` keeps the per-task table count of the scripts (250k / 20k / 5k steps). These weights were trained for 150k / 10k / 2k steps (`--steps`). A separate 250k stage-1 run did not do better than the 150k run: TabArena-Lite 1423 at 225k vs 1429 at 150k (the repository's harness without bagging; see TabArena-Lite), and AMLB classification 0.9383 in both (measured before the tabsil 0.1.0 inference change, which moved the 150k Elo to 1431). In both runs the AMLB regression ratio rose during stage 1 (to 1.137 at 225k and 1.136 at 150k); stage 2 brings it back below 1.
 - **Activation checkpointing** for tables longer than 2,048 rows in stages 2 and 3, to fit long tables in GPU memory. It changes memory and speed only.
 
 Compute: 32×H100 for about 30 hours (stage 1), 9.6 hours (stage 2) and 9.0 hours (stage 3), about 1,550 H100-hours. This does not count the 250k stage-1 run or shorter experiments.
@@ -79,32 +79,32 @@ Most of the regression gain came from stage 2, the first stage with long tables:
 
 ### TabArena-Lite
 
-[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard) (51 datasets, one split each), scored the way the public leaderboard is: Elo against the leaderboard's method pool, with RandomForest (default) at 1000. The same weights serve the classification and regression splits, with the default inference, on 1×H100. No split exceeds the size limits, so none is imputed (0.0%). This model places 11th of 99 methods. The table lists every method above it and five baselines below it.
+[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard) (51 datasets, one split each) with TabArena's official pipeline: every method, this model included, is 8-fold bagged, and Elo is computed against the method pool with RandomForest (default) at 1000. This model ran as the `TabSil` model of TabArena ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)) at its default configuration (tabsil 0.1.0, the weights at the tag `v1`), on 8×H100 with one process per GPU. The same weights serve the classification and regression splits. No split is imputed (0.0%). This model places 18th of 121 methods. The table lists this model, the foundation models near it, the strongest tuned baselines and the RandomForest anchor; the [full table](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite/blob/1c4beda3ed9683fa5bd15f4cc9569a8180b04ec4/leaderboard_website.md) has all 121.
 
-| Method | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
-| --- | --- | --- | --- | --- |
-| Kumo-Tabular (default) | 2046 (+179/−113) | 2.9 | 2.33 | 0.254 |
-| LimiX-2 (default) | 1924 (+167/−117) | 3.2 | 31.16 | 8.935 |
-| Kumo-Tabular-Medium (default) | 1902 (+140/−100) | 4.9 | 1.36 | 0.150 |
-| TabPFN-3.5 (default) | 1858 (+147/−96) | 6.9 | 1.85 | 0.473 |
-| Kumo-Tabular-Small (default) | 1801 (+90/−63) | 8.2 | 0.79 | 0.092 |
-| Causilo (default) | 1798 (+95/−71) | 8.3 | 0.67 | 0.104 |
-| TabFM (default) | 1797 (+131/−108) | 7.1 | 16.13 | 6.663 |
-| TabPFN-3.5-Fast (default) | 1786 (+90/−57) | 8.6 | 0.73 | 0.153 |
-| Mitra-v2 (default) | 1751 (+107/−75) | 7.8 | 59.03 | 0.886 |
-| EXAONE-Tabular (default) | 1741 (+72/−50) | 9.3 | 1.98 | 0.582 |
-| **TabSil (this model)** | **1726** (+104/−77) | 8.2 | 0.0141 | 0.805 |
-| TabPFN-3 (default) | 1619 (+74/−52) | 11.1 | 1.29 | 0.383 |
-| TabICLv2 (default) | 1557 (+68/−58) | 12.6 | 0.73 | 0.137 |
-| RealTabPFN-2.5 (default) | 1514 (+57/−41) | 13.3 | 5.72 | 0.611 |
-| CatBoost (default) | 1339 (+35/−40) | 17.8 | 5.81 | 0.025 |
-| XGBoost (default) | 1182 (+50/−53) | 21.0 | 2.06 | 0.122 |
+| Method | Place | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
+| --- | --- | --- | --- | --- | --- |
+| Kumo-Tabular (default) | 1 | 2090 (+159/−110) | 3.7 | 2.33 | 0.254 |
+| TabPFN-3.5 (default) | 7 | 1882 (+139/−91) | 7.5 | 1.85 | 0.473 |
+| TabPFN-3.5-Fast (default) | 16 | 1806 (+91/−59) | 9.1 | 0.73 | 0.153 |
+| Mitra-v2 (default) | 17 | 1774 (+101/−68) | 8.5 | 59.03 | 0.886 |
+| **TabSil (this model)** | **18** | **1755** (+88/−73) | 9.0 | 2.53 | 0.812 |
+| EXAONE-Tabular (default) | 20 | 1753 (+66/−52) | 9.9 | 1.98 | 0.582 |
+| TabPFN-3 (default) | 25 | 1626 (+73/−48) | 11.6 | 1.29 | 0.383 |
+| TabICLv2 (default) | 29 | 1567 (+61/−57) | 13.1 | 0.73 | 0.137 |
+| RealTabPFN-2.5 (default) | 33 | 1519 (+59/−44) | 13.8 | 5.72 | 0.611 |
+| RealMLP (tuned + ensembled) | 36 | 1489 (+45/−44) | 15.2 | 2791.97 | 13.886 |
+| CatBoost (tuned) | 45 | 1394 (+46/−39) | 16.6 | 1347.32 | 0.037 |
+| LightGBM (tuned + ensembled) | 46 | 1387 (+36/−37) | 17.6 | 416.63 | 2.236 |
+| XGBoost (tuned + ensembled) | 55 | 1349 (+39/−42) | 18.3 | 700.96 | 1.438 |
+| RandomForest (default) | 112 | 1000 (+74/−75) | 28.4 | 0.43 | 0.053 |
 
-- All values come from the same run. The pool is the public leaderboard [v0.1.9.12](https://huggingface.co/spaces/TabArena/leaderboard/blob/3cffdcceb64f9cd6c6cbb5aa852a4f16296749bd/data/entrants_models/imputation_yes/splits_lite/tasks_all/datasets_all/website_leaderboard.csv) (98 methods) plus this model, 99 methods. The run recomputes every method's Elo, CI and improvability from the leaderboard's public results with this model in the pool, so they differ slightly from v0.1.9.12 (Elo by at most 4 for the methods shown). Fit and infer times are the same as on the leaderboard. The live leaderboard has added methods since, so its numbers differ too.
-- Every method on the public leaderboard is 8-fold bagged; this model is fit once per split, and its fit only stores the context. So the Fit column is not like-for-like. The Infer column is comparable.
+- The pool is the TabArena results available when the run was made (2026-11-25, TabArena at the submission commit `1360e0e8`): 120 methods plus this model, 121 methods. It is not a released leaderboard version, so the live leaderboard's numbers differ. These are the results submitted with the pull request; the maintainers' own run of the full TabArena may change them. The raw results (`results.pkl` of all 51 splits), the hardware and the logs are in [aiden-jeon/tabsil-tabarena-lite](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite).
+- All methods use the same protocol, so the Fit and Infer columns are like-for-like; the other methods' times were measured by TabArena on its own hardware.
 - The Elo CI is 95%. Fit and infer are median seconds per 1K train and test rows. Lower is better for improvability, fit and infer.
 
-By problem type this model's Elo is 1698 (classification) and 2080 (regression). By stage, the Elo was 1431 after stage 1, 1727 after stage 2 and 1726 after stage 3; almost all of the stage-2 gain is regression (1188 → 2074). minipfn TabPFN-3.5 scored 1563 with the same protocol (measured in a separate run, so against a slightly different pool).
+By problem type, from the same results scored on each subset (TabArena's `compare` with `subset="classification"` or `"regression"`; methods without results on a subset drop out), this model's Elo is 1722 (+118/−86, 19th of 119) on the 38 classification datasets and 2123 (+216/−100, 18th of 116) on the 13 regression datasets.
+
+The stage numbers come from the repository's own harness (`training/scripts/eval.py --suite tabarena-lite`), not the official protocol: each split is fit once without bagging, and Elo is computed against the public leaderboard v0.1.9.12 pool plus the checkpoint. It is a quicker check for comparing checkpoints (this model scored 1726 there, against 1755 above). By stage, the Elo was 1431 after stage 1, 1727 after stage 2 and 1726 after stage 3; almost all of the stage-2 gain is regression (1188 → 2074). minipfn TabPFN-3.5 scored 1563 with the same harness (measured in a separate run, so against a slightly different pool).
 
 ### BeyondArena
 
@@ -153,17 +153,19 @@ uv run --package tabsil-train python training/scripts/eval.py --suite all \
   --regressor-path hf://aiden-jeon/tabsil@v1
 ```
 
-`--suite tabarena-lite` and `--suite beyondarena` run the arena suites (they need the `arena` extra; see the repository README).
+`--suite tabarena-lite` and `--suite beyondarena` run the arena suites (they need the `arena` extra; see the repository README). They fit each split once without bagging, a quicker check; the official-protocol TabArena-Lite result above is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)).
 
 ## Intermediate checkpoints
 
 The v1 weights on `main` are also tagged `v1`; `TabSilClassifier()` and `TabSilRegressor()` (tabsil ≥ 0.1.0) download that tag, so they keep the same weights if `main` changes. The weights at the end of stages 1 and 2 are kept as branches of this repo. Each branch holds the weights, config and a short README that points back here; this card on `main` describes all of them.
 
-| Branch | Weights | Mean ROC AUC | RMSE ratio | TabArena-Lite Elo |
+| Branch | Weights | Mean ROC AUC | RMSE ratio | TabArena-Lite Elo (harness) |
 | --- | --- | --- | --- | --- |
 | `stage1-150k` | `sha256:46ff015e71f8` | 0.9383 | 1.136 | 1431 |
 | `stage2-10k` | `sha256:f7d460f62732` | 0.9390 | 0.997 | 1727 |
 | `main` (stage 3, +2k) | `sha256:e03c8c32849a` | 0.9390 | 0.996 | 1726 |
+
+The Elo column is the repository's harness without bagging, for comparing the stages (see TabArena-Lite); with the official protocol, `main` scores 1755.
 
 ```python
 clf = TabSilClassifier("aiden-jeon/tabsil@stage2-10k")

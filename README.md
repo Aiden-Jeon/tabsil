@@ -20,31 +20,29 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 
 ## Results
 
-[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard), scored the way the public leaderboard is. TabSil places 11th of 99 methods. The table lists every method above it and five baselines below it.
+[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard) with TabArena's official pipeline: every method, TabSil included, is 8-fold bagged, and the leaderboard is computed as on the public one. TabSil places 18th of 121 methods. The table lists TabSil, the foundation models near it, the strongest tuned baselines and the RandomForest anchor; the [full table](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite/blob/1c4beda3ed9683fa5bd15f4cc9569a8180b04ec4/leaderboard_website.md) has all 121.
 
-| Method | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
-| --- | --- | --- | --- | --- |
-| Kumo-Tabular (default) | 2046 (+179/−113) | 2.9 | 2.33 | 0.254 |
-| LimiX-2 (default) | 1924 (+167/−117) | 3.2 | 31.16 | 8.935 |
-| Kumo-Tabular-Medium (default) | 1902 (+140/−100) | 4.9 | 1.36 | 0.150 |
-| TabPFN-3.5 (default) | 1858 (+147/−96) | 6.9 | 1.85 | 0.473 |
-| Kumo-Tabular-Small (default) | 1801 (+90/−63) | 8.2 | 0.79 | 0.092 |
-| Causilo (default) | 1798 (+95/−71) | 8.3 | 0.67 | 0.104 |
-| TabFM (default) | 1797 (+131/−108) | 7.1 | 16.13 | 6.663 |
-| TabPFN-3.5-Fast (default) | 1786 (+90/−57) | 8.6 | 0.73 | 0.153 |
-| Mitra-v2 (default) | 1751 (+107/−75) | 7.8 | 59.03 | 0.886 |
-| EXAONE-Tabular (default) | 1741 (+72/−50) | 9.3 | 1.98 | 0.582 |
-| **TabSil** | **1726** (+104/−77) | 8.2 | 0.0141 | 0.805 |
-| TabPFN-3 (default) | 1619 (+74/−52) | 11.1 | 1.29 | 0.383 |
-| TabICLv2 (default) | 1557 (+68/−58) | 12.6 | 0.73 | 0.137 |
-| RealTabPFN-2.5 (default) | 1514 (+57/−41) | 13.3 | 5.72 | 0.611 |
-| CatBoost (default) | 1339 (+35/−40) | 17.8 | 5.81 | 0.025 |
-| XGBoost (default) | 1182 (+50/−53) | 21.0 | 2.06 | 0.122 |
+| Method | Place | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
+| --- | --- | --- | --- | --- | --- |
+| Kumo-Tabular (default) | 1 | 2090 (+159/−110) | 3.7 | 2.33 | 0.254 |
+| TabPFN-3.5 (default) | 7 | 1882 (+139/−91) | 7.5 | 1.85 | 0.473 |
+| TabPFN-3.5-Fast (default) | 16 | 1806 (+91/−59) | 9.1 | 0.73 | 0.153 |
+| Mitra-v2 (default) | 17 | 1774 (+101/−68) | 8.5 | 59.03 | 0.886 |
+| **TabSil** | **18** | **1755** (+88/−73) | 9.0 | 2.53 | 0.812 |
+| EXAONE-Tabular (default) | 20 | 1753 (+66/−52) | 9.9 | 1.98 | 0.582 |
+| TabPFN-3 (default) | 25 | 1626 (+73/−48) | 11.6 | 1.29 | 0.383 |
+| TabICLv2 (default) | 29 | 1567 (+61/−57) | 13.1 | 0.73 | 0.137 |
+| RealTabPFN-2.5 (default) | 33 | 1519 (+59/−44) | 13.8 | 5.72 | 0.611 |
+| RealMLP (tuned + ensembled) | 36 | 1489 (+45/−44) | 15.2 | 2791.97 | 13.886 |
+| CatBoost (tuned) | 45 | 1394 (+46/−39) | 16.6 | 1347.32 | 0.037 |
+| LightGBM (tuned + ensembled) | 46 | 1387 (+36/−37) | 17.6 | 416.63 | 2.236 |
+| XGBoost (tuned + ensembled) | 55 | 1349 (+39/−42) | 18.3 | 700.96 | 1.438 |
+| RandomForest (default) | 112 | 1000 (+74/−75) | 28.4 | 0.43 | 0.053 |
 
-- TabArena-Lite has 51 datasets, one split each. TabSil ran on 1×H100 with the default inference (8 preprocessing members). No split is imputed. Elo puts RandomForest (default) at 1000, with a 95% CI. Lower is better for improvability, fit and infer.
-- Every method on the leaderboard is 8-fold bagged; TabSil is fit once per split, and its fit only stores the context. So the Fit column is not like-for-like. The Infer column is comparable.
-- All values come from the same run. The pool is the public leaderboard [v0.1.9.12](https://huggingface.co/spaces/TabArena/leaderboard/blob/3cffdcceb64f9cd6c6cbb5aa852a4f16296749bd/data/entrants_models/imputation_yes/splits_lite/tasks_all/datasets_all/website_leaderboard.csv) (98 methods) plus TabSil, 99 methods. The run recomputes every method's Elo, CI and improvability from the leaderboard's public results with TabSil in the pool, so they differ slightly from v0.1.9.12 (Elo by at most 4 for the methods shown). Fit and infer times are the same as on the leaderboard. The live leaderboard has added methods since, so its numbers differ too.
-- Fit and infer time are defined in [Evaluation](#evaluation). More results (AMLB, per-stage, per-task Elo) are on the [model card](https://huggingface.co/aiden-jeon/tabsil).
+- TabArena-Lite has 51 datasets, one split each. TabSil ran as the `TabSil` model of TabArena ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)) at its default configuration: tabsil 0.1.0 from PyPI, the weights at the tag `v1`, 8×H100 with one process per GPU. No split is imputed. Elo puts RandomForest (default) at 1000, with a 95% CI. Lower is better for improvability, fit and infer.
+- All methods use the same protocol, so the Fit and Infer columns are like-for-like; the other methods' times were measured by TabArena on its own hardware.
+- The pool is the TabArena results available when the run was made (2026-11-25, TabArena at the submission commit `1360e0e8`): 120 methods plus TabSil, 121 methods. It is not a released leaderboard version, so the live leaderboard's numbers differ. These are the results submitted with the pull request; the maintainers' own run of the full TabArena may change them. The raw results (`results.pkl` of all 51 splits), the hardware and the logs are in [aiden-jeon/tabsil-tabarena-lite](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite).
+- Fit and infer time are defined in [Evaluation](#evaluation). More results (AMLB, per-problem-type and per-stage Elo) are on the [model card](https://huggingface.co/aiden-jeon/tabsil).
 
 ## Install
 
@@ -119,7 +117,7 @@ Synthetic tables come from the TabICLv2 graph SCM prior (`tabicl` package) with 
 | 2 | 400–10,240 (80%) | 20K | 1e-4 | stage 1 weights |
 | 3 | 400–60,000 (80%) | 5K | 2e-5 | stage 2 weights |
 
-The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps (`--steps`; warmup and cosine follow the stage length): a separate 250K stage-1 run, measured up to 225K, did no better than 150K on TabArena-Lite. Their intermediate stages are branches of the Hub repo (`stage1-150k`, `stage2-10k`); see the [model card](https://huggingface.co/aiden-jeon/tabsil).
+The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps (`--steps`; warmup and cosine follow the stage length): a separate 250K stage-1 run, measured up to 225K, did no better than 150K on TabArena-Lite (measured with `training/scripts/eval.py`, without bagging). Their intermediate stages are branches of the Hub repo (`stage1-150k`, `stage2-10k`); see the [model card](https://huggingface.co/aiden-jeon/tabsil).
 
 ```bash
 # local check (CPU, about a minute)
@@ -139,6 +137,8 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 
 `training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration).
 Train and inference time are reported as on the TabArena leaderboard: seconds per 1K train rows (fit) and per 1K test rows (predict), averaged over each dataset's splits, then the median over datasets. In the arenas they appear next to the baselines on the same splits (`summary.json`, `comparison.csv`).
+
+The official-protocol TabArena-Lite result in [Results](#results) is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The arena suites of `training/scripts/eval.py` fit each split once without bagging, a quicker check used to compare checkpoints; their Elo is not the official one.
 
 ## Acknowledgements
 
