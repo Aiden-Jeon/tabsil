@@ -301,6 +301,15 @@ def sdpa_backends(enabled: tuple[str, ...]):
             set_(before[name])
 
 
+def reset_peak(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+
+
+def peak_gb(device: torch.device) -> float:
+    return torch.cuda.max_memory_allocated(device) / 1e9 if device.type == "cuda" else 0.0
+
+
 def first_call(model, borders, args, device, out_dir: Path) -> None:
     """Per table and path: the predict time on test-row counts not seen before (cold) and again
     (warm), with the default SDPA backends and with cuDNN attention off; a profiler table of one
@@ -344,14 +353,26 @@ def first_call(model, borders, args, device, out_dir: Path) -> None:
                         if task == "regression"
                         else EnsembleClassifier(model, **kw)
                     )
+                    peaks = {}
+                    reset_peak(device)
                     t = Timers(device)
                     with t.timed("fit"):
                         est.fit(X[:n_train], y[:n_train])
+                    peaks["peak_fit_gb"] = peak_gb(device)
                     predict = predict_fn(est, task)
+                    reset_peak(device)
+                    predict(X_test)
+                    peaks["peak_predict_gb"] = peak_gb(device)
+                    if path == "context":  # one member per forward
+                        est.predict_batch_bytes, batch = 1, est.predict_batch_bytes
+                        reset_peak(device)
+                        predict(X_test)
+                        peaks["peak_predict_one_member_gb"] = peak_gb(device)
+                        est.predict_batch_bytes = batch
                     times = {}
                     # test-row counts this process has not predicted yet (cold), then the same
                     # count again (warm)
-                    for k in (n_test, n_test - 1, 5, 7) if device.type == "cuda" else (5,):
+                    for k in (n_test - 1, n_test - 2, 5, 7) if device.type == "cuda" else (5,):
                         for when in ("cold", "warm"):
                             tt = Timers(device)
                             with tt.timed("p"):
@@ -366,6 +387,7 @@ def first_call(model, borders, args, device, out_dir: Path) -> None:
                         "path": path,
                         "sdpa": label,
                         "fit_s": t.seconds["fit"],
+                        **peaks,
                         **times,
                         "halves_max_diff": float(np.abs(halves - full).max()),
                     }
