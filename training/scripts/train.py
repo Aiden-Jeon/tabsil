@@ -1,4 +1,5 @@
-"""Train TabSil (`tabsil_train.recipe`) on the graph SCM prior and log the run to MLflow.
+"""Train TabSil (`tabsil_train.recipe`) on the graph SCM prior (or `--prior-type`) and log the run
+to MLflow.
 
 The same script runs on AI Runtime (`databricks air run -f training/scripts/train.yaml`) and
 locally.
@@ -28,6 +29,10 @@ The table size and prior settings (`TrainConfig` comments) can be changed with
 `TABSIL_MIN_ROWS`·`TABSIL_MAX_ROWS`·`TABSIL_MIN_TRAIN_FRACTION`·
 `TABSIL_MAX_TRAIN_FRACTION`, `TABSIL_BINARY_PROB`, `TABSIL_FILTER_UNPREDICTABLE=1`
 (unset values keep the preset).
+`--prior-type` (`TABSIL_PRIOR_TYPE`) trains on another registered prior (`tabsil_train.priors.
+PRIOR_TYPES`, e.g. `graph_scm_hicard_missing`); unset, the preset's (`graph_scm`). A resumed run
+keeps the prior it was trained on (a different `--prior-type` is an error); a run that takes only
+the weights (`--init-run-id`) uses the preset's or the given one.
 The training diagnostics (`tabsil_train.training.diagnostics`) always log per-group weight and
 gradient norms; `--grad-cosine` (`TABSIL_GRAD_COSINE=1`) adds the per-group cosine between the two
 tasks' gradients, and `--rank-timing` (`TABSIL_RANK_TIMING=1`) adds per-GPU forward/backward time
@@ -78,6 +83,7 @@ import mlflow  # noqa: E402
 
 from tabsil_train import recipe  # noqa: E402
 from tabsil_train.hub import run_architecture  # noqa: E402
+from tabsil_train.priors import DEFAULT_PRIOR_TYPE, canonical_prior_type  # noqa: E402
 from tabsil_train.training.config import (  # noqa: E402
     SPEED_OPTIONS,
     TrainConfig,
@@ -173,6 +179,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     for name in ("min-train-fraction", "max-train-fraction", "binary-prob"):
         env = "TABSIL_" + name.upper().replace("-", "_")
         parser.add_argument(f"--{name}", type=float, default=_env(env, float))
+    parser.add_argument("--prior-type", default=os.environ.get("TABSIL_PRIOR_TYPE") or None)
     parser.add_argument(
         "--filter-unpredictable",
         action="store_true",
@@ -252,6 +259,22 @@ def inherit_batch_size(args: argparse.Namespace, params: dict[str, str]) -> None
         args.batch_size = int(params["batch_size"])
 
 
+def inherit_prior_type(args: argparse.Namespace, params: dict[str, str]) -> None:
+    """On resume, train on the original run's prior: without `--prior-type` its `prior_type`
+    param (runs that predate the param used `graph_scm`) is taken, and a different one stops the
+    script (one run must stay on one prior). Training anew from a run's weights (`--init-run-id`)
+    keeps the preset or the given prior."""
+    if not args.resume_run_id:
+        return
+    saved = canonical_prior_type(params.get("prior_type", DEFAULT_PRIOR_TYPE))
+    if args.prior_type is None:
+        args.prior_type = saved
+    elif canonical_prior_type(args.prior_type) != saved:
+        raise SystemExit(
+            f"--prior-type {args.prior_type} differs from the resumed run's prior_type {saved}"
+        )
+
+
 def build_config(
     args: argparse.Namespace, source: dict | None = None, speed_options: dict | None = None
 ) -> TrainConfig:
@@ -320,6 +343,7 @@ def _override_values(args: argparse.Namespace) -> dict:
         "min_train_fraction": args.min_train_fraction,
         "max_train_fraction": args.max_train_fraction,
         "binary_prob": args.binary_prob,
+        "prior_type": args.prior_type,
         "seed": args.seed,
         "warmup_steps": args.warmup_steps,
         **{
@@ -389,6 +413,7 @@ def main(argv: list[str] | None = None) -> None:
             # (absolute steps) are not inherited
             speed_options.pop("phases", None)
         inherit_batch_size(args, params)
+        inherit_prior_type(args, params)
     config = build_config(args, source, speed_options)
     if args.resume_run_id:
         config = resume_phase_lr(config, args, params)  # checked before the checkpoint download

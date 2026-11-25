@@ -11,6 +11,7 @@
 #                 (TABSIL_STEPS replaces the stage's step count, so give the stage's own count)
 #   chunks:       --override env_variables.TABSIL_STOP_STEP=<end of this chunk> --override timeout_minutes=<estimate>
 #   resume:       --override env_variables.TABSIL_RESUME_RUN_ID=<run_id>
+#   prior:        --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_hicard_missing (default graph_scm)
 #   GPU memory:   --override env_variables.TABSIL_MICRO_BATCH=<datasets per GPU>
 #   more nodes:   --override compute.num_accelerators=32 --override env_variables.TABSIL_BATCH_SIZE=256
 #                 (the curriculum's batch 256 is for 32 GPUs; resuming keeps the original run's batch)
