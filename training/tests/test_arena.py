@@ -178,6 +178,8 @@ def test_summary_and_cache_folder_record_method_and_fingerprint(monkeypatch, tmp
         results=[],
     )
     assert "bagging" not in summary and summary["run_id"] == arena._run_id("fp", "tabsil")
+    # the split ran (no skip reason) but has no result: a failure, named in the summary
+    assert summary["failed_splits"] == 1 and summary["failed"] == ["d split 0"]
     text = (tmp_path / "runs" / summary["run_id"] / "fingerprint.txt").read_text()
     assert text == "tabsil\nfp\n"
 
@@ -284,6 +286,16 @@ def test_probability_columns_follow_the_natural_label_order():
 
 def _eval_script():
     return helpers.load_script("scripts/eval.py", "eval_script_arena")
+
+
+def test_eval_stops_when_a_split_failed():
+    # A split that raised is imputed by TabArena; the run must fail instead of reporting scores
+    script = _eval_script()
+    script.check_failed_splits({"failed": []})
+    script.check_failed_splits({})
+    message = "2 splits failed and were imputed: jm1 split 0, x split 1"
+    with pytest.raises(SystemExit, match=message):
+        script.check_failed_splits({"failed": ["jm1 split 0", "x split 1"]})
 
 
 def test_eval_script_limits_follow_the_supported_size():

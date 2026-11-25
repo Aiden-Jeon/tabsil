@@ -494,7 +494,22 @@ def run_arena(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> dict
     print_arena_summary(summary)
     if use_mlflow:
         log_arena_mlflow(args, summary, out_dir / args.suite, factories)
+    check_failed_splits(summary)
     return summary
+
+
+def check_failed_splits(summary: dict) -> None:
+    """Stop (exit code 1) if a split ran but has no result: the method raised and TabArena caught
+    it and imputed the split, so the scores are not this method's. Called after the summary and
+    the MLflow logging, so the run keeps its outputs. Splits imputed because they exceed the size
+    limits or are left out with `--datasets` are not failures."""
+    failed = summary.get("failed") or []
+    if failed:
+        raise SystemExit(
+            f"{len(failed)} splits failed and were imputed: {', '.join(failed)}. The scores above"
+            " are not valid; the errors are in the log (TabArena's 'Experiment ... failed on',"
+            " or shards/shard<i>.log with --shards)."
+        )
 
 
 def _strip_flags(argv: list[str], flags: dict[str, int]) -> list[str]:
