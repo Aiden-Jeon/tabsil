@@ -219,8 +219,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--categories",
         choices=CATEGORY_ENCODINGS,
         default="codes",
-        help="categorical columns that stay codes with more than 20 categories: keep the codes,"
-        " shuffle them per member, or add a log count column",
+        help="categorical columns that stay codes with more than 20 categories: keep the codes"
+        " only, or add a log count column",
     )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out-dir", default="tabsil_eval")

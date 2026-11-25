@@ -714,18 +714,12 @@ def test_flip_sign_negates_about_half_of_the_numeric_columns():
     assert np.all(flipped | np.all(got == want, axis=0)) and 10 < flipped.sum() < 30
 
 
-def test_many_category_codes_are_shuffled_or_counted():
+def test_many_category_codes_get_a_count_column():
     X = _option_table()
     base = MemberPreprocessor(Member(None, False, seed=1), [2, 3], 100).fit(X)
     want = base._features(X)
-    shuffled = MemberPreprocessor(Member(None, False, seed=1, categories="shuffled"), [2, 3], 100)
-    got = shuffled.fit(X)._features(X)
-    codes, mapped = want[:, 2], got[:, 2]  # the 40-category code column (after the numerics)
+    codes = want[:, 2]  # the 40-category code column (after the numerics)
     ok = np.isfinite(codes)
-    assert np.array_equal(np.isnan(mapped), ~ok)
-    pairs = set(zip(codes[ok], mapped[ok], strict=True))
-    assert len(pairs) == len(set(codes[ok])) == len({m for _, m in pairs})  # a bijection
-    assert any(a != b for a, b in pairs)
     counted = MemberPreprocessor(Member(None, False, seed=1, categories="counts"), [2, 3], 100)
     got = counted.fit(X)._features(X)
     assert got.shape[1] == want.shape[1] + 1
@@ -735,7 +729,7 @@ def test_many_category_codes_are_shuffled_or_counted():
     assert np.isnan(got[~ok, -1]).all()
     unseen = X[:1].copy()
     unseen[0, 2] = 45.0  # a code beyond the training categories is missing
-    assert np.isnan(counted._features(unseen)[0, -1]) and np.isnan(shuffled._features(unseen)[0, 2])
+    assert np.isnan(counted._features(unseen)[0, -1])
 
 
 def test_member_options_reach_the_members_and_predict():
@@ -747,10 +741,10 @@ def test_member_options_reach_the_members_and_predict():
     assert [m.kind for m in members] == ["standard", "power", "robust", "quantile"]
     assert all(m.flip_sign and m.categories == "counts" for m in members)
     assert np.allclose(clf.predict_proba(X[60:]).sum(1), 1)
-    reg = TabSilRegressor(_tiny_model(), torch.linspace(-4, 4, 33), categories="shuffled", **kw)
+    reg = TabSilRegressor(_tiny_model(), torch.linspace(-4, 4, 33), categories="counts", **kw)
     assert np.isfinite(reg.fit(X[:60], y[:60]).predict(X[60:])).all()
     with pytest.raises(ValueError, match="categories"):
-        EnsembleClassifier(_tiny_model(), n_estimators=1, categories="target")
+        EnsembleClassifier(_tiny_model(), n_estimators=1, categories="shuffled")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

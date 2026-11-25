@@ -27,10 +27,9 @@ Options (inference experiments; the defaults are TabSil's):
   Kumo-Tabular (NVIDIA structured-data-models `sdm/models/kumo/tabular/recipe.py`)
 - `Member.flip_sign`: each numeric column is negated with probability 1/2 (Kumo's `FlipSign`)
 - `Member.categories` (`CATEGORY_ENCODINGS`), for categorical columns that stay codes and have more
-  than `MAX_ONE_HOT_CATEGORIES` categories: `"codes"` keeps the codes, `"shuffled"` permutes them
-  per member (the order of the codes means nothing), `"counts"` adds a column with log(1 + the
-  number of training rows with that category) (Kumo's `AddCategoryCounts`; a missing or unseen
-  category is missing)
+  than `MAX_ONE_HOT_CATEGORIES` categories: `"codes"` keeps the codes, `"counts"` adds a column
+  with log(1 + the number of training rows with that category) (Kumo's `AddCategoryCounts`; a
+  missing or unseen category is missing)
 
 A table with more features than the member cap gives each member a subset of its original columns:
 `feature_subset` draws one per member from the member seed, `balanced_feature_subsets` spreads the
@@ -49,7 +48,7 @@ from sklearn.preprocessing import OrdinalEncoder
 OUTLIER_SIGMA = 12.0
 MAX_ONE_HOT_CATEGORIES = 20  # benchmark socmob (17) is expanded; colleges (thousands) stays codes
 MEMBER_KINDS = ("standard", "power", "robust", "quantile")
-CATEGORY_ENCODINGS = ("codes", "shuffled", "counts")
+CATEGORY_ENCODINGS = ("codes", "counts")
 ROBUST_BOUND = 3.0  # the "robust" kind squashes values into ±this
 FEATURE_SUBSAMPLINGS = ("random", "balanced")
 
@@ -312,15 +311,12 @@ class MemberPreprocessor:
             for i in self.cat_ix
             if i not in self.one_hot_sizes and n_categories[i] > MAX_ONE_HOT_CATEGORIES
         ]
-        self.code_maps, self.count_maps = {}, {}
-        g = np.random.default_rng(member.seed + 7)
-        for i in many:
-            n = n_categories[i]
-            if member.categories == "shuffled":
-                self.code_maps[i] = g.permutation(n).astype(np.float64)
-            elif member.categories == "counts":
+        self.count_maps = {}
+        if member.categories == "counts":
+            for i in many:
                 codes = X[:, i][np.isfinite(X[:, i])].astype(int)
-                self.count_maps[i] = np.log1p(np.bincount(codes, minlength=n).astype(np.float64))
+                counts = np.bincount(codes, minlength=n_categories[i]).astype(np.float64)
+                self.count_maps[i] = np.log1p(counts)
 
     @staticmethod
     def _lookup(codes: np.ndarray, table: np.ndarray) -> np.ndarray:
@@ -332,16 +328,14 @@ class MemberPreprocessor:
 
     def _features(self, X: np.ndarray) -> np.ndarray:
         """The member's columns for clipped rows X, before the identifier and the shuffle: the
-        numeric transform, sign flips and code maps on X, then `_base`, then the count columns."""
+        numeric transform and sign flips on X, then `_base`, then the count columns."""
         counts = [self._lookup(X[:, i], t) for i, t in self.count_maps.items()]
-        if self.numeric is not None or self.signs is not None or self.code_maps:
+        if self.numeric is not None or self.signs is not None:
             X = X.copy()
             if self.numeric is not None:
                 X[:, self.numeric_ix] = self.numeric(X[:, self.numeric_ix])
             if self.signs is not None:
                 X[:, self.numeric_ix] *= self.signs
-            for i, table in self.code_maps.items():
-                X[:, i] = self._lookup(X[:, i], table)
         base = self._base(X)
         return np.concatenate([base, np.stack(counts, axis=1)], axis=1) if counts else base
 
