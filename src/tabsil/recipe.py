@@ -24,7 +24,7 @@ temperatures, target LayerNorm, pre-head MLP, interleaved stages, retrieval deco
 head, one multitask model) are fixed in the code (`tabsil.models.column_row_transformer`); this
 module holds the numbers.
 
-    clf = TabSilClassifier().fit(x_train, y_train)  # the default Hub repo (`HUB_REPO`)
+    clf = TabSilClassifier().fit(x_train, y_train)  # `HUB_REPO` at the tag `HUB_REVISION`
     reg = TabSilRegressor(model, borders).fit(x_train, y_train)
 """
 
@@ -116,10 +116,14 @@ def _inference_kwargs(model: nn.Module, task: str, n_estimators, member_kinds) -
     return out
 
 
-# The default Hub repo of `TabSilClassifier()` and `TabSilRegressor()` (the v1 weights).
-# One multitask model serves both tasks
+# The default Hub repo of `TabSilClassifier()` and `TabSilRegressor()` and the revision they
+# download: the Hub tag `v1` (the v1 weights), so a tabsil release keeps downloading the same
+# weights when `main` moves. One multitask model serves both tasks. A repo id passed by the caller
+# keeps its own revision (`aiden-jeon/tabsil` is `main`, `aiden-jeon/tabsil@stage2-10k` a branch)
 HUB_REPO = "aiden-jeon/tabsil"
-HUB_REPOS = {"classification": HUB_REPO, "regression": HUB_REPO}
+HUB_REVISION = "v1"
+HUB_DEFAULT = f"{HUB_REPO}@{HUB_REVISION}"
+HUB_REPOS = {"classification": HUB_DEFAULT, "regression": HUB_DEFAULT}
 
 
 def _load(model, task: str, repos: dict[str, str]) -> tuple[nn.Module, torch.Tensor | None]:
@@ -131,9 +135,9 @@ def _load(model, task: str, repos: dict[str, str]) -> tuple[nn.Module, torch.Ten
 
 class TabSilClassifier(EnsembleClassifier):
     """TabSil classification: `EnsembleClassifier` with TabSil's inference defaults. Without `model`
-    it downloads the default Hub repo (`HUB_REPO`). Other weights can
-    be given as a Hub repo id
-    (`owner/name`, `owner/name@branch`), a local folder, or a model. The member count and
+    it downloads the default Hub repo (`HUB_REPO`) at the tag `HUB_REVISION`. Other weights can
+    be given as a Hub repo id (`owner/name` is `main`, `owner/name@branch` a branch, tag or
+    commit), a local folder, or a model. The member count and
     kinds default to the model's settings (`default_inference`); arguments override them.
 
         clf = TabSilClassifier().fit(x_train, y_train)
@@ -157,8 +161,8 @@ class TabSilClassifier(EnsembleClassifier):
 
 class TabSilRegressor(EnsembleRegressor):
     """TabSil regression: `EnsembleRegressor` with TabSil's inference defaults. Without `model` it
-    downloads the weights and their regression borders from the default Hub repo (`HUB_REPO`).
-    Other weights can be given as a Hub repo id, a local folder (borders
+    downloads the weights and their regression borders from the default Hub repo (`HUB_REPO`) at
+    the tag `HUB_REVISION`. Other weights can be given as a Hub repo id, a local folder (borders
     from there too), or a model with `borders`.
 
         reg = TabSilRegressor().fit(x_train, y_train)

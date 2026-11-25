@@ -120,13 +120,13 @@ TBD.
 ## Usage
 
 ```bash
-uv add "tabsil @ git+https://github.com/Aiden-Jeon/tabsil"
+uv add tabsil   # or: pip install tabsil
 ```
 
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor
 
-# both download aiden-jeon/tabsil (one multitask model)
+# both download aiden-jeon/tabsil at the tag v1 (one multitask model)
 # x_train can be a pandas DataFrame with categorical columns
 clf = TabSilClassifier(device="cuda").fit(x_train, y_train)
 proba = clf.predict_proba(x_test)  # (n_test, n_classes), columns in clf.classes_ order
@@ -140,7 +140,7 @@ Each class above loads its own copy of the 222M weights. To use both tasks with 
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor, from_pretrained
 
-model, borders = from_pretrained("aiden-jeon/tabsil")
+model, borders = from_pretrained("aiden-jeon/tabsil@v1")
 clf = TabSilClassifier(model, device="cuda")
 reg = TabSilRegressor(model, borders, device="cuda")
 ```
@@ -149,15 +149,15 @@ reg = TabSilRegressor(model, borders, device="cuda")
 
 ```bash
 uv run --package tabsil-train python training/scripts/eval.py --suite all \
-  --classifier-path hf://aiden-jeon/tabsil \
-  --regressor-path hf://aiden-jeon/tabsil
+  --classifier-path hf://aiden-jeon/tabsil@v1 \
+  --regressor-path hf://aiden-jeon/tabsil@v1
 ```
 
 `--suite tabarena-lite` and `--suite beyondarena` run the arena suites (they need the `arena` extra; see the repository README).
 
 ## Intermediate checkpoints
 
-The weights at the end of stages 1 and 2 are kept as branches of this repo. Each branch holds the weights, config and a short README that points back here; this card on `main` describes all of them.
+The v1 weights on `main` are also tagged `v1`; `TabSilClassifier()` and `TabSilRegressor()` (tabsil ≥ 0.1.0) download that tag, so they keep the same weights if `main` changes. The weights at the end of stages 1 and 2 are kept as branches of this repo. Each branch holds the weights, config and a short README that points back here; this card on `main` describes all of them.
 
 | Branch | Weights | Mean ROC AUC | RMSE ratio | TabArena-Lite Elo |
 | --- | --- | --- | --- | --- |

@@ -547,7 +547,8 @@ def shard_jobs(
     jobs = []
     for dataset, splits in queue:
         digest = hashlib.sha1(dataset.encode()).hexdigest()[:8]
-        folder = f"{re.sub(r'[^\w.-]', '_', dataset)}-{digest}"
+        safe_name = re.sub(r"[^\w.-]", "_", dataset)
+        folder = f"{safe_name}-{digest}"
         dataset_dir = out_dir / "shards" / "datasets" / folder / suite
         jobs.append(
             {

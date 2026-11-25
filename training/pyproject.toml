@@ -8,9 +8,10 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Aiden-Jeon", email = "aiden.jongseob@gmail.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 # Lower bounds follow Databricks Serverless GPU environment v6 (the training and evaluation jobs
-# in scripts/*.yaml run there); torch comes with tabsil (pinned to the 2.11 build tested there).
+# in scripts/*.yaml run there); torch comes with tabsil (the workspace lock keeps the 2.11 build
+# tested there).
 # pandas comes with tabsil (>=2.2) and is raised to >=3.0.6 in the dev group; the arena extra's
 # tabarena (autogluon) needs pandas<2.4, so that install gets 2.3 (tool.uv.conflicts in the
 # workspace root pyproject.toml).

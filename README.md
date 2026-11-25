@@ -48,11 +48,11 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 
 ## Install
 
-Inference only:
+Inference only, from PyPI:
 
 ```bash
-uv add "tabsil @ git+https://github.com/Aiden-Jeon/tabsil"
-# once a release is on PyPI: uv add tabsil
+uv add tabsil                     # or: pip install tabsil
+uv add "tabsil @ git+https://github.com/Aiden-Jeon/tabsil"   # the latest main instead of a release
 ```
 
 Training and evaluation, from a clone:
@@ -68,11 +68,11 @@ uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabA
 
 Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3).
 
-Python ≥ 3.12, PyTorch 2.11.
+Python ≥ 3.11, PyTorch ≥ 2.11 (the benchmark results below were measured with PyTorch 2.11).
 
 ## Use
 
-Without a model, `TabSilClassifier()` and `TabSilRegressor()` download the v1 weights from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`, [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil)):
+Without a model, `TabSilClassifier()` and `TabSilRegressor()` download the v1 weights from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`, [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil)) at the tag `v1` (`tabsil.recipe.HUB_REVISION`), so a release keeps downloading the same weights when the repo's `main` changes:
 
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor
@@ -84,7 +84,7 @@ reg = TabSilRegressor(device="cuda").fit(X_train, y_train)
 y_pred = reg.predict(X_test)
 ```
 
-Other weights are given as the first argument: a Hub repo id (`"owner/name"`, or `"aiden-jeon/tabsil@stage2-10k"` for a branch), a folder written by `tabsil.hub.save_pretrained` (`model.safetensors` + `config.json`), or a model:
+Other weights are given as the first argument: a Hub repo id (`"owner/name"` for its `main`, or `"aiden-jeon/tabsil@stage2-10k"` for a branch, tag or commit), a folder written by `tabsil.hub.save_pretrained` (`model.safetensors` + `config.json`), or a model:
 
 ```python
 from tabsil.models import load_checkpoint

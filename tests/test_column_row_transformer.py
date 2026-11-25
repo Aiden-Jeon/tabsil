@@ -416,7 +416,7 @@ def test_tabsil_classes_share_the_multitask_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "from_pretrained", fake)
     clf, reg = TabSilClassifier(), TabSilRegressor()
     assert recipe.HUB_REPO == "aiden-jeon/tabsil"
-    assert asked == [recipe.HUB_REPO, recipe.HUB_REPO]
+    assert asked == [recipe.HUB_DEFAULT, recipe.HUB_DEFAULT]  # the same repo, at the tag v1
     for loaded in (clf.model, reg.model):
         assert loaded.config == model.config
         for name, tensor in model.state_dict().items():
