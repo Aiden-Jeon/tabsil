@@ -121,13 +121,13 @@ def test_run_id_changes_with_the_estimator_fingerprint():
     assert a == arena._run_id("clf=step_100k", "tabsil")
     assert a != arena._run_id("clf=step_200k", "tabsil")
     assert a != arena._run_id("clf=step_100k", "tabsil-v2")
-    # pinned: the hash still covers bagging 0 (removed option), so earlier caches keep their ids
-    assert a == "1e35d210049f"
+    # pinned: a different value means existing arena caches (out_dir/runs/<id>) are no longer found
+    assert a == "f88b11cf80e2"
 
 
 def test_default_arena_fingerprint_and_run_id_are_pinned(monkeypatch, tmp_path):
-    # the default settings' fingerprint and run id from before bagging and test-time methods were
-    # removed: finished splits in existing arena caches stay reusable
+    # the default settings' fingerprint and run id: if either changes, existing arena caches
+    # (out_dir/runs/<id>) are no longer found and their splits run again
     script = _eval_script()
     model = helpers.tiny_model()
     monkeypatch.setattr(script, "load_model", lambda *a, **k: (model, None))
@@ -142,11 +142,12 @@ def test_default_arena_fingerprint_and_run_id_are_pinned(monkeypatch, tmp_path):
         ' "paths": {"classification": "hf://aiden-jeon/tabsil", "regression":'
         ' "hf://aiden-jeon/tabsil"}}'
     )
-    assert arena._run_id(fingerprint, "tabsil") == "5179fc12fa8d"
+    assert arena._run_id(fingerprint, "tabsil") == "569e39a3f162"
 
 
-def test_summary_and_cache_folder_keep_bagging_zero(monkeypatch, tmp_path):
-    # summary.json keeps its "bagging" key (0: one fit per split), the cache folder its run id
+def test_summary_and_cache_folder_record_method_and_fingerprint(monkeypatch, tmp_path):
+    # summary.json names the cache folder's run id; the folder's fingerprint.txt holds the method
+    # and the fingerprint only
     pytest.importorskip("tabarena")
     grid = pd.DataFrame({"dataset": ["d"], "split": [0], "fold": [0], "repeat": [0]})
     grid["skip_reason"] = None
@@ -176,9 +177,9 @@ def test_summary_and_cache_folder_keep_bagging_zero(monkeypatch, tmp_path):
         fingerprint="fp",
         results=[],
     )
-    assert summary["bagging"] == 0 and summary["run_id"] == arena._run_id("fp", "tabsil")
+    assert "bagging" not in summary and summary["run_id"] == arena._run_id("fp", "tabsil")
     text = (tmp_path / "runs" / summary["run_id"] / "fingerprint.txt").read_text()
-    assert text == "tabsil\nbagging=0\nfp\n"
+    assert text == "tabsil\nfp\n"
 
 
 def test_run_times_average_the_splits_that_ran():

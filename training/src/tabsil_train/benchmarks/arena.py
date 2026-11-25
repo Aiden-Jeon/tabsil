@@ -217,7 +217,7 @@ def run(
     run_id = _run_id(fingerprint, method)
     run_dir = out_dir / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "fingerprint.txt").write_text(f"{method}\nbagging=0\n{fingerprint}\n")
+    (run_dir / "fingerprint.txt").write_text(f"{method}\n{fingerprint}\n")
 
     if results is not None:
         results = list(results)
@@ -293,7 +293,6 @@ def run(
         "suite": suite.name,
         "method": name or method,
         "run_id": run_id,
-        "bagging": 0,  # one fit per split (key kept to match earlier summaries)
         "limits": _limits_dict(limits),
         "splits": len(grid),
         "datasets": int(grid["dataset"].nunique()),
@@ -358,8 +357,7 @@ def split_rows(context, subsample_rows: int | None = None) -> dict[str, int]:
 def _run_id(fingerprint: str, method: str) -> str:
     import hashlib
 
-    # 0: the bagging fold count, removed from the harness; kept so earlier caches keep their ids
-    text = json.dumps([method, 0, fingerprint])
+    text = json.dumps([method, fingerprint])
     return hashlib.sha1(text.encode()).hexdigest()[:12]
 
 

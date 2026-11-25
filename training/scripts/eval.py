@@ -1008,7 +1008,6 @@ def log_arena_mlflow(args, summary: dict, out_dir: Path, factories: dict) -> Non
     mlflow.log_params(
         {
             "suite": args.suite,
-            "bagging": 0,
             "method_name": args.method_name,
             "run_id_cache": summary["run_id"],
             "seed": args.seed,
