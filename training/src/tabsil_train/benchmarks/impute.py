@@ -40,18 +40,19 @@ nothing is filled in for it.
 from __future__ import annotations
 
 import functools
-import hashlib
 import json
 import os
 import time
 import traceback
-import urllib.request
 import zlib
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks._files import download_verified
 
 OPENML_URL = "https://api.openml.org/data/v1/download"
 # name -> (OpenML dataset id, ARFF file id, ARFF file name)
@@ -112,20 +113,15 @@ def cache_dir() -> Path:
 
 def arff_path(name: str, root: Path | None = None) -> Path:
     """The cached ARFF file of table `name`, downloaded from OpenML and checked against its
-    sha256 the first time."""
+    sha256 the first time (`_files.download_verified`: a download with another hash is not
+    cached)."""
     dataset_id, file_id, file_name = TABLES[name]
-    sha256 = SHA256[dataset_id]
-    path = (root or cache_dir()) / f"{name}.arff"
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".part")
-        with urllib.request.urlopen(f"{OPENML_URL}/{file_id}/{file_name}.arff", timeout=300) as r:
-            tmp.write_bytes(r.read())
-        tmp.replace(path)
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest != sha256:
-        raise ValueError(f"{path}: sha256 {digest} is not the pinned OpenML file of {name}")
-    return path
+    return download_verified(
+        f"{OPENML_URL}/{file_id}/{file_name}.arff",
+        (root or cache_dir()) / f"{name}.arff",
+        SHA256[dataset_id],
+        what=f"the pinned OpenML file of {name}",
+    )
 
 
 def parse_arff(text: str) -> tuple[np.ndarray, list[int], list[str]]:
@@ -493,9 +489,7 @@ def finished_keys(rows: pd.DataFrame) -> set[tuple]:
 
 
 def read_results(path: Path) -> pd.DataFrame:
-    if path.exists() and path.stat().st_size:
-        return pd.read_csv(path)
-    return pd.DataFrame(columns=RESULT_COLUMNS)
+    return _files.read_results(path, RESULT_COLUMNS)
 
 
 def run(
