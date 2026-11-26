@@ -22,3 +22,32 @@ Copyright (c) 2022, Mickey (Minqi), licensed under the BSD 2-Clause License
 - src/tabsil_train/benchmarks/adbench.py `adbench_split`: adapted from
   adbench/datasets/data_generator.py `DataGenerator.generator` at commit 3dac822 (the
   unsupervised split). The ADBench tables are downloaded at run time, not redistributed
+
+This product includes material adapted from CausalPFN (https://github.com/vdblm/CausalPFN, commit
+b7ed2f1e1d58a83c608d08ced3dee955f0a7c221), Copyright 2025 the CausalPFN authors, licensed under
+the CausalPFN License, Version 1.0 (its terms are those of the Apache License 2.0;
+LICENSES/CausalPFN-License-1.0.txt in the repository root):
+- src/tabsil_train/benchmarks/causal.py `acic_covariates`, `acic_split`: the ACIC 2016 split of
+  benchmarks/acic2016.py `ACIC2016Dataset` (row permutation seeded 42 + table index, 90/10 split,
+  category codes of x_2, x_21, x_24 appended after the other covariates)
+- src/tabsil_train/benchmarks/causal_reference.csv: published numbers copied from the CausalPFN
+  paper (arXiv 2506.07918v2, Tables 1, 3 and 6) and from Shalit et al. 2017 (arXiv 1606.03976v5,
+  Table 1); see the file header
+
+Benchmark data used by src/tabsil_train/benchmarks/causal.py is downloaded at run time and not
+redistributed:
+- IHDP (Hill 2011; the 100-realization files of Shalit et al. 2017,
+  https://www.fredjo.com/files/ihdp_npci_1-100.{train,test}.npz): no data license is stated
+- ACIC 2016 (Dorie et al. 2019) as shipped with causallib
+  (https://github.com/BiomedSciAI/causallib, commit 267e0c72df81ea8264ece46496107f99a599b60d,
+  causallib/datasets/data/acic_challenge_2016): Community Data License Agreement - Sharing 1.0
+  (LICENSES/ACIC2016-CDLA-Sharing-1.0.txt in the repository root)
+
+This product includes software adapted from tabpfn-extensions
+(https://github.com/PriorLabs/tabpfn-extensions, commit a049fd7), Copyright (c) Prior Labs GmbH
+2025, licensed under the Apache License 2.0:
+- src/tabsil_train/benchmarks/impute.py `extension_categorical`: reimplements
+  src/tabpfn_extensions/utils.py `infer_categorical_features` (numpy arrays), and
+  `official_model_class` overrides `TabPFNUnsupervisedModel.use_classifier_` of
+  src/tabpfn_extensions/unsupervised/unsupervised.py to count classes over observed values. The
+  extension itself is a dependency of the `impute` extra, not copied

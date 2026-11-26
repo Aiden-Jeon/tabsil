@@ -1,0 +1,39 @@
+# TabSil treatment effect evaluation (training/scripts/eval.py --suite causal) on Databricks AI
+# Runtime: tabsil.causal.TabSilCATE (S-, T-, X-, DR-learner) on IHDP (100 realizations) and ACIC
+# 2016 (10 simulations) (tabsil_train.benchmarks.causal), √PEHE and the ATE error within-sample and
+# out-of-sample. The model is TABSIL_REGRESSOR (default: the default Hub repo at the v1 tag; it
+# serves classification too, for the propensity). The EconML baselines run on the CPU and are not
+# in this job (TABSIL_METHODS): `uv run --package tabsil-train --extra causal python
+# training/scripts/eval.py --suite causal --causal-methods econml_cf,econml_s,econml_t,econml_x,econml_dr`.
+# From the repository root:
+#   databricks air run -f training/scripts/eval_causal.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+#     --override "env_variables.TABSIL_EXTRA_ARGS=--datasets ihdp --causal-realizations 1-3"
+experiment_name: tabsil
+mlflow_run_name: tabsil-v1-eval-causal
+environment:
+  version: databricks_ai_v6
+  dependencies:
+    - huggingface-hub>=0.34
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+code_source:
+  type: snapshot
+  snapshot:
+    # the two packages (tabsil, tabsil-train, imported through PYTHONPATH; the reference numbers
+    # are a CSV file next to causal.py) and the script, relative to the repository root
+    root_path: ../..
+    include_paths:
+      - src
+      - training/src
+      - training/scripts/eval.py
+env_variables:
+  TABSIL_REGRESSOR: hf://aiden-jeon/tabsil@v1
+  TABSIL_METHODS: tabsil_s,tabsil_t,tabsil_x,tabsil_dr
+  TABSIL_EXTRA_ARGS: ""
+max_retries: 0
+timeout_minutes: 240
+command: >-
+  PYTHONPATH=$CODE_SOURCE_PATH/src:$CODE_SOURCE_PATH/training/src
+  python $CODE_SOURCE_PATH/training/scripts/eval.py --suite causal
+  --regressor-path $TABSIL_REGRESSOR --causal-methods $TABSIL_METHODS $TABSIL_EXTRA_ARGS
