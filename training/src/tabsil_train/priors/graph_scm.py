@@ -35,7 +35,7 @@ borders are drawn with them (`make_borders(..., **options)`, `TARGET_FIELDS`):
   factors (x only)
 - `relabel_prob` (`transforms.Relabel`): the target recomputed from 1-4 columns
 - `corrected_num_converters`, `corrected_cat_sizes` (`generators.graph_scm.GraphSCM`): the two
-  TabICL `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 100 categories)
+  TabICL `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 200 categories)
 
 Regression target scaling, off by default: with `target_train_rows`
 (`transforms.TrainRowTargetScale`, a training config field like `filter_unpredictable`), the

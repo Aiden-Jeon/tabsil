@@ -7,8 +7,8 @@ prior can use the #14 stage 2 run as its control) plus, at Kumo-Tabular's rates
 
 - `corrected_num_converters`: dataset columns (and the regression target) can be Kumaraswamy-warped,
   so skewed and bounded marginals appear. sdm warps the dataset value in every stage
-- `corrected_cat_sizes`: the SCM's categorical columns get up to 100 categories instead of 9. sdm
-  draws up to 200 (`max_cardinality=LogUniformInt(2, 200)`) in every stage
+- `corrected_cat_sizes`: the SCM's categorical columns get up to 200 categories instead of 9, as
+  sdm draws them (`max_cardinality=LogUniformInt(2, 200)`) in every stage
 - `correlate_prob` 0.3 (`transforms.CorrelateColumns`): sdm `correlated_block_prob`, every stage
 - `relabel_prob` 0.1 (`transforms.Relabel`): sdm `relabel_prob`, stages 2 and 3
 - `coarsen_prob` 0.1 (`transforms.Coarsen`): sdm `coarsen_prob`, stages 2 and 3

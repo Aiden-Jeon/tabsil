@@ -22,10 +22,12 @@ from tabsil_train.priors.pipeline import Group, Rng
 from tabsil_train.priors.transforms.categorical import log_uniform_int, power_law_weights
 
 # A column with at most this many distinct values is treated like a categorical column: blending
-# keeps its values and their counts. This is the TabICL SCM's largest categorical size with
-# `use_corrected_cat_sizes` (`sample_categorical_sizes`, `max_cat_size=100`). The TabICL SCM does
-# not say which of its columns are categorical, so discretized numeric columns with few values are
-# also kept discrete here (sdm knows the column types and blends those linearly).
+# keeps its values and their counts. The TabICL SCM does not say which of its columns are
+# categorical, so discretized numeric columns with few values are also kept discrete here (sdm
+# knows the column types and blends those linearly). With `use_corrected_cat_sizes` the SCM makes
+# categorical columns with up to 200 categories (`tabicl.prior._graph_scm` passes
+# `max_cat_size=200` to `sample_categorical_sizes`; that function's own default is 100), so a
+# categorical column of 101-200 categories is blended linearly here.
 DISCRETE_LEVELS = 100
 # TabICL's regression target processing (`tabicl.prior._graph_scm`: `outlier_removing`, then
 # `standard_scaling`)

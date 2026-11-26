@@ -29,8 +29,10 @@ did TabSil v1). Both change y as well as x:
   children. Without it the two are swapped (TabICL: "this is the wrong version, but it was used
   in the experiments"), so no dataset column is ever Kumaraswamy-warped. Kumo-Tabular's SCM (sdm
   `DistributionalMixtureConverter`) warps the dataset value.
-- `corrected_cat_sizes` (`use_corrected_cat_sizes`): categorical columns get up to 100 categories
-  (a per-table limit, log-uniform) instead of at most 9. Kumo-Tabular draws up to 200.
+- `corrected_cat_sizes` (`use_corrected_cat_sizes`): categorical columns get up to 200 categories
+  (a per-table limit drawn log-uniformly from 2-200; the graph SCM passes `max_cat_size=200` to
+  `sample_categorical_sizes`) instead of at most 9. Kumo-Tabular draws the same range
+  (`max_cardinality=LogUniformInt(2, 200)`).
 """
 
 from __future__ import annotations

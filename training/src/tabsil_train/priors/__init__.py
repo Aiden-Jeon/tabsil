@@ -19,7 +19,7 @@ Assembled priors:
 - `graph_scm_hicard_missing`: `graph_scm` with high-cardinality categorical columns and structured
   (MAR/MNAR, column-group) missing values (`graph_scm` options at fixed values)
 - `graph_scm_realism`: `graph_scm_hicard_missing` plus Kumo-Tabular's other realism parts
-  (Kumaraswamy-warped columns, up to 100 categories, correlated column blocks, relabeled targets,
+  (Kumaraswamy-warped columns, up to 200 categories, correlated column blocks, relabeled targets,
   coarse values)
 
 The training loop (`tabsil_train.training.loop`) picks its prior from `PRIOR_TYPES` by name
