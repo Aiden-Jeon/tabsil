@@ -13,7 +13,7 @@ TabSil is a tabular foundation model. One model handles both classification and 
 
 This repository has everything needed to reproduce TabSil. It holds two packages:
 
-- `tabsil` (`src/tabsil/`): inference only. The model, the scikit-learn style estimators (classification and regression; forecasting and outlier detection since tabsil 0.1.2), and loading weights from the Hugging Face Hub.
+- `tabsil` (`src/tabsil/`): inference only. The model, the scikit-learn style estimators (classification and regression; forecasting, outlier detection, imputation and treatment effects since tabsil 0.1.2), and loading weights from the Hugging Face Hub.
 - `tabsil-train` (`training/`, imported as `tabsil_train`): the synthetic-data prior, the training curriculum, the benchmark harness, and the Hub upload scripts. It is a uv workspace member that depends on `tabsil`.
 
 > Status: the TabSil v1 weights are on the Hugging Face Hub: [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil) (model card with the benchmark results).
@@ -101,6 +101,7 @@ CATE estimation zero-shot with the v1 weights at the Hub tag `v1`, i.e. tabsil 0
 
 - On IHDP, every TabSil learner has a lower mean √PEHE, within- and out-of-sample, than every EconML baseline (the ATE errors are closer: EconML's T-learner has the lowest within-sample ε_ATE after TabSil's S and T). The S-learner's out-of-sample √PEHE is below the best EconML method's on 100 of 100 realizations; the means are pulled up by a few realizations with large effects (realization 9: 7.4 for TabSil S vs 17.6 for EconML T). On ACIC 2016 the X-learner is best out-of-sample, TabSil's T-learner is behind EconML's X-learner, and within-sample only TabSil's X-learner is ahead of EconML's X-learner. The default is the S-learner: the best average rank of the four and one fit.
 - Published numbers on the same files, with protocol differences (`training/src/tabsil_train/benchmarks/causal_reference.csv`): CausalPFN (Balazadeh et al. 2025) reports out-of-sample √PEHE 0.58 ± 0.07 on IHDP and 0.92 ± 0.11 on ACIC 2016, TabPFN as the outcome model 0.95 ± 0.20 and 0.54 ± 0.08, with baselines tuned per dataset (their Table 1, IHDP T-learner 1.73, BART 2.50). Shalit et al. 2017 report CFR-Wass 0.71 / 0.76 (in / out) on IHDP, averaged over 1,000 realizations instead of these 100.
+- `TabSilCATE` ships in tabsil 0.1.2.
 - Snapshot 2026-11-26: TabSil on 1×H100 (9 min job, 440 fits of a learner on a realization, 0 failed, nothing imputed); EconML on a laptop CPU. Reproduce with `training/scripts/eval.py --suite causal --regressor-path hf://aiden-jeon/tabsil@v1` (job spec `training/scripts/eval_causal.yaml`; the EconML methods need the `causal` extra).
 
 ### Imputation (OpenML, MCAR)
@@ -121,6 +122,7 @@ Zero-shot missing value imputation with the v1 weights (`TabSilUnsupervised.impu
 - The median instead of the mean gives NRMSE 0.562 / 0.671 / 0.768, slightly worse, as expected for RMSE. TabSil with the TabPFN extension's column kinds (below) gives 0.583 / 0.693 / 0.802.
 - Both TabPFN extension methods also treat numeric columns with few distinct values (at most 40, more than 10 rows per value) as categorical and cast their values to `int`. This gives large errors on such columns: yeast `erl`, with values 0.5 and 1, has NRMSE 10.4 under both methods. `impute` also has large errors on numeric-only tables (california_housing `totalBedrooms` 5.6), so the column kinds do not explain all of it; the cause was not investigated. To run at all, `impute` needed tabpfn-extensions at commit a049fd7, because the 0.6.3 release fails on CUDA, and a fix of its class count for categorical columns with missing values.
 - Time per (table, rate, seed) on H100: TabSil 3.2 s (8 members), `simple_impute` 6.7 s, `impute` 328 s. MissForest takes 11.6 s on the CPU.
+- Measured with the Hub tag `v1`, i.e. tabsil 0.1.0's inference settings (`TabSilUnsupervised()` without a model now loads `v1.1`, which was not measured here). `TabSilUnsupervised.impute` ships in tabsil 0.1.2.
 - Run with `training/scripts/eval.py --suite impute` (job spec `training/scripts/eval_impute.yaml`, 8×H100 `--shards 8`, 68 min). MICE comes from a second run (14 min) after a fix of its categorical encoding. The per-table numbers, the differences from the official `impute` and what is not verified are in the pull request.
 
 ## Install
@@ -212,7 +214,7 @@ The cost is one fit and prediction per column and order (`n_permutations`, defau
 
 ### Imputation
 
-`TabSilUnsupervised.impute` fills missing values (NaN) from the same conditionals: each column with a missing value is predicted for the rows missing it from all other columns, the row's other missing cells left missing, so there is one fit per column with a missing value ([results](#imputation-openml-mcar)). Numeric cells get the predictive mean (`strategy="median"` for the median), categorical cells the most probable class; `n_samples` draws from the distributions instead (multiple imputation):
+(tabsil ≥ 0.1.2) `TabSilUnsupervised.impute` fills missing values (NaN) from the same conditionals: each column with a missing value is predicted for the rows missing it from all other columns, the row's other missing cells left missing, so there is one fit per column with a missing value ([results](#imputation-openml-mcar)). Numeric cells get the predictive mean (`strategy="median"` for the median), categorical cells the most probable class; `n_samples` draws from the distributions instead (multiple imputation):
 
 ```python
 model = TabSilUnsupervised(categorical_features=[3, 5], device="cuda").fit(X)  # X with NaN
@@ -224,7 +226,7 @@ Fit on the table to impute itself or on other rows. Without `categorical_feature
 
 ### Treatment effects
 
-`TabSilCATE` estimates conditional average treatment effects of a binary treatment on a continuous outcome from observational data, with TabSil as the base learner of a meta-learner (zero-shot, the v1 weights): S-, T-, X- or DR-learner (`learner="s" | "t" | "x" | "dr"`). Outcome models are `TabSilRegressor`, propensity scores `TabSilClassifier`.
+(tabsil ≥ 0.1.2) `TabSilCATE` estimates conditional average treatment effects of a binary treatment on a continuous outcome from observational data, with TabSil as the base learner of a meta-learner (zero-shot, the v1 weights): S-, T-, X- or DR-learner (`learner="s" | "t" | "x" | "dr"`). Outcome models are `TabSilRegressor`, propensity scores `TabSilClassifier`.
 
 ```python
 from tabsil import TabSilCATE
