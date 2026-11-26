@@ -36,6 +36,11 @@ arena = [
 fev = [
     "fev==0.10.0",
 ]
+# treatment effect evaluation (tabsil_train.benchmarks.causal): the EconML baselines run on the
+# same splits (causal forest, GBM-based S/T/X/DR-learners)
+causal = [
+    "econml==0.17.1",
+]
 
 [tool.uv.sources]
 tabsil = { workspace = true }

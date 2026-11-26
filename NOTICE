@@ -50,3 +50,10 @@ This product includes software adapted from ADBench (https://github.com/Minqi824
 - training/src/tabsil_train/benchmarks/adbench.py `adbench_split`: adapted from
   adbench/datasets/data_generator.py `DataGenerator.generator` (the unsupervised split). The
   ADBench tables are downloaded at run time from that repository, not redistributed
+
+This product includes material adapted from CausalPFN (https://github.com/vdblm/CausalPFN, commit
+b7ed2f1), Copyright 2025 the CausalPFN authors, licensed under the CausalPFN License, Version 1.0
+(the terms of the Apache License 2.0; LICENSES/CausalPFN-License-1.0.txt):
+- training/src/tabsil_train/benchmarks/causal.py `acic_split`: the ACIC 2016 split of
+  benchmarks/acic2016.py (see training/NOTICE). The IHDP and ACIC 2016 data are downloaded at run
+  time, not redistributed (ACIC 2016: CDLA-Sharing-1.0, LICENSES/ACIC2016-CDLA-Sharing-1.0.txt)

@@ -83,6 +83,26 @@ Unsupervised outlier detection on 12 [ADBench](https://github.com/Minqi824/ADBen
 - With a clean context (only the training rows labeled normal, a diagnostic that uses labels and stays out of the Elo) TabSil's mean AUROC is 0.820 (TabPFN extension 0.847, IsolationForest 0.767), and it is within 0.01 of the best pyod method or above it on 8 of 12 tables. Like the TabPFN extension, the density model is much stronger than the unsupervised score suggests; the anomalies in the context hurt it most (cover +0.46, cardio +0.31).
 - Run with `training/scripts/eval.py --suite adbench` (8×H100, 14 min). Per-table numbers, the differences from the official extension and what is not verified are in [#19](https://github.com/Aiden-Jeon/tabsil/pull/19).
 
+### Treatment effects (IHDP, ACIC 2016)
+
+CATE estimation zero-shot with the v1 weights at the Hub tag `v1`, i.e. tabsil 0.1.0's inference settings (`standard` members, temperature 0.9; `TabSilCATE()` without a model now loads `v1.1`, which was not measured here). TabSil is the base learner of S/T/X/DR meta-learners, on IHDP (100 realizations: the files of Shalit et al. 2017, 672 training and 75 test rows each) and ACIC 2016 (the 10 simulations shipped with causallib, 4,802 rows × 58 covariates, CausalPFN's 90/10 split). √PEHE is against the noiseless effect mu1 − mu0, within-sample (training rows) and out-of-sample (test rows); ε_ATE is the absolute ATE error. Mean ± standard error over realizations, lower is better. The EconML baselines (0.17.1, default settings, scikit-learn gradient boosting as every base model) ran on the same splits.
+
+| Method | IHDP √PEHE in | IHDP √PEHE out | IHDP ε_ATE out | ACIC √PEHE in | ACIC √PEHE out | ACIC ε_ATE out |
+| --- | --- | --- | --- | --- | --- | --- |
+| **TabSil S-learner** (default) | **0.50 ± 0.07** | **0.53 ± 0.09** | **0.12 ± 0.01** | 1.09 ± 0.38 | 0.55 ± 0.11 | 0.05 ± 0.02 |
+| TabSil T-learner | 0.60 ± 0.06 | 0.62 ± 0.09 | 0.13 ± 0.01 | 1.05 ± 0.24 | 0.73 ± 0.13 | 0.05 ± 0.01 |
+| TabSil X-learner | 0.89 ± 0.09 | 0.97 ± 0.16 | 0.18 ± 0.02 | **0.87 ± 0.28** | **0.38 ± 0.04** | **0.05 ± 0.01** |
+| TabSil DR-learner | 0.82 ± 0.07 | 0.75 ± 0.07 | 0.24 ± 0.02 | 1.21 ± 0.30 | 0.68 ± 0.19 | 0.05 ± 0.02 |
+| EconML T-learner (GBM) | 1.43 ± 0.17 | 2.08 ± 0.33 | 0.25 ± 0.04 | 1.22 ± 0.19 | 0.86 ± 0.03 | 0.13 ± 0.03 |
+| EconML X-learner (GBM) | 2.58 ± 0.36 | 2.91 ± 0.48 | 0.32 ± 0.04 | 1.04 ± 0.24 | 0.69 ± 0.09 | 0.08 ± 0.02 |
+| EconML S-learner (GBM) | 2.99 ± 0.48 | 3.24 ± 0.58 | 0.49 ± 0.11 | 1.54 ± 0.30 | 1.16 ± 0.15 | 0.21 ± 0.05 |
+| EconML DR-learner (GBM) | 19.49 ± 2.75 | 11.38 ± 1.20 | 1.84 ± 0.26 | 2.06 ± 0.44 | 1.32 ± 0.24 | 0.16 ± 0.04 |
+| EconML CausalForestDML | 3.60 ± 0.53 | 3.85 ± 0.61 | 0.60 ± 0.07 | 1.65 ± 0.37 | 1.23 ± 0.24 | 0.15 ± 0.04 |
+
+- On IHDP, every TabSil learner has a lower mean √PEHE, within- and out-of-sample, than every EconML baseline (the ATE errors are closer: EconML's T-learner has the lowest within-sample ε_ATE after TabSil's S and T). The S-learner's out-of-sample √PEHE is below the best EconML method's on 100 of 100 realizations; the means are pulled up by a few realizations with large effects (realization 9: 7.4 for TabSil S vs 17.6 for EconML T). On ACIC 2016 the X-learner is best out-of-sample, TabSil's T-learner is behind EconML's X-learner, and within-sample only TabSil's X-learner is ahead of EconML's X-learner. The default is the S-learner: the best average rank of the four and one fit.
+- Published numbers on the same files, with protocol differences (`training/src/tabsil_train/benchmarks/causal_reference.csv`): CausalPFN (Balazadeh et al. 2025) reports out-of-sample √PEHE 0.58 ± 0.07 on IHDP and 0.92 ± 0.11 on ACIC 2016, TabPFN as the outcome model 0.95 ± 0.20 and 0.54 ± 0.08, with baselines tuned per dataset (their Table 1, IHDP T-learner 1.73, BART 2.50). Shalit et al. 2017 report CFR-Wass 0.71 / 0.76 (in / out) on IHDP, averaged over 1,000 realizations instead of these 100.
+- Snapshot 2026-11-26: TabSil on 1×H100 (9 min job, 440 fits of a learner on a realization, 0 failed, nothing imputed); EconML on a laptop CPU. Reproduce with `training/scripts/eval.py --suite causal --regressor-path hf://aiden-jeon/tabsil@v1` (job spec `training/scripts/eval_causal.yaml`; the EconML methods need the `causal` extra).
+
 ## Install
 
 Inference only, from PyPI:
@@ -102,6 +122,7 @@ uv sync --all-packages            # tabsil + tabsil-train (training, priors, AML
 uv sync --package tabsil-train    # tabsil-train and its test tools only (tests: uv run --package tabsil-train pytest training/tests)
 uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
 uv sync --package tabsil-train --no-dev --extra fev --group arena-dev     # fev-bench forecasting evaluation
+uv sync --package tabsil-train --extra causal                             # treatment effect evaluation (EconML baselines)
 ```
 
 Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3). The `fev` extra (fev 0.10.0) needs `huggingface-hub<2`, so it is installed without the dev groups too.
@@ -168,6 +189,20 @@ scores = model.outlier_score(X_test)  # = -model.log_density(X_test)
 
 The cost is one fit and prediction per column and order (`n_permutations`, default 10). `model.conditional(X, target, given)` returns the distribution of one column given others, the part imputation and synthetic data can later build on.
 
+### Treatment effects
+
+`TabSilCATE` estimates conditional average treatment effects of a binary treatment on a continuous outcome from observational data, with TabSil as the base learner of a meta-learner (zero-shot, the v1 weights): S-, T-, X- or DR-learner (`learner="s" | "t" | "x" | "dr"`). Outcome models are `TabSilRegressor`, propensity scores `TabSilClassifier`.
+
+```python
+from tabsil import TabSilCATE
+
+est = TabSilCATE(device="cuda").fit(X, treatment, y)  # the S-learner
+tau = est.effect(X_test)  # CATE per row
+ate = est.ate()  # mean CATE over the training rows
+```
+
+`regressor=` / `classifier=` take any scikit-learn estimator instead of TabSil. See `src/tabsil/causal.py` for the learners and where they differ from EconML's.
+
 ## Model
 
 | Part | Choice | From |
@@ -210,7 +245,7 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 
 ## Evaluation
 
-`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration), forecasting on 10 fev-bench tasks (`--suite fev`, job spec `training/scripts/eval_fev.yaml`), and unsupervised outlier detection on 12 ADBench tables (`--suite adbench`, job spec in `training/scripts/eval.yaml`).
+`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration), forecasting on 10 fev-bench tasks (`--suite fev`, job spec `training/scripts/eval_fev.yaml`), unsupervised outlier detection on 12 ADBench tables (`--suite adbench`, job spec in `training/scripts/eval.yaml`), and treatment effects on IHDP and ACIC 2016 (`--suite causal`, job spec `training/scripts/eval_causal.yaml`).
 Train and inference time are reported as on the TabArena leaderboard: seconds per 1K train rows (fit) and per 1K test rows (predict), averaged over each dataset's splits, then the median over datasets. In the arenas they appear next to the baselines on the same splits (`summary.json`, `comparison.csv`).
 
 The official-protocol TabArena-Lite result in [Results](#results) is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The arena suites of `training/scripts/eval.py` fit each split once without bagging, a quicker check used to compare checkpoints; their Elo is not the official one.
@@ -223,6 +258,7 @@ TabSil puts together ideas from published work:
 - **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package), the three-stage training curriculum, and the QASSMax query gate of the `gated_logscale` attention temperature (BSD-3-Clause, `LICENSES/TabICL-BSD-3-Clause.txt`; see `NOTICE`).
 - **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source. The per-member numeric transforms and the category count columns of the inference ensemble follow its `numerical_processor` and `AddCategoryCounts` (re-implemented, not copied). The log-scale attention temperature (`LogScale`) follows the Apache-2.0 NVIDIA code (`sdm/nn/scaling.py`); see `NOTICE`.
 - **TabPFN-TS** (Prior Labs): forecasting with a tabular model; `TabSilForecaster`'s time features are adapted from the Apache-2.0 `tabpfn-time-series` package (see `NOTICE`). The forecasting evaluation uses **fev** / **fev-bench** (AutoGluon) and the comparison results of fm-agent-bench.
+- **Treatment effects**: the meta-learners of Künzel et al. (S/T/X) and Kennedy (DR), with EconML as the baseline. The benchmarks are IHDP (Hill 2011, in the 100-realization files of Shalit et al. 2017) and ACIC 2016 (Dorie et al. 2019, from causallib, CDLA-Sharing-1.0), with the ACIC split of CausalPFN (see `NOTICE`). The data is downloaded at run time.
 - **Muon** optimizer, and the **nanoTabPFN speedrun** for the training speed options.
 
 TabSil grew out of [minipfn](https://github.com/Aiden-Jeon/minipfn), a hands-on guide that reimplements PFN and TabPFN from scratch. TabSil is now trained in this repository; minipfn no longer holds code for it.

@@ -33,18 +33,19 @@ an error after the others; nothing is imputed for our methods.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import random
 import time
 import traceback
-import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks._files import download_verified
 
 ADBENCH_REPO = "Minqi824/ADBench"
 ADBENCH_COMMIT = "3dac8221081e190f157d78e93bfa8867f90d0965"
@@ -106,19 +107,15 @@ def cache_dir() -> Path:
 
 def npz_path(dataset: str, root: Path | None = None) -> Path:
     """The cached npz of `dataset`, downloaded from ADBENCH_URL and checked against SHA256 the
-    first time."""
+    first time (`_files.download_verified`: a download with another hash is not cached)."""
     name = DATASETS[dataset]
-    path = (root or cache_dir()) / f"{name}.npz"
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".part")
-        with urllib.request.urlopen(f"{ADBENCH_URL}/{name}.npz", timeout=120) as r:
-            tmp.write_bytes(r.read())
-        tmp.replace(path)
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest != SHA256[name]:
-        raise ValueError(f"{path}: sha256 {digest} is not the ADBench @ {ADBENCH_COMMIT[:7]} file")
-    return path
+    return download_verified(
+        f"{ADBENCH_URL}/{name}.npz",
+        (root or cache_dir()) / f"{name}.npz",
+        SHA256[name],
+        what=f"the ADBench @ {ADBENCH_COMMIT[:7]} file",
+        timeout=120,
+    )
 
 
 def load(dataset: str, root: Path | None = None) -> tuple[np.ndarray, np.ndarray]:
@@ -212,9 +209,7 @@ def job_cost(dataset: str, method: str) -> float:
 
 
 def read_results(path: Path) -> pd.DataFrame:
-    if path.exists() and path.stat().st_size:
-        return pd.read_csv(path)
-    return pd.DataFrame(columns=RESULT_COLUMNS)
+    return _files.read_results(path, RESULT_COLUMNS)
 
 
 def run(
