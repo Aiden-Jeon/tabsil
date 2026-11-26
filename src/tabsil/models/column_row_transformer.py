@@ -1133,9 +1133,6 @@ class TrainContext:
         c = self.n_columns
         return self._map(lambda t: t[start:stop], lambda s: s[start * c : stop * c])
 
-    def to(self, device: torch.device | str) -> TrainContext:
-        return self._map(lambda t: t.to(device), lambda s: s.to(device))
-
     @staticmethod
     def cat(contexts: list[TrainContext]) -> TrainContext:
         """The contexts stacked along the batch (they share the task, train-row and column
@@ -1502,20 +1499,29 @@ class ColumnRowTransformer(nn.Module):
         return self.heads[task](rows)
 
     def train_context_bytes(
-        self, n_train: int, columns: int, *, batch: int = 1, attention_itemsize: int = 2
+        self,
+        n_train: int,
+        columns: int,
+        *,
+        classes: int | None,
+        batch: int = 1,
+        attention_itemsize: int = 2,
     ) -> int:
         """Bytes of the train context (`train_context`) of `batch` tables with `n_train` rows and
         `columns` columns: float32 column summaries and train-row statistics, and the row ICL
-        keys/values and decoder keys in the attention dtype (`attention_itemsize`: 2 under
-        bfloat16 autocast, 4 in float32). The classification one-hot labels (up to `max_classes`
-        float32 per row) are counted at the class cap."""
+        keys/values in the attention dtype (`attention_itemsize`: 2 under bfloat16 autocast, 4 in
+        float32). For classification (`classes`: the one-hot label width, at least the target
+        embedding count `n_out`) also the decoder keys and the float32 one-hot labels; None for
+        regression, which keeps neither."""
         cfg = self.config
         summaries = cfg.column_blocks * columns * cfg.n_inducing * cfg.emsize * 4
         stats = columns * (n_train * 4 + 3 * 4 + 8)  # sorted train values, mean/std/used, count
         icl = cfg.nlayers * 2 * n_train * (cfg.icl_dim // cfg.nhead) * attention_itemsize
-        decoder = n_train * cfg.decoder_heads * cfg.decoder_head_dim * attention_itemsize
-        labels = n_train * self.max_classes * 4
-        return batch * (summaries + stats + icl + decoder + labels)
+        head = 0
+        if classes is not None:
+            decoder = n_train * cfg.decoder_heads * cfg.decoder_head_dim * attention_itemsize
+            head = decoder + n_train * max(classes, cfg.n_out) * 4
+        return batch * (summaries + stats + icl + head)
 
     def _rows(
         self,

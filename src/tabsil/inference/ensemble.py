@@ -294,8 +294,11 @@ class _Base:
             return
         n_train = self.X_trains_[0].shape[0]
         itemsize = 2 if self.device.type == "cuda" else 4  # bfloat16 autocast on CUDA
+        classes = len(self.classes_) if self.task == "classification" else None
         need = sum(
-            model.train_context_bytes(n_train, x.shape[1], attention_itemsize=itemsize)
+            model.train_context_bytes(
+                n_train, x.shape[1], classes=classes, attention_itemsize=itemsize
+            )
             for x in self.X_trains_
         )
         if need > self._context_budget():

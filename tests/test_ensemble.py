@@ -574,11 +574,13 @@ def test_train_context_bytes_counts_the_context():
     with torch.inference_mode():
         x, y = torch.randn(2, 30, 5), torch.randint(0, 3, (2, 30)).float()
         ctx = model.train_context(x, y, "classification")
-    # an upper bound: the labels are counted at the class cap
-    estimate = model.train_context_bytes(30, 5, batch=2, attention_itemsize=4)
-    assert ctx.nbytes <= estimate
-    labels = 2 * 30 * (model.max_classes - 3) * 4
-    assert estimate - labels == ctx.nbytes
+    estimate = model.train_context_bytes(30, 5, classes=3, batch=2, attention_itemsize=4)
+    assert estimate == ctx.nbytes
+    with torch.inference_mode():
+        reg = model.train_context(x, torch.randn(2, 30), "regression")
+    assert model.train_context_bytes(30, 5, classes=None, batch=2, attention_itemsize=4) == (
+        reg.nbytes
+    )
     # no tensor keeps a larger storage alive (e.g. every head behind the first head's keys; with
     # one table the first head is a contiguous view of them)
     with torch.inference_mode():
