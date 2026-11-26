@@ -8,13 +8,15 @@ r_d = error_b / error_a per dataset:
 
 - G: the geometric mean of r_d, exp(mean ln r_d). Below 1 means b is better
 - a 95% bootstrap CI of G, resampling datasets (2,000 rounds by default, fixed seed)
-- the Wilcoxon signed-rank p (two-sided) of ln r_d against 0
+- the Wilcoxon signed-rank p (two-sided) of ln r_d against 0. Datasets with r_d = 1 are left out
+  (Wilcoxon's rule), and the exact distribution is used up to 50 remaining datasets
 - the number of datasets where b is better (r_d < 1), worse (r_d > 1) and equal
 
 reported for all datasets, classification (binary and multiclass), regression, binary and
 multiclass. Several suites (TabArena with 3 splits, the development suite) can be pooled: their
-datasets are put together, each named `<suite>/<dataset>`. Elo is carried along if the source has
-it and decides nothing.
+datasets are put together (the per-dataset frame has a `suite` column), each dataset with the
+same weight. The suites must not share a dataset: it would count twice, and the CI and p would
+be too narrow. Elo is carried along if the source has it and decides nothing.
 
 Inputs are the per-split tables the eval script writes: `results_per_split.csv` of a TabArena /
 BeyondArena run (columns dataset, fold = split index, metric_error, problem_type, imputed) or
@@ -31,6 +33,7 @@ compare the stand-in method.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -39,8 +42,9 @@ import pandas as pd
 
 BOOTSTRAP_ROUNDS = 2000
 BOOTSTRAP_SEED = 0
-# a dataset error of exactly 0 (a perfect ROC AUC on every split) is raised to this before the
-# ratio; two zeros are a ratio of 1
+# a dataset error below this (0 is a perfect ROC AUC on every split) is raised to it before the
+# ratio, so two zeros are a ratio of 1. The ratio of such a dataset depends on this value, so the
+# report names these datasets (`floored`)
 ERROR_FLOOR = 1e-6
 GROUPS = {
     "all": ("binary", "multiclass", "regression"),
@@ -91,8 +95,9 @@ def splits_frame(frame: pd.DataFrame, label: str, allow_imputed: bool = False) -
 
 
 def dataset_ratios(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
-    """Per dataset: the split-mean errors of a and b, the split count and r = b / a. The two
-    runs must have the same (dataset, split) pairs and problem types."""
+    """Per dataset: the split-mean errors of a and b, the split count, r = b / a and `floored`
+    (an error below `ERROR_FLOOR` was raised to it). The two runs must have the same (dataset,
+    split) pairs and problem types."""
     keys = ["dataset", "split"]
     pairs_a = set(map(tuple, a[keys].to_numpy().tolist()))
     pairs_b = set(map(tuple, b[keys].to_numpy().tolist()))
@@ -116,10 +121,10 @@ def dataset_ratios(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
-    both_zero = (per["error_a"] == 0) & (per["error_b"] == 0)
     floor_a = per["error_a"].clip(lower=ERROR_FLOOR)
     floor_b = per["error_b"].clip(lower=ERROR_FLOOR)
-    per["ratio"] = np.where(both_zero, 1.0, floor_b / floor_a)
+    per["ratio"] = floor_b / floor_a
+    per["floored"] = (per["error_a"] < ERROR_FLOOR) | (per["error_b"] < ERROR_FLOOR)
     return per
 
 
@@ -139,16 +144,17 @@ def summarize(
         "better": int((log_r < 0).sum()),
         "worse": int((log_r > 0).sum()),
         "equal": int((log_r == 0).sum()),
+        "floored": int(ratios["floored"].sum()),
     }
     if n == 0:
         return {**out, "G": None, "ci_low": None, "ci_high": None, "wilcoxon_p": None}
     rng = np.random.default_rng(seed)
     draws = rng.integers(0, n, size=(rounds, n))
     boot = np.exp(log_r[draws].mean(axis=1))
-    if np.all(log_r == 0):
-        p = 1.0
-    else:
-        p = float(wilcoxon(log_r, zero_method="wilcox", alternative="two-sided").pvalue)
+    # equal datasets are dropped here, not by scipy: given zeros, scipy takes the normal
+    # approximation even where the exact distribution applies (at most 50 datasets)
+    unequal = log_r[log_r != 0]
+    p = float(wilcoxon(unequal, alternative="two-sided").pvalue) if len(unequal) else 1.0
     return {
         **out,
         "G": float(np.exp(log_r.mean())),
@@ -158,14 +164,30 @@ def summarize(
     }
 
 
+def dataset_key(name: str) -> str:
+    """A dataset name in lower case with only its letters and digits. The suites spell the same
+    dataset differently (`credit-g` on TabArena, `creditg` in the AMLB table)."""
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
+def shared_datasets(ratios: pd.DataFrame) -> list[str]:
+    """The dataset names (`dataset_key`) that more than one suite of `ratios` has."""
+    keys = ratios["dataset"].map(dataset_key)
+    suites = ratios.groupby(keys)["suite"].nunique()
+    return sorted(suites[suites > 1].index)
+
+
 def compare(
     suites: Mapping[str, tuple[pd.DataFrame, pd.DataFrame]],
     rounds: int = BOOTSTRAP_ROUNDS,
     seed: int = BOOTSTRAP_SEED,
+    pool: bool = True,
 ) -> dict:
     """The paired report of a and b over one or more suites {suite: (a splits, b splits)}.
     Returns {"suites": {suite: {group: stats}}, "pooled": {group: stats} (with more than one
-    suite), "ratios": per-dataset frame (column `suite`)}."""
+    suite and `pool`), "ratios": per-dataset frame (column `suite`)}. Pooling suites that share a
+    dataset is an error (the name check is `shared_datasets`; the same data under another name is
+    not found by it)."""
     frames = []
     for name, (a, b) in suites.items():
         per = dataset_ratios(a, b)
@@ -183,7 +205,14 @@ def compare(
         "suites": {name: groups(ratios[ratios["suite"] == name]) for name in suites},
         "ratios": ratios,
     }
-    if len(suites) > 1:
+    if len(suites) > 1 and pool:
+        shared = shared_datasets(ratios)
+        if shared:
+            raise ValueError(
+                f"{len(shared)} datasets are in more than one suite ({', '.join(shared[:5])}"
+                f"{'...' if len(shared) > 5 else ''}): pooled, each would count twice. Compare the"
+                " suites without pooling (`pool=False`, `--no-pool`)"
+            )
         report["pooled"] = groups(ratios)
     return report
 
@@ -214,6 +243,16 @@ def format_report(report: dict, elo: Mapping[str, Mapping[str, tuple]] | None = 
                 f" | {s['better']} / {s['worse']} / {s['equal']} | {elo_text} |"
             )
         lines.append("")
+    floored = report["ratios"][report["ratios"]["floored"]]
+    if len(floored):
+        names = ", ".join(
+            f"{s}/{d}" for s, d in zip(floored["suite"], floored["dataset"], strict=True)
+        )
+        lines += [
+            f"Note: {len(floored)} datasets have an error below {ERROR_FLOOR:g} in a or b, which"
+            f" was raised to {ERROR_FLOOR:g}. Their ratios depend on that value: {names}.",
+            "",
+        ]
     return "\n".join(lines)
 
 

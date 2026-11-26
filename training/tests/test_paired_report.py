@@ -2,6 +2,7 @@
 AMLB folds, the 3-split TabArena suite and the weights in the arena cache key."""
 
 import argparse
+import json
 import types
 
 import numpy as np
@@ -60,8 +61,9 @@ def test_bootstrap_is_reproducible_and_pooling_names_suites():
     )
     b = a.copy()
     b["error"] = b["error"] * rng.uniform(0.9, 1.0, 20)
-    one = paired.compare({"x": (a, b), "y": (a, a)}, rounds=500, seed=3)
-    two = paired.compare({"x": (a, b), "y": (a, a)}, rounds=500, seed=3)
+    other = a.assign(dataset=[f"e{i}" for i in range(20)])  # a second suite has other datasets
+    one = paired.compare({"x": (a, b), "y": (other, other)}, rounds=500, seed=3)
+    two = paired.compare({"x": (a, b), "y": (other, other)}, rounds=500, seed=3)
     assert one["suites"]["x"]["all"] == two["suites"]["x"]["all"]
     assert one["suites"]["x"]["all"]["G"] < 1 and one["suites"]["x"]["all"]["ci_high"] < 1
     # identical runs: G 1, every dataset equal, p 1
@@ -70,7 +72,37 @@ def test_bootstrap_is_reproducible_and_pooling_names_suites():
     assert one["pooled"]["all"]["datasets"] == 40
     assert set(one["ratios"]["suite"]) == {"x", "y"}
     text = paired.format_report(one, {"x": {"all": (1700.0, 1740.0)}})
-    assert "### pooled" in text and "1700 → 1740" in text
+    assert "### pooled" in text and "1700 → 1740" in text and "Note:" not in text
+
+
+def test_pooling_suites_that_share_a_dataset_is_an_error():
+    # the suites spell a name differently: TabArena's credit-g is creditg in the AMLB table
+    kind = {"credit-g": "binary", "creditg": "binary", "other": "binary"}
+    a = paired.splits_frame(_splits({"credit-g": 0.2, "other": 0.3}, kind), "a")
+    b = paired.splits_frame(_splits({"creditg": 0.2}, kind), "b")
+    with pytest.raises(ValueError, match="1 datasets are in more than one suite \\(creditg\\)"):
+        paired.compare({"tabarena": (a, a), "amlb": (b, b)}, rounds=50)
+    report = paired.compare({"tabarena": (a, a), "amlb": (b, b)}, rounds=50, pool=False)
+    assert "pooled" not in report and set(report["suites"]) == {"tabarena", "amlb"}
+
+
+def test_wilcoxon_leaves_out_equal_datasets_and_stays_exact():
+    from scipy.stats import wilcoxon
+
+    rng = np.random.default_rng(2)
+    names = [f"d{i}" for i in range(30)]
+    kind = dict.fromkeys(names, "regression")
+    a = paired.splits_frame(
+        _splits(dict(zip(names, rng.uniform(1, 2, 30), strict=True)), kind), "a"
+    )
+    factor = np.r_[np.ones(10), rng.uniform(0.8, 1.1, 20)]
+    b = a.copy()
+    b["error"] = b["error"] * factor
+    s = paired.compare({"s": (a, b)}, rounds=50)["suites"]["s"]["all"]
+    assert s["equal"] == 10
+    # 20 unequal datasets: the exact distribution, although 10 are equal
+    exact = wilcoxon(np.log(factor[10:]), method="exact").pvalue
+    assert s["wilcoxon_p"] == pytest.approx(exact)
 
 
 def test_imputed_missing_and_mismatched_splits_are_errors():
@@ -91,8 +123,14 @@ def test_imputed_missing_and_mismatched_splits_are_errors():
 def test_zero_errors_are_floored():
     a = paired.splits_frame(_splits({"a": 0.0, "b": 0.0}, KIND), "a")
     b = paired.splits_frame(_splits({"a": 0.0, "b": 1e-5}, KIND), "b")
-    ratios = paired.dataset_ratios(a, b).set_index("dataset")["ratio"]
-    assert ratios["a"] == 1.0 and ratios["b"] == pytest.approx(10.0)
+    per = paired.dataset_ratios(a, b).set_index("dataset")
+    assert per["ratio"]["a"] == 1.0 and per["ratio"]["b"] == pytest.approx(10.0)
+    assert per["floored"].all()
+    # the report names them: their ratios depend on the floor
+    report = paired.compare({"s": (a, b)}, rounds=50)
+    assert report["suites"]["s"]["all"]["floored"] == 2
+    text = paired.format_report(report)
+    assert "Note: 2 datasets have an error below 1e-06" in text and "s/a, s/b" in text
 
 
 def test_report_script_reads_local_files_and_pools(tmp_path, capsys):
@@ -120,6 +158,49 @@ def test_report_script_reads_local_files_and_pools(tmp_path, capsys):
     assert len(ratios) == 3 and (out / "report.json").exists()
     with pytest.raises(SystemExit):
         script.parse_args(["--a", "x", "--a", "y", "--b", "z"])
+    # the same suite twice shares every dataset: not pooled
+    arena_pair = [
+        *("--a", str(tmp_path / "a/tabarena-3split/results_per_split.csv")),
+        *("--b", str(tmp_path / "b/tabarena-3split/results_per_split.csv")),
+    ]
+    with pytest.raises(SystemExit, match="more than one suite"):
+        script.main([*arena_pair, *arena_pair])
+    capsys.readouterr()
+    script.main([*arena_pair, *arena_pair, "--no-pool"])
+    text = capsys.readouterr().out
+    assert "### tabarena-3split#2" in text and "### pooled" not in text
+
+
+def test_report_warns_when_the_runs_were_evaluated_differently():
+    script = helpers.load_script("scripts/paired_report.py", "paired_report_settings")
+    inference = {"n_estimators": 8, "member_kinds": ["standard", "power"]}
+    a = {
+        "seed": "0",
+        "subsample_train_rows": "None",
+        "inference_classification": json.dumps(inference),
+    }
+    assert script.settings_differences(a, dict(a)) == []
+    b = {
+        "seed": "1",
+        "subsample_train_rows": "1024",
+        "inference_classification": json.dumps({**inference, "member_kinds": ["standard"]}),
+    }
+    assert script.settings_differences(a, b) == [
+        "seed: a 0, b 1",
+        "subsample_train_rows: a None, b 1024",
+        "inference_classification.member_kinds: a ['standard', 'power'], b ['standard']",
+    ]
+    # a run from before the applied settings were logged cannot be compared
+    old = {"seed": "0", "subsample_train_rows": "None"}
+    assert script.settings_differences(a, old) == ["inference_classification is not logged by b"]
+
+    def run(params, suite="dev"):
+        return types.SimpleNamespace(params=params, suite=suite)
+
+    assert script.pair_warnings("dev", run(None), run(b)) == []  # a local file has no settings
+    lines = script.pair_warnings("dev", run(a), run(b, "amlb-all"))
+    assert lines[0] == "- warning (dev): a and b differ in suite: a dev, b amlb-all"
+    assert len(lines) == 4
 
 
 # development suite
@@ -164,6 +245,8 @@ def test_metric_error_is_tabarenas():
     assert amlb.metric_error(
         "multiclass", with_unseen, np.r_[proba3, [[1 / 3] * 3]], labels
     ) == pytest.approx(log_loss(y3, proba3, labels=[0, 1, 2]))
+    # no test row of a training class: no error, as for ROC AUC
+    assert np.isnan(amlb.metric_error("multiclass", np.array(["d"]), [[1 / 3] * 3], labels))
     t = rng.normal(size=20)
     assert amlb.metric_error("regression", t, t + 2.0) == pytest.approx(2.0)
     assert amlb.problem_type("classification", 2) == "binary"
@@ -262,4 +345,9 @@ def test_arena_fingerprint_has_weights_and_applied_inference(monkeypatch, tmp_pa
     assert prints[0] != prints[1]
     applied = factories["classification"].inference
     assert applied["n_estimators"] == 8 and applied["categories"] == "counts"
+    # the settings in the key and in MLflow are the ones the estimator has
+    estimator = factories["classification"](types.SimpleNamespace(categorical_indices=[]))
+    for key, value in applied.items():
+        got = getattr(estimator, key)
+        assert (list(got) if key == "member_kinds" else got) == value, key
     assert script.applied_inference_params(factories)["inference_classification"].startswith("{")
