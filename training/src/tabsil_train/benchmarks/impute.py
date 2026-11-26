@@ -51,6 +51,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from tabsil.unsupervised import nearest_class  # the same rule as TabSilUnsupervised.impute
 from tabsil_train.benchmarks import _files
 from tabsil_train.benchmarks._files import download_verified
 
@@ -169,13 +170,6 @@ def make_split(name: str, X: np.ndarray, rate: float, seed: int) -> tuple[np.nda
 
 
 # --- metrics --------------------------------------------------------------------------------
-
-
-def nearest_class(values: np.ndarray, classes: np.ndarray) -> np.ndarray:
-    """Each value replaced by the nearest of the sorted `classes` (ties: the smaller)."""
-    idx = np.searchsorted(classes, values).clip(1, max(len(classes) - 1, 1))
-    lower, upper = classes[idx - 1], classes[idx.clip(0, len(classes) - 1)]
-    return np.where(np.abs(values - lower) <= np.abs(upper - values), lower, upper)
 
 
 def score(X_true: np.ndarray, X_imp: np.ndarray, mask: np.ndarray, categorical: list[int]) -> dict:
@@ -481,11 +475,24 @@ def n_columns(name: str) -> int:
 # --- run ------------------------------------------------------------------------------------
 
 
-def finished_keys(rows: pd.DataFrame) -> set[tuple]:
-    """(table, rate rounded to 4 digits, seed, method) of the result rows. The rate is cast first:
-    the frame of a missing results file has object columns, which pandas 2 does not round."""
+def finished_keys_list(rows: pd.DataFrame) -> list[tuple]:
+    """(table, rate rounded to 4 digits, seed, method) of each result row, in order. The rate is
+    cast first: the frame of a missing results file has object columns, which pandas 2 does not
+    round."""
     rates = rows.rate.astype(float).round(4)
-    return set(zip(rows.dataset, rates, rows.seed.astype(int), rows.method, strict=True))
+    return list(zip(rows.dataset, rates, rows.seed.astype(int), rows.method, strict=True))
+
+
+def finished_keys(rows: pd.DataFrame) -> set[tuple]:
+    """The set of `finished_keys_list`."""
+    return set(finished_keys_list(rows))
+
+
+def new_rows(rows: pd.DataFrame, existing: pd.DataFrame) -> pd.DataFrame:
+    """The rows of `rows` whose (table, rate, seed, method) is not in `existing` (to merge a
+    worker's results without repeating rows an earlier run merged)."""
+    merged = finished_keys(existing)
+    return rows[[k not in merged for k in finished_keys_list(rows)]]
 
 
 def read_results(path: Path) -> pd.DataFrame:
@@ -570,14 +577,39 @@ def run(
 # --- report ---------------------------------------------------------------------------------
 
 
-def coverage(rows: pd.DataFrame, datasets: list[str], rates: list[float], seeds: list[int]):
-    """Per result method, the share of (table, rate, seed) units without a result (0 when the
-    method ran everywhere; nothing is filled in for a missing unit)."""
+def result_methods(methods: list[str]) -> list[str]:
+    """The result methods the job methods write (`tabsil` also writes `tabsil_median`)."""
+    return [out for m in methods for out in METHODS[m]]
+
+
+def in_grid(
+    rows: pd.DataFrame, datasets: list[str], rates: list[float], seeds: list[int],
+    methods: list[str] | None = None,
+) -> pd.DataFrame:  # fmt: skip
+    """The rows of the (table, rate, seed) grid and, if given, of the result `methods` (a
+    results file can hold rows of earlier runs outside them)."""
+    keep = (
+        rows.dataset.isin(datasets)
+        & rows.rate.astype(float).round(4).isin([round(r, 4) for r in rates])
+        & rows.seed.astype(int).isin(seeds)
+    )
+    if methods is not None:
+        keep &= rows.method.isin(methods)
+    return rows[keep]
+
+
+def coverage(
+    rows: pd.DataFrame, datasets: list[str], rates: list[float], seeds: list[int],
+    methods: list[str] | None = None,
+) -> dict[str, float]:  # fmt: skip
+    """Per result method (`methods`, default the methods in `rows`), the share of (table, rate,
+    seed) units without a result: 0 when the method ran everywhere, 1 when it has no row at all
+    (nothing is filled in for a missing unit)."""
     units = len(datasets) * len(rates) * len(seeds)
+    want = {(d, round(r, 4), s) for d in datasets for r in rates for s in seeds}
     out = {}
-    for m, g in rows.groupby("method"):
-        have = set(zip(g.dataset, g.rate.astype(float).round(4), g.seed, strict=True))
-        want = {(d, round(r, 4), s) for d in datasets for r in rates for s in seeds}
+    for m in sorted(set(rows.method) if methods is None else methods):
+        have = {(d, r, s) for d, r, s, mm in finished_keys(rows) if mm == m}
         out[m] = 1 - len(have & want) / units
     return out
 
@@ -608,11 +640,14 @@ def summary_table(rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def report(
-    rows: pd.DataFrame, out_dir: Path, datasets: list[str], rates: list[float], seeds: list[int]
-) -> dict:
-    """Write `summary.csv` (per rate), `per_table_nrmse.csv` and `per_table_accuracy.csv`, and
+    rows: pd.DataFrame, out_dir: Path, datasets: list[str], rates: list[float], seeds: list[int],
+    methods: list[str] | None = None,
+) -> dict:  # fmt: skip
+    """Write `summary.csv` (per rate), `per_table_nrmse.csv` and `per_table_accuracy.csv` of the
+    rows in the (table, rate, seed) grid and the result `methods` (default all in `rows`), and
     return the main numbers with each method's share of missing units."""
-    out: dict = {"missing_units": coverage(rows, datasets, rates, seeds)}
+    rows = in_grid(rows, datasets, rates, seeds, methods)
+    out: dict = {"missing_units": coverage(rows, datasets, rates, seeds, methods)}
     if not len(rows):
         return out
     summary = summary_table(rows)

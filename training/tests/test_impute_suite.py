@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -284,3 +285,76 @@ def test_mice_predicts_categories_from_the_other_columns():
     mode = bi.score(X, bi.impute_mean(X_masked, categorical, 0), mask, categorical)
     c = json.loads(mice["columns"])["2"]
     assert c > json.loads(mode["columns"])["2"] + 0.2 and c > 0.85
+
+
+def test_new_rows_skips_rows_already_merged(tmp_path, monkeypatch):
+    monkeypatch.setattr(bi, "load", _fake_load)
+    imputers = {"mean": bi.CPU_IMPUTERS["mean"]}
+    rows, _ = bi.run(imputers, ["cmc"], [0.1, 0.3], [0], ["mean"], tmp_path, log=lambda _: None)
+    assert len(bi.new_rows(rows, rows)) == 0  # a rerun worker's file: nothing new
+    assert len(bi.new_rows(rows, rows.iloc[:1])) == 1
+    empty = bi.read_results(tmp_path / "none.csv")
+    assert len(bi.new_rows(rows, empty)) == 2
+
+
+def test_report_only_covers_the_requested_grid(tmp_path, monkeypatch):
+    monkeypatch.setattr(bi, "load", _fake_load)
+    imputers = {m: bi.CPU_IMPUTERS[m] for m in ("mean", "mice")}
+    rows, _ = bi.run(imputers, ["cmc", "yeast"], [0.1, 0.3], [0], ["mean", "mice"], tmp_path,
+                     log=lambda _: None)  # fmt: skip
+    # a quick check into the same folder: one table, one rate; the earlier rows stay out
+    out = bi.report(rows, tmp_path, ["cmc"], [0.3], [0], ["mean", "tabsil"])
+    summary = pd.read_csv(tmp_path / "summary.csv")
+    assert set(summary.method) == {"mean"} and set(summary.rate) == {0.3}
+    assert (summary.tables == 1).all()
+    # a requested method without any row is fully missing, not left out
+    assert out["missing_units"] == {"mean": 0.0, "tabsil": 1.0}
+    assert bi.result_methods(["tabsil", "mean"]) == ["tabsil", "tabsil_median", "mean"]
+
+
+def test_shard_devices_take_at_most_shards_gpus(monkeypatch):
+    import argparse
+
+    script = _eval_script()
+    monkeypatch.setattr(script.torch.cuda, "device_count", lambda: 8)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
+    assert script.shard_devices(argparse.Namespace(shards=2)) == ["0", "1"]
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES")
+    assert script.shard_devices(argparse.Namespace(shards=3)) == ["0", "1", "2"]
+    with pytest.raises(SystemExit, match="exceeds the GPU count"):
+        script.shard_devices(argparse.Namespace(shards=9))
+
+
+def test_shard_queue_runs_every_job_on_free_gpus(tmp_path, monkeypatch, capsys):
+    script = _eval_script()
+    started = []
+
+    class FakeProcess:
+        def __init__(self, cmd, stdout, stderr, env):
+            started.append((cmd[cmd.index("--out-dir") + 1], env["CUDA_VISIBLE_DEVICES"]))
+            self.returncode = 1 if "bad" in cmd else 0
+
+        def poll(self):
+            return self.returncode
+
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(script.time, "sleep", lambda s: None)
+    done = {}
+
+    def on_done(job, returncode, job_dir):
+        done[job] = (returncode, job_dir.name)
+        return returncode == 0
+
+    jobs = [("a",), ("bad",), ("c",)]
+    script._run_shard_queue(
+        "test", jobs, lambda j: (j[0], [j[0]]), on_done, ["0", "1"], ["--suite", "x"],
+        {}, tmp_path / "shards", 60.0, side=[(("cpu",), "cpu", ["side"])],
+    )  # fmt: skip
+    assert done == {("a",): (0, "a"), ("bad",): (1, "bad"), ("c",): (0, "c"), ("cpu",): (0, "cpu")}
+    devices = dict((Path(d).name, dev) for d, dev in started)
+    assert devices["cpu"] == "" and {devices["a"], devices["bad"]} == {"0", "1"}
+    out = capsys.readouterr().out
+    assert "test shards: ('bad',) FAILED (exit 1)" in out and "('c',) done in" in out
+    assert (tmp_path / "shards" / "a.log").exists()

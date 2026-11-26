@@ -75,7 +75,9 @@ same commit, default `use_imputed=False`). Where it differs from the official
 - categorical value: the official draws a class from the averaged probabilities (t does not
   apply) and writes the class index, which is the value only for classes coded 0..C-1; here the
   most probable class, written as the class value. A categorical column predicted by the
-  regressor (more classes than the classifier takes) gets the nearest class value here
+  regressor (more classes than the classifier takes) gets the class with the most probability
+  when each bucket's probability goes to the class nearest its midpoint
+  (`NumericConditional.class_mode`)
 - multiple imputation: the official gives one draw per call (t > 0); here `n_samples` draws per
   cell from one evaluation per column, independent across the missing cells of a row (their
   joint dependence is not modeled)
@@ -104,6 +106,8 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+
+from tabsil.forecast import bucket_quantiles
 
 # Probability given to an outcome the model gives no mass: a category not in the context, a numeric
 # value outside the borders. Same as the clamp of `EnsembleRegressor.predict_distribution`
@@ -147,19 +151,14 @@ def column_orders(n_columns: int, n_permutations: int, random_state: int) -> lis
     return out
 
 
-def _inverse_cdf(probs: np.ndarray, borders: np.ndarray, u: np.ndarray) -> np.ndarray:
-    """Values at the CDF levels `u` (n, m) of bucket distributions `probs` (n, K) on `borders`
-    (K + 1,), with the density uniform within each bucket (the CDF is linear between borders; the
-    same rule as `tabsil.forecast.bucket_quantiles`). A level falls in the bucket k with
-    cdf_k < u <= cdf_{k+1}, so a bucket without probability is never chosen."""
-    probs = probs / probs.sum(-1, keepdims=True)
-    cdf = np.concatenate([np.zeros((len(probs), 1)), np.cumsum(probs, -1)], axis=-1)
-    cdf[:, -1] = 1.0
-    rows = np.arange(len(probs))[:, None]
-    k = np.clip((cdf[:, None, :] < u[:, :, None]).sum(-1) - 1, 0, len(borders) - 2)
-    p = probs[rows, k]
-    share = np.where(p > 0, (u - cdf[rows, k]) / np.where(p > 0, p, 1.0), 0.0)
-    return borders[k] + np.clip(share, 0.0, 1.0) * (borders[k + 1] - borders[k])
+def nearest_class(values: np.ndarray, classes: np.ndarray) -> np.ndarray:
+    """Each value replaced by the nearest of the sorted `classes` (ties: the smaller). The rule of
+    `TabSilUnsupervised.impute` for a categorical column predicted by the regressor, and of the
+    imputation benchmark's scoring (`tabsil_train.benchmarks.impute`)."""
+    values = np.asarray(values, dtype=np.float64)
+    idx = np.searchsorted(classes, values).clip(1, max(len(classes) - 1, 1))
+    lower, upper = classes[idx - 1], classes[idx.clip(0, len(classes) - 1)]
+    return np.where(np.abs(values - lower) <= np.abs(upper - values), lower, upper)
 
 
 @dataclass
@@ -175,15 +174,25 @@ class NumericConditional:
     mean: np.ndarray | None = None
 
     def quantile(self, q: float) -> np.ndarray:
-        """The `q` quantile (n,) of each row's distribution (uniform within each bucket)."""
-        u = np.full((len(self.log_probs), 1), float(q))
-        return _inverse_cdf(np.exp(self.log_probs), self.borders, u)[:, 0]
+        """The `q` quantile (n,) of each row's distribution (uniform within each bucket,
+        `tabsil.forecast.bucket_quantiles`)."""
+        return bucket_quantiles(self.log_probs, self.borders, [float(q)])[:, 0]
+
+    def class_mode(self, classes: np.ndarray) -> np.ndarray:
+        """The most probable of the sorted `classes` for each row (n,), when each bucket's
+        probability goes to the class nearest its midpoint (a categorical column predicted by the
+        regressor). A tie goes to the smaller class."""
+        mids = (self.borders[:-1] + self.borders[1:]) / 2
+        owner = np.searchsorted(classes, nearest_class(mids, classes))
+        mass = np.zeros((len(self.log_probs), len(classes)))
+        np.add.at(mass.T, owner, np.exp(self.log_probs).T)
+        return classes[mass.argmax(1)]
 
     def sample(self, rng: np.random.Generator, n_samples: int) -> np.ndarray:
         """`n_samples` draws per row (n, n_samples): a bucket by its probability, then a uniform
         value within it (inverse CDF at uniform levels)."""
         u = rng.random((len(self.log_probs), n_samples))
-        return _inverse_cdf(np.exp(self.log_probs), self.borders, u)
+        return bucket_quantiles(self.log_probs, self.borders, u)
 
     def log_prob(self, values: np.ndarray) -> np.ndarray:
         """Log density at `values` (n,): the log probability of the bucket holding the value
@@ -442,12 +451,25 @@ class TabSilUnsupervised:
         With `n_samples`, multiple imputation: (n_samples, n, d) with every missing cell drawn
         from the same distributions (numeric: a bucket by its probability and a uniform value in
         it; categorical: a class by its probability), independently across cells and draws
-        (`random_state`). Numeric values are clipped to the column's range in the fit rows, and a
+        (`random_state`). Numeric values are clipped to the column's range in the fit rows. A
         categorical column predicted by the regressor (more classes than the classifier takes)
-        gets the nearest class value. A column missing in `X` that has no observed value in the
-        fit rows raises a ValueError."""
+        gets the class with the most probability when each bucket's probability goes to the class
+        nearest its midpoint (a draw: the class nearest the drawn value). A column missing in `X`
+        that has no observed value in the fit rows raises a ValueError.
+
+        Each column's distributions are filled in and dropped before the next column is
+        evaluated, so memory holds one column's (missing rows x buckets) at a time
+        (`missing_conditionals` + `impute_from` keep them all, to fill them several ways)."""
         X = self._check_fitted(X)
-        return self.impute_from(X, self.missing_conditionals(X), strategy, n_samples)
+        _check_impute_options(strategy, n_samples)
+        out = np.repeat(X[None], 1 if n_samples is None else n_samples, axis=0)
+        for j in range(X.shape[1]):
+            rows = np.flatnonzero(np.isnan(X[:, j]))
+            if len(rows):
+                given = [k for k in range(X.shape[1]) if k != j]
+                cond = self.conditional(X[rows], j, given)
+                out[:, rows, j] = self._fill(j, cond, strategy, n_samples)
+        return out[0] if n_samples is None else out
 
     def impute_from(
         self,
@@ -458,37 +480,44 @@ class TabSilUnsupervised:
     ) -> np.ndarray:
         """`impute` with the distributions of `missing_conditionals(X)` already computed (to fill
         the same distributions several ways)."""
-        if strategy not in IMPUTE_STRATEGIES:
-            raise ValueError(f"strategy must be one of {IMPUTE_STRATEGIES}: {strategy!r}")
-        if n_samples is not None and n_samples < 1:
-            raise ValueError(f"n_samples must be >= 1: {n_samples}")
+        _check_impute_options(strategy, n_samples)
         X = self._check_fitted(X)
         missing = {j for j in range(X.shape[1]) if np.isnan(X[:, j]).any()}
         if missing != set(conditionals):
             raise ValueError("conditionals are not those of X's missing columns")
         out = np.repeat(X[None], 1 if n_samples is None else n_samples, axis=0)
         for j, (rows, cond) in conditionals.items():
-            if n_samples is None:
-                if isinstance(cond, CategoricalConditional):
-                    values = cond.mode()[None]
-                elif strategy == "mean" and cond.mean is not None:
-                    values = cond.mean[None]
-                else:
-                    values = cond.quantile(0.5)[None]
-            else:
-                rng = np.random.default_rng([self.random_state, j])
-                values = cond.sample(rng, n_samples).T
-            out[:, rows, j] = self._valid(j, values)
+            out[:, rows, j] = self._fill(j, cond, strategy, n_samples)
         return out[0] if n_samples is None else out
+
+    def _fill(
+        self, column: int, cond: Conditional, strategy: str, n_samples: int | None
+    ) -> np.ndarray:
+        """The values (1 or n_samples, rows) of `column` from its distribution `cond`."""
+        if n_samples is not None:
+            rng = np.random.default_rng([self.random_state, column])
+            return self._valid(column, cond.sample(rng, n_samples).T)
+        if isinstance(cond, CategoricalConditional):
+            return cond.mode()[None]
+        if column in self.classes_:  # a categorical column predicted by the regressor
+            return cond.class_mode(self.classes_[column])[None]
+        if strategy == "mean":
+            if cond.mean is None:
+                raise ValueError(f"column {column}: the distribution has no mean (strategy='mean')")
+            return self._valid(column, cond.mean[None])
+        return self._valid(column, cond.quantile(0.5)[None])
 
     def _valid(self, column: int, values: np.ndarray) -> np.ndarray:
         # numeric: clip to the fit rows' range; categorical: the nearest class value (a no-op for
         # the classifier's classes)
         if column in self.classes_:
-            classes = self.classes_[column]
-            idx = np.searchsorted(classes, values).clip(1, max(len(classes) - 1, 1))
-            lower = classes[idx - 1]
-            upper = classes[idx.clip(0, len(classes) - 1)]
-            return np.where(np.abs(values - lower) <= np.abs(upper - values), lower, upper)
+            return nearest_class(values, self.classes_[column])
         col = self.X_[:, column]
         return np.clip(values, np.nanmin(col), np.nanmax(col))
+
+
+def _check_impute_options(strategy: str, n_samples: int | None) -> None:
+    if strategy not in IMPUTE_STRATEGIES:
+        raise ValueError(f"strategy must be one of {IMPUTE_STRATEGIES}: {strategy!r}")
+    if n_samples is not None and n_samples < 1:
+        raise ValueError(f"n_samples must be >= 1: {n_samples}")

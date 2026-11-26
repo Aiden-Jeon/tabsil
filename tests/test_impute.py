@@ -14,6 +14,7 @@ from tabsil.unsupervised import (
     CategoricalConditional,
     NumericConditional,
     TabSilUnsupervised,
+    nearest_class,
 )
 
 BORDERS = torch.linspace(-4, 4, 33)
@@ -131,12 +132,16 @@ def test_point_values_from_the_distributions():
     num1 = NumericConditional(np.log(np.array([[0.5, 0.25, 0.25]])), borders)  # no mean
     cat = CategoricalConditional(np.array([[0.3, 0.7], [0.6, 0.4]]), np.array([1.0, 1.5]))
     conds = {0: (np.array([0]), num0), 1: (np.array([1]), num1), 2: (np.array([0, 1]), cat)}
-    mean = model.impute_from(x, conds, "mean")
-    np.testing.assert_allclose(mean, [[0.25, 1.0, 1.5], [0.5, 0.0, 1.0]])
     median = model.impute_from(x, conds, "median")
     # median of [0.1, 0.2, 0.7] on [-1, 0, 1, 2]: 0.5 - 0.3 = 0.2 of the last bucket's 0.7
     np.testing.assert_allclose(median[0, 0], 1.0 + 0.2 / 0.7)
-    np.testing.assert_allclose(median[1, 1], 0.0)  # without a mean, "mean" falls back too
+    np.testing.assert_allclose(median[1, 1], 0.0)
+    np.testing.assert_array_equal(median[:, 2], [1.5, 1.0])  # categorical: the mode
+    with pytest.raises(ValueError, match="no mean"):  # "mean" without a mean: no silent median
+        model.impute_from(x, conds, "mean")
+    conds[1] = (np.array([1]), NumericConditional(num1.log_probs, borders, mean=np.array([0.4])))
+    mean = model.impute_from(x, conds, "mean")
+    np.testing.assert_allclose(mean, [[0.25, 1.0, 1.5], [0.5, 0.4, 1.0]])
     with pytest.raises(ValueError, match="conditionals"):
         model.impute_from(x, {0: conds[0]}, "mean")
 
@@ -158,8 +163,35 @@ def test_distribution_helpers():
     assert abs((picks[0] == 2.0).mean() - 0.8) < 0.03
 
 
-def test_regressed_categorical_column_gets_nearest_class(monkeypatch):
-    # more classes than the classifier takes -> the regressor; its values snap to a class
+def test_class_mode_takes_the_most_probable_class_not_the_mean():
+    # half the probability near class 0, half near class 40: the mean (20) is a class with
+    # almost no probability; the mode is 0 or 40
+    borders = np.linspace(-0.5, 40.5, 42)  # one bucket per integer 0..40
+    probs = np.full((1, 41), 1e-12)
+    probs[0, 0], probs[0, 40] = 0.5, 0.5 + 1e-6
+    cond = NumericConditional(np.log(probs), borders, mean=np.array([20.0]))
+    classes = np.arange(41.0)
+    np.testing.assert_array_equal(cond.class_mode(classes), [40.0])
+    # buckets go to the nearest class: classes 0 and 40 only -> buckets 0..20 to 0, 21..40 to 40
+    np.testing.assert_array_equal(cond.class_mode(np.array([0.0, 40.0])), [40.0])
+    np.testing.assert_array_equal(nearest_class(np.array([19.0, 21.0]), np.array([0.0, 40.0])),
+                                  [0.0, 40.0])  # fmt: skip
+
+
+def test_impute_fills_column_by_column_like_impute_from():
+    x = _masked(_table())
+    model = _model(categorical_features=[2]).fit(x)
+    np.testing.assert_array_equal(
+        model.impute(x), model.impute_from(x, model.missing_conditionals(x), "mean")
+    )
+    np.testing.assert_array_equal(
+        model.impute(x, "median", n_samples=2),
+        model.impute_from(x, model.missing_conditionals(x), "median", n_samples=2),
+    )
+
+
+def test_regressed_categorical_column_gets_a_class(monkeypatch):
+    # more classes than the classifier takes -> the regressor; its values are classes
     rng = np.random.default_rng(0)
     x = np.column_stack([rng.standard_normal(60), rng.integers(0, 4, 60).astype(float) * 2])
     x_missing = x.copy()
@@ -169,6 +201,8 @@ def test_regressed_categorical_column_gets_nearest_class(monkeypatch):
     assert not model._uses_classifier(1)
     out = model.impute(x_missing, n_samples=3)
     assert np.isin(out[..., 1], [0.0, 2.0, 4.0, 6.0]).all()
+    point = model.impute(x_missing)
+    assert np.isin(point[:, 1], [0.0, 2.0, 4.0, 6.0]).all()
 
 
 def test_numeric_conditional_matches_the_regressor():

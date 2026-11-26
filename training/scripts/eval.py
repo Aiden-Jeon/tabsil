@@ -128,6 +128,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import mlflow
@@ -1445,6 +1446,88 @@ def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> No
         raise SystemExit(f"adbench: {len(failures)} failed (table, split, method): {failures}")
 
 
+def shard_devices(args: argparse.Namespace) -> list[str]:
+    """The GPUs of `--shards N`: the first N of CUDA_VISIBLE_DEVICES (it lists every visible
+    GPU), or 0..N-1. N above the GPU count is an error."""
+    n_gpus = torch.cuda.device_count()
+    if n_gpus and args.shards > n_gpus:
+        raise SystemExit(f"--shards {args.shards} exceeds the GPU count {n_gpus}.")
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    return (visible.split(",") if visible else [str(i) for i in range(args.shards)])[: args.shards]
+
+
+def _run_shard_queue(
+    label: str,
+    jobs: list[tuple],
+    job_command: Callable[[tuple], tuple[str, list[str]]],
+    on_done: Callable[[tuple, int, Path], bool],
+    devices: list[str],
+    base: list[str],
+    env: dict[str, str],
+    log_dir: Path,
+    heartbeat_minutes: float,
+    side: list[tuple[tuple, str, list[str]]] = (),
+    progress: Callable[[Path], str] | None = None,
+) -> None:
+    """Run `jobs` (most expensive first) as worker processes (`eval.py` with `base` and the
+    job's arguments, `job_command(job)` -> (name, argv)), one per free GPU of `devices`
+    (CUDA_VISIBLE_DEVICES = that GPU), and the `side` processes ((job, name, argv), no GPU) at
+    the same time. A worker writes to `log_dir/<name>/` and logs to `log_dir/<name>.log`. When it
+    ends, `on_done(job, returncode, job_dir)` merges its results and returns whether it
+    succeeded. Prints each finished or failed job and a heartbeat every `heartbeat_minutes`
+    (`progress(job_dir)` adds a per-job note)."""
+    import subprocess
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    def start(name: str, argv: list[str], visible_devices: str):
+        job_dir = log_dir / name
+        cmd = [sys.executable, __file__, *base, *argv, "--out-dir", str(job_dir)]
+        log = open(log_dir / f"{name}.log", "w")  # noqa: SIM115 (closed when done)
+        proc = subprocess.Popen(
+            cmd, stdout=log, stderr=subprocess.STDOUT,
+            env={**env, "CUDA_VISIBLE_DEVICES": visible_devices},
+        )  # fmt: skip
+        return proc, job_dir, time.time(), log
+
+    def finish(job, proc, job_dir, started, log) -> None:
+        log.close()
+        if on_done(job, proc.returncode, job_dir):
+            print(f"{label} shards: {job} done in {_clock(time.time() - started)}", flush=True)
+        else:
+            print(f"{label} shards: {job} FAILED (exit {proc.returncode})", flush=True)
+
+    def note(job_dir: Path) -> str:
+        return f" ({progress(job_dir)})" if progress else ""
+
+    jobs = list(jobs)
+    running: dict[str, tuple] = {}  # device -> (job, process, job dir, start, log file)
+    side_running = {name: (job, *start(name, argv, "")) for job, name, argv in side}
+    t0 = last = time.time()
+    while jobs or running or side_running:
+        for dev in devices:
+            if dev not in running and jobs:
+                job = jobs.pop(0)
+                name, argv = job_command(job)
+                running[dev] = (job, *start(name, argv, dev))
+        time.sleep(5)
+        for table in (running, side_running):
+            for key, (job, proc, job_dir, started, log) in list(table.items()):
+                if proc.poll() is not None:
+                    del table[key]
+                    finish(job, proc, job_dir, started, log)
+        if time.time() - last >= heartbeat_minutes * 60:
+            last = time.time()
+            busy = ", ".join(
+                f"GPU {dev}: {j[0]} {_clock(last - j[3])}{note(j[2])}" for dev, j in running.items()
+            )
+            others = "".join(
+                f"; {name} {_clock(last - j[3])}{note(j[2])}" for name, j in side_running.items()
+            )
+            print(f"{label} shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}{others}",
+                  flush=True)  # fmt: skip
+
+
 def run_adbench_shards(
     args: argparse.Namespace,
     datasets: list[str],
@@ -1455,10 +1538,8 @@ def run_adbench_shards(
 ) -> list[dict]:
     """ADBench `--shards`: one job per (table, split, method) not yet in `results.csv`, most
     expensive first, each a worker process (`eval.py --suite adbench` on one GPU, without MLflow)
-    started as soon as a GPU is free. A finished job's rows are appended to `results.csv`; a failed
-    job is returned as a failure (with its log under `shards/`)."""
-    import subprocess
-
+    started as soon as a GPU is free (`_run_shard_queue`). A finished job's rows are appended to
+    `results.csv`; a failed job is returned as a failure (with its log under `shards/`)."""
     from tabsil_train.benchmarks import adbench
     from tabsil_train.hub import download_artifact
 
@@ -1468,11 +1549,7 @@ def run_adbench_shards(
         (d, s, m) for d in datasets for s in splits for m in methods if (d, s, m) not in finished
     ]
     jobs.sort(key=lambda j: -adbench.job_cost(j[0], j[2]))
-    n_gpus = torch.cuda.device_count()
-    if n_gpus and args.shards > n_gpus:
-        raise SystemExit(f"--shards {args.shards} exceeds the GPU count {n_gpus}.")
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    devices = visible.split(",") if visible else [str(i) for i in range(args.shards)]
+    devices = shard_devices(args)
     path = args.regressor_path or args.classifier_path
     if path.startswith("runs:/"):  # the parent's download, reused by every worker
         path = str(download_artifact(path, out_dir / "checkpoints" / "regression"))
@@ -1494,47 +1571,29 @@ def run_adbench_shards(
     # a worker sees one GPU (CUDA_VISIBLE_DEVICES), so cuda:<i> becomes cuda
     device = "cuda" if args.device.startswith("cuda") else args.device
     env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_RUN")}
-    log_dir = suite_dir / "shards"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    running: dict[str, tuple] = {}  # device -> (process, job, job dir, start, log file)
     failures: list[dict] = []
-    t0 = last = time.time()
+
+    def command(job: tuple) -> tuple[str, list[str]]:
+        d, s, m = job
+        return f"{d}_{s}_{m}", ["--regressor-path", path, "--datasets", d,
+                                "--adbench-splits", s, "--adbench-methods", m,
+                                "--device", device]  # fmt: skip
+
+    def on_done(job: tuple, returncode: int, job_dir: Path) -> bool:
+        rows = adbench.read_results(job_dir / ADBENCH_SUITE / "results.csv")
+        if returncode == 0 and len(rows):
+            path_out = suite_dir / "results.csv"
+            rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
+            return True
+        d, s, m = job
+        failures.append(dict(dataset=d, split=s, method=m, error=f"exit {returncode}"))
+        return False
+
     print(f"adbench shards: {len(jobs)} jobs -> {len(devices)} GPUs", flush=True)
-    while jobs or running:
-        for dev in devices:
-            if dev not in running and jobs:
-                d, s, m = job = jobs.pop(0)
-                job_dir = log_dir / f"{d}_{s}_{m}"
-                cmd = [sys.executable, __file__, *base, "--regressor-path", path,
-                       "--datasets", d, "--adbench-splits", s, "--adbench-methods", m,
-                       "--device", device, "--out-dir", str(job_dir)]  # fmt: skip
-                log = open(log_dir / f"{d}_{s}_{m}.log", "w")  # noqa: SIM115 (closed when done)
-                proc = subprocess.Popen(
-                    cmd, stdout=log, stderr=subprocess.STDOUT,
-                    env={**env, "CUDA_VISIBLE_DEVICES": dev},
-                )  # fmt: skip
-                running[dev] = (proc, job, job_dir, time.time(), log)
-        time.sleep(5)
-        for dev, (proc, job, job_dir, start, log) in list(running.items()):
-            if proc.poll() is None:
-                continue
-            del running[dev]
-            log.close()
-            rows = adbench.read_results(job_dir / ADBENCH_SUITE / "results.csv")
-            if proc.returncode == 0 and len(rows):
-                path_out = suite_dir / "results.csv"
-                rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
-                print(f"adbench shards: {job} done in {_clock(time.time() - start)}", flush=True)
-            else:
-                d, s, m = job
-                failures.append(dict(dataset=d, split=s, method=m, error=f"exit {proc.returncode}"))
-                print(f"adbench shards: {job} FAILED (exit {proc.returncode})", flush=True)
-        if time.time() - last >= args.heartbeat_minutes * 60:
-            last = time.time()
-            busy = ", ".join(
-                f"GPU {dev}: {j[1]} {_clock(last - j[3])}" for dev, j in running.items()
-            )
-            print(f"adbench shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}", flush=True)
+    _run_shard_queue(
+        "adbench", jobs, command, on_done, devices, base, env, suite_dir / "shards",
+        args.heartbeat_minutes,
+    )  # fmt: skip
     return failures
 
 
@@ -1667,11 +1726,13 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
     suite_dir = out_dir / IMPUTE_SUITE
     t0 = time.time()
     if args.shards > 1:
-        failures = run_impute_shards(args, datasets, rates, methods, suite_dir, out_dir, use_mlflow)
+        failures = run_impute_shards(
+            args, datasets, rates, seeds, methods, suite_dir, out_dir, use_mlflow
+        )
     else:
         _, failures = impute.run(imputers, datasets, rates, seeds, methods, suite_dir, opts)
     rows = impute.read_results(suite_dir / "results.csv")
-    summary = impute.report(rows, suite_dir, datasets, rates, seeds)
+    summary = impute.report(rows, suite_dir, datasets, rates, seeds, impute.result_methods(methods))
     summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
     (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
     print(json.dumps(summary, indent=1, default=str), flush=True)
@@ -1721,6 +1782,7 @@ def run_impute_shards(
     args: argparse.Namespace,
     datasets: list[str],
     rates: list[float],
+    seeds: list[int],
     methods: list[str],
     suite_dir: Path,
     out_dir: Path,
@@ -1729,19 +1791,16 @@ def run_impute_shards(
     """`--suite impute --shards N`: the GPU methods as one job per (table, rate, method) not yet
     complete in `results.csv`, most expensive first, each a worker process (`eval.py --suite
     impute` on one GPU, without MLflow) started as soon as a GPU is free, and the CPU methods in
-    one worker process (`--device cpu`) running at the same time. Every worker gets an equal share
-    of the CPU cores (`impute_worker_threads`): TabPFN's preprocessing and torch's CPU work run on
-    the CPU, and N workers each using every core oversubscribe it (the GPUs then sit idle). A
-    finished job's rows are appended to `results.csv` (and logged to MLflow, so a run cut short
-    keeps them); a failed job is returned as a failure (log under `shards/`)."""
-    import subprocess
-
+    one worker process (`--device cpu`) running at the same time (`_run_shard_queue`). Every
+    worker gets an equal share of the CPU cores (`impute_worker_threads`): TabPFN's preprocessing
+    and torch's CPU work run on the CPU, and N workers each using every core oversubscribe it
+    (the GPUs then sit idle). A finished job's rows are appended to `results.csv` (and logged to
+    MLflow, so a run cut short keeps them); a failed job is returned as a failure (log under
+    `shards/`)."""
     from tabsil_train.benchmarks import impute
     from tabsil_train.hub import download_artifact
 
-    seeds = [int(s) for s in args.impute_seeds.split(",")]
-    done = impute.read_results(suite_dir / "results.csv")
-    finished = impute.finished_keys(done)
+    finished = impute.finished_keys(impute.read_results(suite_dir / "results.csv"))
 
     def complete(d: str, r: float, m: str) -> bool:
         return all((d, round(r, 4), s, out) in finished for s in seeds for out in impute.METHODS[m])
@@ -1750,11 +1809,7 @@ def run_impute_shards(
     cpu = [m for m in methods if m not in impute.GPU_METHODS]
     jobs = [(d, r, m) for d in datasets for r in rates for m in gpu if not complete(d, r, m)]
     jobs.sort(key=lambda j: -impute.job_cost(j[0], j[2]))
-    n_gpus = torch.cuda.device_count()
-    if n_gpus and args.shards > n_gpus:
-        raise SystemExit(f"--shards {args.shards} exceeds the GPU count {n_gpus}.")
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    devices = visible.split(",") if visible else [str(i) for i in range(args.shards)]
+    devices = shard_devices(args)
     path = args.regressor_path or args.classifier_path
     if path and path.startswith("runs:/"):  # the parent's download, reused by every worker
         path = str(download_artifact(path, out_dir / "checkpoints" / "regression"))
@@ -1769,77 +1824,42 @@ def run_impute_shards(
     threads = impute_worker_threads(len(devices) + (1 if cpu else 0))
     env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_RUN")}
     env |= {k: str(threads) for k in WORKER_THREAD_VARIABLES}
-    log_dir = suite_dir / "shards"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    failures: list[dict] = []
 
-    def start(name: str, argv: list[str], visible_devices: str):
-        job_dir = log_dir / name
-        cmd = [sys.executable, __file__, *base, *argv, "--out-dir", str(job_dir)]
-        log = open(log_dir / f"{name}.log", "w")  # noqa: SIM115 (closed when done)
-        proc = subprocess.Popen(
-            cmd, stdout=log, stderr=subprocess.STDOUT,
-            env={**env, "CUDA_VISIBLE_DEVICES": visible_devices},
-        )  # fmt: skip
-        return proc, job_dir, time.time(), log
+    def command(job: tuple) -> tuple[str, list[str]]:
+        d, r, m = job
+        return f"{d}_{r}_{m}", [*model_args, "--datasets", d, "--impute-rates", str(r),
+                                "--impute-methods", m, "--device", device]  # fmt: skip
 
-    def collect(job, proc, job_dir, started, log, failures):
-        log.close()
+    def on_done(job: tuple, returncode: int, job_dir: Path) -> bool:
         rows = impute.read_results(job_dir / IMPUTE_SUITE / "results.csv")
+        path_out = suite_dir / "results.csv"
+        # a worker resumes from its folder under shards/, which stays between runs, so its file
+        # can hold rows merged by an earlier run: append only the new ones
+        rows = impute.new_rows(rows, impute.read_results(path_out))
         if len(rows):  # rows a failed job finished still count
-            path_out = suite_dir / "results.csv"
             rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
             if use_mlflow:
                 mlflow.log_artifact(str(path_out), IMPUTE_SUITE)
-        if proc.returncode == 0:
-            print(f"impute shards: {job} done in {_clock(time.time() - started)}", flush=True)
-            return
-        failures.append(dict(job=job, error=f"exit {proc.returncode}"))
-        print(f"impute shards: {job} FAILED (exit {proc.returncode})", flush=True)
+        if returncode != 0:
+            failures.append(dict(job=job, error=f"exit {returncode}"))
+        return returncode == 0
 
-    failures: list[dict] = []
-    cpu_job = None
+    side = []
     if cpu:
-        datasets_arg = [
-            "--datasets",
-            ",".join(datasets),
-            "--impute-rates",
-            ",".join(map(str, rates)),
-        ]
-        cpu_job = ("cpu", ",".join(cpu))
-        cpu_run = start(
-            "cpu", [*datasets_arg, "--impute-methods", ",".join(cpu), "--device", "cpu"], ""
-        )
-    running: dict[str, tuple] = {}
-    t0 = last = time.time()
+        side = [(("cpu", ",".join(cpu)), "cpu", [
+            "--datasets", ",".join(datasets), "--impute-rates", ",".join(map(str, rates)),
+            "--impute-methods", ",".join(cpu), "--device", "cpu",
+        ])]  # fmt: skip
     print(
         f"impute shards: {len(jobs)} GPU jobs -> {len(devices)} GPUs, CPU methods {cpu}, "
         f"{threads} CPU threads per worker",
         flush=True,
     )
-    while jobs or running or cpu_job:
-        for dev in devices:
-            if dev not in running and jobs:
-                d, r, m = job = jobs.pop(0)
-                argv = [*model_args, "--datasets", d, "--impute-rates", str(r),
-                        "--impute-methods", m, "--device", device]  # fmt: skip
-                running[dev] = (job, *start(f"{d}_{r}_{m}", argv, dev))
-        time.sleep(5)
-        for dev, (job, proc, job_dir, started, log) in list(running.items()):
-            if proc.poll() is not None:
-                del running[dev]
-                collect(job, proc, job_dir, started, log, failures)
-        if cpu_job and cpu_run[0].poll() is not None:
-            collect(cpu_job, *cpu_run, failures)
-            cpu_job = None
-        if time.time() - last >= args.heartbeat_minutes * 60:
-            last = time.time()
-            busy = ", ".join(
-                f"GPU {dev}: {j[0]} {_clock(last - j[3])} ({_result_rows(j[2])} rows)"
-                for dev, j in running.items()
-            )
-            cpu_text = f"; CPU methods {_result_rows(cpu_run[1])} rows" if cpu_job else ""
-            print(f"impute shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}{cpu_text}",
-                  flush=True)  # fmt: skip
+    _run_shard_queue(
+        "impute", jobs, command, on_done, devices, base, env, suite_dir / "shards",
+        args.heartbeat_minutes, side=side, progress=lambda d: f"{_result_rows(d)} rows",
+    )  # fmt: skip
     return failures
 
 
