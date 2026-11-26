@@ -1635,7 +1635,7 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
     imputers: dict = dict(impute.CPU_IMPUTERS)
     opts = {
         "knn": "KNNImputer(n_neighbors=5), z-scored + one-hot",
-        "mice": "IterativeImputer(BayesianRidge, max_iter=10), z-scored + one-hot",
+        "mice": "chained: BayesianRidge / LogisticRegression, 10 rounds, z-scored + one-hot",
         "missforest": "100 trees, max_features=sqrt, max_iter=10",
     }
     params = {"suite": args.suite, "datasets": ",".join(datasets),

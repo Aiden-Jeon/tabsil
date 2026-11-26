@@ -23,12 +23,13 @@ extension and the usual baselines, every method on the same rows and masks.
   `TabPFNUnsupervisedModel.impute` defaults: 10 orders, t = 1e-9, with TabPFN v2, and one fix of
   its missing-value handling, `official_model_class`), `tabpfn_simple` (`simple_impute` of the
   same commit, one fit per column), `mean` (mean / most frequent),
-  `knn` (scikit-learn KNNImputer, 5 neighbors), `mice` (IterativeImputer with BayesianRidge,
-  10 rounds) and `missforest` (`missforest`, Stekhoven and Buehlmann 2012). KNN and MICE see
-  z-scored numeric columns and one-hot categorical columns (a category is the largest one-hot
-  value). Every method is given the table's categorical columns; both TabPFN extension methods add
-  the numeric columns they infer as categorical (`extension_categorical`), and `tabsil_inferred`
-  (TabSil's mean with those same column kinds) is the ablation for that difference
+  `knn` (scikit-learn KNNImputer, 5 neighbors, on z-scored numeric and one-hot categorical
+  columns; a category is the largest one-hot value), `mice` (chained equations, `impute_mice`:
+  BayesianRidge for numeric and multinomial logistic regression for categorical columns, 10
+  rounds) and `missforest` (`impute_missforest`, Stekhoven and Buehlmann 2012). Every method is
+  given the table's categorical columns; both TabPFN extension methods add the numeric columns
+  they infer as categorical (`extension_categorical`), and `tabsil_inferred` (TabSil's mean with
+  those same column kinds) is the ablation for that difference
 
 `run` writes one row per (table, rate, seed, method) to `results.csv` as it goes and skips rows
 already there, so a rerun resumes. A method that raises or leaves a masked cell non-finite is a
@@ -261,14 +262,49 @@ def impute_knn(X: np.ndarray, categorical: list[int], seed: int) -> np.ndarray:
     return decode(KNNImputer(n_neighbors=5).fit_transform(Z))
 
 
-def impute_mice(X: np.ndarray, categorical: list[int], seed: int) -> np.ndarray:
-    from sklearn.experimental import enable_iterative_imputer  # noqa: F401
-    from sklearn.impute import IterativeImputer
-    from sklearn.linear_model import BayesianRidge
+def _linear_features(current: np.ndarray, columns: list[int], categorical: list[int]):
+    """Features of a linear model from `columns` of the current imputation: numeric columns
+    z-scored, categorical columns one-hot (all their classes)."""
+    parts = []
+    for k in columns:
+        col = current[:, k]
+        if k in categorical:
+            parts.append((col[:, None] == np.unique(col)[None]).astype(float))
+        else:
+            parts.append(((col - col.mean()) / (col.std() or 1.0))[:, None])
+    return np.hstack(parts) if parts else np.zeros((len(current), 1))
 
-    Z, decode = _encode(X, categorical)
-    model = IterativeImputer(estimator=BayesianRidge(), max_iter=10, random_state=seed)
-    return decode(model.fit_transform(Z))
+
+def impute_mice(X: np.ndarray, categorical: list[int], seed: int, max_iter: int = 10) -> np.ndarray:
+    """MICE by chained equations without posterior draws (scikit-learn `IterativeImputer`'s
+    defaults: mean / most frequent start, 10 rounds, columns with fewer missing cells first): each
+    round imputes every column with a missing cell from the other columns' current imputation
+    (numeric z-scored, categorical one-hot), with BayesianRidge for a numeric column and a
+    multinomial LogisticRegression for a categorical one. A column is never predicted from its
+    own one-hot block: on one-hot columns, `IterativeImputer` predicts each from its siblings,
+    which are missing in the same rows, and every category stays at the column means (the most
+    frequent class)."""
+    from sklearn.linear_model import BayesianRidge, LogisticRegression
+
+    miss = np.isnan(X)
+    current = impute_mean(X, categorical, seed)
+    order = [j for j in np.argsort(miss.sum(0), kind="stable") if miss[:, j].any()]
+    for _ in range(max_iter):
+        for j in order:
+            others = [k for k in range(X.shape[1]) if k != j]
+            F = _linear_features(current, others, categorical)
+            obs = ~miss[:, j]
+            y = X[obs, j]
+            if j in categorical:
+                if len(np.unique(y)) == 1:
+                    current[miss[:, j], j] = y[0]
+                    continue
+                model = LogisticRegression(max_iter=1000, random_state=seed)
+            else:
+                model = BayesianRidge()
+            model.fit(F[obs], y)
+            current[miss[:, j], j] = model.predict(F[miss[:, j]])
+    return current
 
 
 def n_jobs() -> int:

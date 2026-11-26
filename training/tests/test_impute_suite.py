@@ -273,3 +273,14 @@ def test_worker_threads_split_the_cores(monkeypatch):
     assert bi.n_jobs() == 3
     monkeypatch.delenv("TABSIL_IMPUTE_N_JOBS")
     assert bi.n_jobs() == -1
+
+
+def test_mice_predicts_categories_from_the_other_columns():
+    # c follows the sign of a: MICE must use that, not stay at the most frequent class
+    X, categorical, _ = _table()
+    _, mask = bi.make_split("cmc", X, 0.3, 0)
+    X_masked = np.where(mask, np.nan, X)
+    mice = bi.score(X, bi.impute_mice(X_masked, categorical, 0), mask, categorical)
+    mode = bi.score(X, bi.impute_mean(X_masked, categorical, 0), mask, categorical)
+    c = json.loads(mice["columns"])["2"]
+    assert c > json.loads(mode["columns"])["2"] + 0.2 and c > 0.85
