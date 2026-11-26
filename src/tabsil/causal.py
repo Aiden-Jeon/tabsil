@@ -38,7 +38,9 @@ Where this differs from the reference implementations (EconML 0.17.1 `SLearner`,
   fitted estimators; `regressor` / `classifier` take any scikit-learn estimator instead (cloned for
   every fit), so the same meta-learner can run with another base learner
 - S-learner: the treatment is one 0/1 column appended to the features, an ordinary numeric column
-  for TabSil (EconML appends two columns, 1 − T and T)
+  for TabSil (EconML appends two columns, 1 − T and T). With TabSil, tables whose features plus
+  the treatment exceed the per-member column cap (768) are an error, since members drawing column
+  subsets could leave the treatment out
 - X-learner: the propensity model is TabSil classification fitted on all rows (EconML's default is
   a logistic regression)
 - DR-learner: `n_folds` = 5 stratified folds (EconML's default `cv` is 2), and the propensity is
@@ -131,9 +133,10 @@ class TabSilCATE:
     learners and where they differ from EconML).
 
     `model` and `borders` are given as for `tabsil.recipe.TabSilRegressor` (None: the default Hub
-    repo at the v1 tag; a Hub repo id or a local folder; or a model with its `borders`). The model
-    must serve both regression (outcomes) and classification (propensity scores of the X- and
-    DR-learners); the weights are loaded once and shared by every base model. `n_estimators`,
+    repo at its default tag, `tabsil.recipe.HUB_DEFAULT`; a Hub repo id or a local folder; or a
+    model with its `borders`). The model must serve regression (outcomes) and, for the X- and
+    DR-learners, classification (propensity scores); the weights are loaded once and shared by
+    every base model. `n_estimators`,
     `device` and the other keyword arguments go to each `TabSilRegressor` / `TabSilClassifier`.
     `regressor` / `classifier` replace TabSil by a scikit-learn estimator (cloned per fit); when
     both replace it, or the learner needs no classifier, no TabSil weights are loaded.
@@ -163,19 +166,27 @@ class TabSilCATE:
             raise ValueError(f"n_folds must be >= 2: {n_folds}")
         if not 0 < propensity_clip < 0.5:
             raise ValueError(f"propensity_clip must be in (0, 0.5): {propensity_clip}")
-        needs_tabsil = regressor is None or (classifier is None and learner in ("x", "dr"))
+        # the TabSil tasks this learner uses: outcomes (unless `regressor`), propensity (X and DR,
+        # unless `classifier`)
+        needs_regression = regressor is None
+        needs_classification = classifier is None and learner in ("x", "dr")
         if isinstance(model, nn.Module):
-            if borders is None and regressor is None:
+            if needs_regression and borders is None:
                 raise ValueError("pass the regression borders together with a model")
         elif borders is not None:
             raise ValueError("borders are only given with a model (downloads include them)")
-        elif needs_tabsil:
+        elif needs_regression or needs_classification:
             from tabsil.hub import model_or_pretrained
             from tabsil.recipe import HUB_DEFAULT
 
-            model, borders = model_or_pretrained(model, HUB_DEFAULT, "regression")
-            if classifier is None and "classification" not in model.tasks:
-                raise ValueError("the model must serve classification as well as regression")
+            task = "regression" if needs_regression else "classification"
+            model, borders = model_or_pretrained(model, HUB_DEFAULT, task)
+        tasks = getattr(model, "tasks", None)
+        if needs_classification and tasks is not None and "classification" not in tasks:
+            raise ValueError(
+                f"the {learner}-learner's propensity model needs a model serving classification"
+                " (or pass `classifier`)"
+            )
         self.model = model
         self.borders = borders
         self.learner = learner
@@ -254,6 +265,21 @@ class TabSilCATE:
         return self
 
     def _fit_s(self, X, t, y):
+        if self.regressor is None:
+            # beyond the per-member column cap, members draw column subsets, and a member without
+            # the treatment column would give every row an effect of exactly 0
+            from tabsil.recipe import default_inference
+
+            cap = self.estimator_kwargs.get(
+                "max_features_per_member",
+                default_inference(self.model, "regression")["max_features_per_member"],
+            )
+            if cap is not None and X.shape[1] + 1 > cap:
+                raise ValueError(
+                    f"the S-learner adds the treatment to {X.shape[1]} features, more than the"
+                    f" {cap} columns per member, so some members would not see it: use another"
+                    " learner or max_features_per_member=None"
+                )
         self.mu_ = self._fit_regressor(np.column_stack([X, t]), y)
 
     def _fit_t(self, X, t, y):

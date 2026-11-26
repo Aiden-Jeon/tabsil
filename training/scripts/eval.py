@@ -1263,6 +1263,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.suite == ADBENCH_SUITE:
         with mlflow_run(use_mlflow):
             run_adbench(args, out_dir, use_mlflow)
+        return
     if args.suite == CAUSAL_SUITE:
         with mlflow_run(use_mlflow):
             run_causal(args, out_dir, use_mlflow)
@@ -1534,7 +1535,7 @@ def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
             estimators[m] = causal.tabsil_estimator(
                 model, borders, causal.TABSIL[m], n_estimators, args.device, 1000 * args.seed
             )
-            opts[m] = f"n_estimators={n_estimators}"
+            opts[m] = f"model={args.regressor_path} n_estimators={n_estimators} seed={args.seed}"
         params |= {"model": args.regressor_path, "n_estimators": n_estimators, "seed": args.seed}
     print(f"causal: {plan if args.causal_realizations else benchmarks} x {methods}, "
           f"{args.device}", flush=True)  # fmt: skip

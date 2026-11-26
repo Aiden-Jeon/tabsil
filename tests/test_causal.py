@@ -211,3 +211,22 @@ def test_constructor_errors_and_unfitted():
 def test_no_weights_are_loaded_with_scikit_learn_base_learners():
     est = TabSilCATE(learner="t", regressor=LinearRegression())  # no classifier needed
     assert est.model is None
+
+
+def test_s_learner_rejects_tables_beyond_the_member_column_cap():
+    X, t, y, _ = _data(n=40, d=6)
+    with pytest.raises(ValueError, match="columns per member"):
+        _tiny(learner="s", max_features_per_member=6).fit(X, t, y)
+    # the other learners do not add a column; the S-learner within the cap is fine
+    _tiny(learner="t", max_features_per_member=6).fit(X, t, y)
+    _tiny(learner="s", max_features_per_member=7).fit(X, t, y)
+
+
+def test_x_and_dr_need_a_model_serving_classification():
+    class RegressionOnly(torch.nn.Module):
+        tasks = ("regression",)
+
+    with pytest.raises(ValueError, match="classification"):
+        TabSilCATE(RegressionOnly(), BORDERS, learner="x")
+    TabSilCATE(RegressionOnly(), BORDERS, learner="t")  # no propensity model
+    TabSilCATE(RegressionOnly(), BORDERS, learner="dr", classifier=LogisticRegression())

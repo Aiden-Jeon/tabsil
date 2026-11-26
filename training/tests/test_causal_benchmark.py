@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import causal
+from tabsil_train.benchmarks import _files, causal
 
 N_ACIC = 200
 
@@ -229,7 +229,10 @@ def test_eval_suite_causal_end_to_end(data_dir, tmp_path):
     assert set(summary["methods"]) == {f"{b}/{m}" for b in ("ihdp", "acic2016")
                                        for m in ("tabsil_t", "tabsil_s")}  # fmt: skip
     rows = pd.read_csv(out / "causal" / "results.csv")
-    assert (rows.opts == "n_estimators=2").all()
+    assert rows.opts.str.endswith("n_estimators=2 seed=0").all()
+    # a rerun with other settings does not resume from these rows
+    with pytest.raises(ValueError, match="other settings"):
+        script.main([*args, "--seed", "1"])
 
 
 def test_eval_suite_causal_argument_errors(data_dir, tmp_path):
@@ -243,3 +246,37 @@ def test_eval_suite_causal_argument_errors(data_dir, tmp_path):
         script.main([*base, "--causal-methods", "bart"])
     with pytest.raises(SystemExit, match="regressor-path"):
         script.main([*base, "--causal-methods", "tabsil_t"])
+
+
+def test_report_with_no_results_writes_an_empty_summary(tmp_path):
+    summary = causal.report(causal.read_results(tmp_path / "none.csv"), tmp_path, {"ihdp": [1, 2]},
+                            ["tabsil_s"])  # fmt: skip
+    assert summary["results"] == 0 and summary["missing_pct"] == 100
+    table = pd.read_csv(tmp_path / "summary.csv")
+    assert table.empty and {"benchmark", "pehe_out_se"} <= set(table.columns)
+
+
+def test_reversed_range_is_rejected():
+    with pytest.raises(ValueError, match="empty"):
+        causal.parse_realizations("5-1", "ihdp")
+
+
+def test_a_bad_download_is_not_cached(tmp_path, monkeypatch):
+    import io
+
+    def page(url, timeout):
+        return io.BytesIO(b"<html>")
+
+    monkeypatch.setattr(_files.urllib.request, "urlopen", page)
+    with pytest.raises(ValueError, match="sha256"):
+        causal.data_path("x.csv", tmp_path)
+    assert not any(tmp_path.iterdir())  # neither the file nor the .part is left
+
+
+def test_suite_adbench_does_not_fall_through_to_amlb(monkeypatch, tmp_path):
+    script = _eval_script()
+    calls = []
+    monkeypatch.setattr(script, "run_adbench", lambda *a: calls.append("adbench"))
+    monkeypatch.setattr(script, "run_amlb", lambda *a: calls.append("amlb"))
+    script.main(["--suite", "adbench", "--out-dir", str(tmp_path)])
+    assert calls == ["adbench"]

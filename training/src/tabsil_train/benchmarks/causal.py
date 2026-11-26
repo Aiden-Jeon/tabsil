@@ -45,18 +45,19 @@ imputed.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time
 import traceback
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks._files import download_verified
 
 IHDP_URL = "https://www.fredjo.com/files"
 CAUSALLIB_COMMIT = "267e0c72df81ea8264ece46496107f99a599b60d"
@@ -115,19 +116,10 @@ def cache_dir() -> Path:
 
 
 def data_path(name: str, root: Path | None = None) -> Path:
-    """The cached file `name`, downloaded the first time and checked against SHA256."""
-    path = (root or cache_dir()) / name
-    if not path.exists():
-        url = f"{IHDP_URL}/{name}" if name.startswith("ihdp") else f"{ACIC_URL}/{name}"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".part")
-        with urllib.request.urlopen(url, timeout=300) as r:
-            tmp.write_bytes(r.read())
-        tmp.replace(path)
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest != SHA256[name]:
-        raise ValueError(f"{path}: sha256 {digest} is not the pinned file ({SHA256[name]})")
-    return path
+    """The cached file `name`, downloaded the first time and checked against SHA256
+    (`_files.download_verified`: a download with another hash is not cached)."""
+    url = f"{IHDP_URL}/{name}" if name.startswith("ihdp") else f"{ACIC_URL}/{name}"
+    return download_verified(url, (root or cache_dir()) / name, SHA256[name])
 
 
 def _ihdp(root: Path | None = None) -> tuple[dict, dict]:
@@ -283,9 +275,7 @@ def metrics(split: Split, effect_in: np.ndarray, effect_out: np.ndarray) -> dict
 
 
 def read_results(path: Path) -> pd.DataFrame:
-    if path.exists() and path.stat().st_size:
-        return pd.read_csv(path)
-    return pd.DataFrame(columns=RESULT_COLUMNS)
+    return _files.read_results(path, RESULT_COLUMNS)
 
 
 def parse_realizations(text: str | None, benchmark: str) -> list[int]:
@@ -296,7 +286,10 @@ def parse_realizations(text: str | None, benchmark: str) -> list[int]:
     out: list[int] = []
     for part in text.split(","):
         lo, _, hi = part.strip().partition("-")
-        out += range(int(lo), int(hi or lo) + 1)
+        lo, hi = int(lo), int(hi or lo)
+        if hi < lo:
+            raise ValueError(f"{benchmark} realization range {part.strip()!r} is empty")
+        out += range(lo, hi + 1)
     if bad := [r for r in out if not 1 <= r <= n]:
         raise ValueError(f"{benchmark} realizations are 1..{n}: {bad}")
     return sorted(set(out))
@@ -315,6 +308,14 @@ def run(
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "results.csv"
     done = read_results(path)
+    # resume only rows computed with the same settings (`opts`: model, members, seed)
+    current = done.method.map(lambda m: (opts or {}).get(m, ""))
+    stale = done[done.method.isin(methods) & (done.opts.fillna("").astype(str) != current)]
+    if len(stale):
+        raise ValueError(
+            f"{path} has {sorted(set(stale.method))} results with other settings"
+            f" ({stale.opts.iloc[0]!r}); use another output directory"
+        )
     finished = set(zip(done.benchmark, done.realization.astype(int), done.method, strict=True))
     failures = []
     for benchmark, realizations in plan.items():
@@ -366,7 +367,9 @@ def summary_table(rows: pd.DataFrame) -> pd.DataFrame:
             rec[f"{m}_se"] = v.std(ddof=1) / np.sqrt(len(v)) if len(v) > 1 else np.nan
         rec["seconds"] = g["seconds"].astype(float).mean()
         out.append(rec)
-    return pd.DataFrame(out)
+    columns = ["benchmark", "method", "realizations"]
+    columns += [c for m in METRICS for c in (m, f"{m}_se")] + ["seconds"]
+    return pd.DataFrame(out, columns=columns)
 
 
 def reference() -> pd.DataFrame:
@@ -380,7 +383,8 @@ def report(rows: pd.DataFrame, out_dir: Path, plan: dict[str, list[int]],
     """Write `summary.csv` and return the summary dict: per benchmark and method the metric means
     and the share of planned cells without a result (`missing`, must be 0)."""
     rows = rows[rows.method.isin(methods) & rows.benchmark.isin(list(plan))]
-    rows = rows[[r in plan[b] for b, r in zip(rows.benchmark, rows.realization, strict=True)]]
+    planned_rows = [r in plan[b] for b, r in zip(rows.benchmark, rows.realization, strict=True)]
+    rows = rows[np.asarray(planned_rows, dtype=bool)]  # a boolean mask, also when empty
     table = summary_table(rows)
     table.to_csv(out_dir / "summary.csv", index=False)
     planned = sum(len(v) for v in plan.values()) * len(methods)
