@@ -64,6 +64,21 @@ Zero-shot forecasting with the v1 weights (`TabSilForecaster`, no retraining) on
 - Snapshot 2026-11-26: fev 0.10.0, data `autogluon/fev_datasets` at `d3e7e72`, 1×H100 (42 min for TabSil). Our Seasonal Naive reproduces fm-agent-bench's on every window. No window is imputed. Reproduce with `training/scripts/eval.py --suite fev` (job spec `training/scripts/eval_fev.yaml`).
 - The tasks are redset_1H, solar_with_weather_1H, ercot_1D, epf_be, rohlik_orders_1D, solar_1D, ecdc_ili, hospital, us_consumption_1M and hospital_admissions_1D. Only known covariates are used, and only by TabSil and TabPFN-TS. The pool differs from the fev-bench leaderboard's, so the numbers are not comparable to it.
 
+### Outlier detection (ADBench)
+
+Unsupervised outlier detection on 12 [ADBench](https://github.com/Minqi824/ADBench) tables × 3 seeds, zero-shot with the v1 weights (`TabSilUnsupervised`, 10 column orders). Each model is fitted on the unlabeled training split, which keeps its anomalies (a contaminated context), and scores the test split. The split, the tables and the comparison numbers come from the fm-agent-bench anomaly track: the official TabPFN extension (`TabPFNUnsupervisedModel.outliers`, TabPFN v2 weights) and pyod's default methods. Our IsolationForest equals ADBench Table D4 on 12/12 tables.
+
+| Method | Mean AUROC | Mean AUPRC | Elo (IsolationForest = 1000) |
+| --- | --- | --- | --- |
+| IsolationForest | 0.722 | 0.358 | 1000 (+89/−82) |
+| TabPFN v2 extension | 0.704 | 0.308 | 991 (+198/−156) |
+| ECOD | 0.695 | 0.358 | 971 (+192/−128) |
+| **TabSil** | **0.662** | **0.264** | **896** (+149/−143) |
+
+- Elo pool: TabSil, the TabPFN extension and pyod's 10 default methods; TabSil places 9th of 12. TabSil is above the TabPFN extension on 1 of 12 tables, above IsolationForest on 5.
+- With a clean context (only the training rows labeled normal, a diagnostic that uses labels and stays out of the Elo) TabSil's mean AUROC is 0.820 (TabPFN extension 0.847, IsolationForest 0.767), and it is within 0.01 of the best pyod method or above it on 8 of 12 tables. Like the TabPFN extension, the density model is much stronger than the unsupervised score suggests; the anomalies in the context hurt it most (cover +0.46, cardio +0.31).
+- Run with `training/scripts/eval.py --suite adbench` (8×H100, 14 min). Per-table numbers are in the pull request that added it.
+
 ## Install
 
 Inference only, from PyPI:
@@ -128,6 +143,19 @@ pred = fc.predict(future=future, quantile_levels=[0.05, 0.5, 0.95])  # known cov
 ```
 
 Each series is fit on its last 4,096 rows (`max_context_length`; `None` allows up to the supported 1,000,000 rows). See `src/tabsil/forecast.py` for the missing-value and constant-series handling.
+
+### Outlier detection
+
+Without labels, `TabSilUnsupervised` gives each row a log density and an outlier score (higher = more anomalous). It predicts each column from the columns before it with the same model (regression buckets for numeric columns, class probabilities for categorical ones), chains the conditionals along 10 random column orders, and averages them, as the official TabPFN extension does ([results](#outlier-detection-adbench)):
+
+```python
+from tabsil import TabSilUnsupervised
+
+model = TabSilUnsupervised(device="cuda").fit(X_train)  # unlabeled rows: the context
+scores = model.outlier_score(X_test)  # = -model.log_density(X_test)
+```
+
+The cost is one fit and prediction per column and order (`n_permutations`, default 10). `model.conditional(X, target, given)` returns the distribution of one column given others, the part imputation and synthetic data can later build on.
 
 ## Model
 

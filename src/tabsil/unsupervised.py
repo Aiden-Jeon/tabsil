@@ -41,7 +41,8 @@ rows per value on average). Where this module differs:
   order of the conditioning columns, so orders sharing a prefix set reuse it, and the
   conditioning columns enter in index order. The first and the last position of all orders have
   only one pair per column (the marginal, and the column given all others), so with d columns at
-  most 2d of those evaluations are left instead of 2 x `n_permutations`
+  most 2d of those evaluations are left instead of 2 x `n_permutations` (on the 12 ADBench tables
+  x 3 seeds: 4,765 evaluations instead of 5,070)
 - the column orders come from `random_state` (numpy) rather than Python's global `random`, and are
   all orders when there are no more than `n_permutations` of them
 - categorical conditioning columns are passed to the inference classes as categorical
@@ -51,8 +52,13 @@ rows per value on average). Where this module differs:
   values go to the model as NaN. (The official drops context rows missing the target too.)
 
 Cost: every (column, conditioning set) is one fit and one prediction of the test rows with the
-whole context, so up to `n_permutations` x columns predictions of `n_estimators` members each.
-`n_estimators` (fewer members) is the main lever; the inference package is used as is.
+whole context, so up to `n_permutations` x columns predictions of `n_estimators` members each
+(about 0.75 s per evaluation with 8 members for 6,400 rows on an H100). `n_estimators` (fewer
+members) is the main lever; the inference package is used as is.
+
+Known limit: the regression head is 999 quantiles, and `quantiles_to_bucket_probs` gives no mass
+beyond the lowest and the highest quantile except inside the buckets holding them. A value beyond
+them gets `PROBABILITY_FLOOR`, so all such values of a column score alike (no tail resolution).
 """
 
 from __future__ import annotations
