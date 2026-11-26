@@ -12,7 +12,8 @@
 #                 or from Hub weights: --override env_variables.TABSIL_INIT_HUB=aiden-jeon/tabsil@stage1-150k
 #   chunks:       --override env_variables.TABSIL_STOP_STEP=<end of this chunk> --override timeout_minutes=<estimate>
 #   resume:       --override env_variables.TABSIL_RESUME_RUN_ID=<run_id>
-#   prior:        --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_hicard_missing (default graph_scm)
+#   prior:        --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_hicard_missing (default graph_scm;
+#                 also graph_scm_realism, graph_scm_base_realism)
 #   model size:   --override env_variables.TABSIL_EMSIZE=192 (cell width; TABSIL_N_CLS sets the CLS count,
 #                 row ICL width = their product). Later stages and resumes of that run need the same values
 #   GPU memory:   --override env_variables.TABSIL_MICRO_BATCH=<datasets per GPU>
@@ -21,6 +22,17 @@
 #   Muon:         --override env_variables.TABSIL_MUON_DISTRIBUTED=all (Newton-Schulz split over the GPUs,
 #                 same results and checkpoint format; `node` splits within a node, `off` turns it off)
 #   diagnostics:  --override env_variables.TABSIL_GRAD_COSINE=1, --override env_variables.TABSIL_RANK_TIMING=1
+#   v2 recipe options (training/README.md "v2 recipe options"; all off by default, a resumed run keeps
+#   its own values):
+#     reference validation set: --override env_variables.TABSIL_REFERENCE_VAL_TABLES=512 (tables per task,
+#                 a multiple of 8; metrics ref_*, independent of the run's seed and prior)
+#     YCTX:       --override env_variables.TABSIL_TARGET_TRAIN_ROWS=1 (regression target standardized with
+#                 the train rows, as at inference)
+#     OPTK:       --override env_variables.TABSIL_OPTIMIZER=muon_adamw --override env_variables.TABSIL_LR=3e-4
+#                 --override env_variables.TABSIL_MUON_MOMENTUM=0.95 (Kumo-Tabular's Muon + AdamW)
+#     PS1:        --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_base_realism (Kumo-Tabular's
+#                 every-stage prior parts)
+#     size:       TABSIL_EMSIZE as above; TABSIL_SEED and TABSIL_WARMUP_STEPS for short comparison runs
 # Other variables are listed in the training/scripts/train.py docstring. PYTHONHASHSEED=0 fixes the
 # prior's table order (the tabicl prior iterates a set of strings).
 experiment_name: tabsil
