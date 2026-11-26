@@ -13,7 +13,7 @@ TabSil is a tabular foundation model. One model handles both classification and 
 
 This repository has everything needed to reproduce TabSil. It holds two packages:
 
-- `tabsil` (`src/tabsil/`): inference only. The model, the scikit-learn style estimators, and loading weights from the Hugging Face Hub.
+- `tabsil` (`src/tabsil/`): inference only. The model, the scikit-learn style estimators (classification and regression; forecasting and outlier detection since tabsil 0.1.2), and loading weights from the Hugging Face Hub.
 - `tabsil-train` (`training/`, imported as `tabsil_train`): the synthetic-data prior, the training curriculum, the benchmark harness, and the Hub upload scripts. It is a uv workspace member that depends on `tabsil`.
 
 > Status: the TabSil v1 weights are on the Hugging Face Hub: [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil) (model card with the benchmark results).
@@ -65,7 +65,7 @@ Zero-shot forecasting with the v1 weights (`TabSilForecaster`, no retraining) on
 | AutoETS | 1230 (+245/−478) | 1167 (+243/−299) |
 | Seasonal Naive | 1000 (+78/−271) | 1000 (+122/−332) |
 
-- Snapshot 2026-11-26: fev 0.10.0, data `autogluon/fev_datasets` at `d3e7e72`, 1×H100 (42 min for TabSil). Our Seasonal Naive reproduces fm-agent-bench's on every window. No window is imputed. Reproduce with `training/scripts/eval.py --suite fev` (job spec `training/scripts/eval_fev.yaml`).
+- Snapshot 2026-11-26: fev 0.10.0, data `autogluon/fev_datasets` at `d3e7e72`, 1×H100 (42 min for TabSil), with tabsil 0.1.0's inference settings (before 0.1.1's new defaults; not re-run since). `TabSilForecaster` ships in tabsil 0.1.2. Our Seasonal Naive reproduces fm-agent-bench's on every window. No window is imputed. Reproduce with `training/scripts/eval.py --suite fev` (job spec `training/scripts/eval_fev.yaml`).
 - The tasks are redset_1H, solar_with_weather_1H, ercot_1D, epf_be, rohlik_orders_1D, solar_1D, ecdc_ili, hospital, us_consumption_1M and hospital_admissions_1D. Only known covariates are used, and only by TabSil and TabPFN-TS. The pool differs from the fev-bench leaderboard's, so the numbers are not comparable to it.
 
 ### Outlier detection (ADBench)
@@ -81,7 +81,7 @@ Unsupervised outlier detection on 12 [ADBench](https://github.com/Minqi824/ADBen
 
 - Elo pool: TabSil, the TabPFN extension and pyod's 10 default methods; TabSil places 9th of 12. TabSil is above the TabPFN extension on 1 of 12 tables, above IsolationForest on 5.
 - With a clean context (only the training rows labeled normal, a diagnostic that uses labels and stays out of the Elo) TabSil's mean AUROC is 0.820 (TabPFN extension 0.847, IsolationForest 0.767), and it is within 0.01 of the best pyod method or above it on 8 of 12 tables. Like the TabPFN extension, the density model is much stronger than the unsupervised score suggests; the anomalies in the context hurt it most (cover +0.46, cardio +0.31).
-- Run with `training/scripts/eval.py --suite adbench` (8×H100, 14 min). Per-table numbers, the differences from the official extension and what is not verified are in [#19](https://github.com/Aiden-Jeon/tabsil/pull/19).
+- Measured with tabsil 0.1.0's inference settings (before 0.1.1's new defaults; not re-run since). `TabSilUnsupervised` ships in tabsil 0.1.2. Run with `training/scripts/eval.py --suite adbench` (8×H100, 14 min). Per-table numbers, the differences from the official extension and what is not verified are in [#19](https://github.com/Aiden-Jeon/tabsil/pull/19).
 
 ## Install
 
@@ -142,7 +142,7 @@ Both are scikit-learn style estimators over an ensemble of 8 preprocessing membe
 
 ### Forecasting
 
-`TabSilForecaster` forecasts time series zero-shot with the regression model, as TabPFN-TS does: each time step becomes a table row of time features (running index, calendar sin/cos, FFT-detected seasonal sin/cos; no lags), and the horizon is predicted in one pass from the series' own past. The quantiles come from the regressor's predictive distribution; the point forecast is its median.
+(tabsil ≥ 0.1.2) `TabSilForecaster` forecasts time series zero-shot with the regression model, as TabPFN-TS does: each time step becomes a table row of time features (running index, calendar sin/cos, FFT-detected seasonal sin/cos; no lags), and the horizon is predicted in one pass from the series' own past. The quantiles come from the regressor's predictive distribution; the point forecast is its median.
 
 ```python
 from tabsil import TabSilForecaster
@@ -157,7 +157,7 @@ Each series is fit on its last 4,096 rows (`max_context_length`; `None` allows u
 
 ### Outlier detection
 
-Without labels, `TabSilUnsupervised` gives each row a log density and an outlier score (higher = more anomalous). It predicts each column from the columns before it with the same model (regression buckets for numeric columns, class probabilities for categorical ones), chains the conditionals along 10 random column orders, and averages them, as the official TabPFN extension does ([results](#outlier-detection-adbench)):
+(tabsil ≥ 0.1.2) Without labels, `TabSilUnsupervised` gives each row a log density and an outlier score (higher = more anomalous). It predicts each column from the columns before it with the same model (regression buckets for numeric columns, class probabilities for categorical ones), chains the conditionals along 10 random column orders, and averages them, as the official TabPFN extension does ([results](#outlier-detection-adbench)):
 
 ```python
 from tabsil import TabSilUnsupervised
