@@ -103,6 +103,26 @@ CATE estimation zero-shot with the v1 weights at the Hub tag `v1`, i.e. tabsil 0
 - Published numbers on the same files, with protocol differences (`training/src/tabsil_train/benchmarks/causal_reference.csv`): CausalPFN (Balazadeh et al. 2025) reports out-of-sample √PEHE 0.58 ± 0.07 on IHDP and 0.92 ± 0.11 on ACIC 2016, TabPFN as the outcome model 0.95 ± 0.20 and 0.54 ± 0.08, with baselines tuned per dataset (their Table 1, IHDP T-learner 1.73, BART 2.50). Shalit et al. 2017 report CFR-Wass 0.71 / 0.76 (in / out) on IHDP, averaged over 1,000 realizations instead of these 100.
 - Snapshot 2026-11-26: TabSil on 1×H100 (9 min job, 440 fits of a learner on a realization, 0 failed, nothing imputed); EconML on a laptop CPU. Reproduce with `training/scripts/eval.py --suite causal --regressor-path hf://aiden-jeon/tabsil@v1` (job spec `training/scripts/eval_causal.yaml`; the EconML methods need the `causal` extra).
 
+### Imputation (OpenML, MCAR)
+
+Zero-shot missing value imputation with the v1 weights (`TabSilUnsupervised.impute`: the predictive mean for numeric cells, the most probable class for categorical cells) on 10 OpenML tables: 4 numeric only and 6 with categorical columns, at most 2,000 rows and 21 columns. Cells are masked completely at random (MCAR) at 10, 30 and 50%, with 3 seeds each. Every method fills the same masked table (it is fitted on the rows it imputes) and is scored on the masked cells. NRMSE is the RMSE divided by the column's standard deviation (mean imputation is about 1; lower is better), averaged over numeric columns. Accuracy is averaged over categorical columns. Both are then averaged over tables. No published results exist for this protocol, so every method was run here on the same rows and masks.
+
+| Method | NRMSE 10% | NRMSE 30% | NRMSE 50% | Accuracy 10% | Accuracy 30% | Accuracy 50% |
+| --- | --- | --- | --- | --- | --- | --- |
+| **TabSil** | **0.547** | **0.647** | **0.746** | **0.653** | **0.632** | **0.590** |
+| MissForest | 0.616 | 0.744 | 0.863 | 0.632 | 0.602 | 0.556 |
+| MICE | 0.670 | 0.807 | 0.960 | 0.617 | 0.589 | 0.552 |
+| TabPFN v2 extension, `simple_impute` | 0.745 | 0.855 | 0.937 | 0.624 | 0.602 | 0.565 |
+| KNN | 0.724 | 0.912 | 1.005 | 0.576 | 0.519 | 0.483 |
+| Mean / most frequent | 0.974 | 0.995 | 0.994 | 0.496 | 0.487 | 0.489 |
+| TabPFN v2 extension, `impute` | 1.467 | 2.167 | 2.651 | 0.564 | 0.533 | 0.490 |
+
+- TabSil has a lower NRMSE than every baseline on 25 of the 30 (table, rate) cells. The other 5 are bank-marketing at all three rates and adult at 10% and 50%, where TabPFN's `simple_impute` is lower (at adult 10% MICE too). TabSil's accuracy is higher than every baseline's on 20 of 21 cells; at yeast 10%, MissForest is higher (0.595 against 0.575).
+- The median instead of the mean gives NRMSE 0.562 / 0.671 / 0.768, slightly worse, as expected for RMSE. TabSil with the TabPFN extension's column kinds (below) gives 0.583 / 0.693 / 0.802.
+- Both TabPFN extension methods also treat numeric columns with few distinct values (at most 40, more than 10 rows per value) as categorical and cast their values to `int`. This gives large errors on such columns: yeast `erl`, with values 0.5 and 1, has NRMSE 10.4 under both methods. `impute` also has large errors on numeric-only tables (california_housing `totalBedrooms` 5.6), so the column kinds do not explain all of it; the cause was not investigated. To run at all, `impute` needed tabpfn-extensions at commit a049fd7, because the 0.6.3 release fails on CUDA, and a fix of its class count for categorical columns with missing values.
+- Time per (table, rate, seed) on H100: TabSil 3.2 s (8 members), `simple_impute` 6.7 s, `impute` 328 s. MissForest takes 11.6 s on the CPU.
+- Run with `training/scripts/eval.py --suite impute` (job spec `training/scripts/eval_impute.yaml`, 8×H100 `--shards 8`, 68 min). MICE comes from a second run (14 min) after a fix of its categorical encoding. The per-table numbers, the differences from the official `impute` and what is not verified are in the pull request.
+
 ## Install
 
 Inference only, from PyPI:
@@ -123,6 +143,7 @@ uv sync --package tabsil-train    # tabsil-train and its test tools only (tests:
 uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
 uv sync --package tabsil-train --no-dev --extra fev --group arena-dev     # fev-bench forecasting evaluation
 uv sync --package tabsil-train --extra causal                             # treatment effect evaluation (EconML baselines)
+uv sync --all-packages --extra impute                                     # + the TabPFN baselines of the imputation evaluation
 ```
 
 Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3). The `fev` extra (fev 0.10.0) needs `huggingface-hub<2`, so it is installed without the dev groups too.
@@ -191,12 +212,12 @@ The cost is one fit and prediction per column and order (`n_permutations`, defau
 
 ### Imputation
 
-`TabSilUnsupervised.impute` fills missing values (NaN) from the same conditionals: each column with a missing value is predicted for the rows missing it from all other columns, the row's other missing cells left missing, so there is one fit per column with a missing value. Numeric cells get the predictive mean (`strategy="median"` for the median), categorical cells the most probable class; `n_samples` draws from the distributions instead (multiple imputation):
+`TabSilUnsupervised.impute` fills missing values (NaN) from the same conditionals: each column with a missing value is predicted for the rows missing it from all other columns, the row's other missing cells left missing, so there is one fit per column with a missing value ([results](#imputation-openml-mcar)). Numeric cells get the predictive mean (`strategy="median"` for the median), categorical cells the most probable class; `n_samples` draws from the distributions instead (multiple imputation):
 
 ```python
 model = TabSilUnsupervised(categorical_features=[3, 5], device="cuda").fit(X)  # X with NaN
-X_filled = model.impute(X)                    # observed cells unchanged
-draws = model.impute(X, n_samples=5)          # (5, n, d)
+X_filled = model.impute(X)  # observed cells unchanged
+draws = model.impute(X, n_samples=5)  # (5, n, d)
 ```
 
 Fit on the table to impute itself or on other rows. Without `categorical_features`, columns with at most 40 distinct values and more than 10 rows per value are treated as categorical. The differences from the official TabPFN extension's `impute` are in the docstring of `src/tabsil/unsupervised.py`.
@@ -257,7 +278,7 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 
 ## Evaluation
 
-`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration), forecasting on 10 fev-bench tasks (`--suite fev`, job spec `training/scripts/eval_fev.yaml`), unsupervised outlier detection on 12 ADBench tables (`--suite adbench`, job spec in `training/scripts/eval.yaml`), and treatment effects on IHDP and ACIC 2016 (`--suite causal`, job spec `training/scripts/eval_causal.yaml`).
+`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration), forecasting on 10 fev-bench tasks (`--suite fev`, job spec `training/scripts/eval_fev.yaml`), unsupervised outlier detection on 12 ADBench tables (`--suite adbench`, job spec in `training/scripts/eval.yaml`), treatment effects on IHDP and ACIC 2016 (`--suite causal`, job spec `training/scripts/eval_causal.yaml`), and missing value imputation on 10 OpenML tables (`--suite impute`, job spec `training/scripts/eval_impute.yaml`, needs the `impute` extra).
 Train and inference time are reported as on the TabArena leaderboard: seconds per 1K train rows (fit) and per 1K test rows (predict), averaged over each dataset's splits, then the median over datasets. In the arenas they appear next to the baselines on the same splits (`summary.json`, `comparison.csv`).
 
 The official-protocol TabArena-Lite result in [Results](#results) is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The arena suites of `training/scripts/eval.py` fit each split once without bagging, a quicker check used to compare checkpoints; their Elo is not the official one.
