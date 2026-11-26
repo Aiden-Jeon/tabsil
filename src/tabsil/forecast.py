@@ -209,9 +209,10 @@ class TabSilForecaster:
     handling and quantiles).
 
     `model` and `borders` are given as for `tabsil.recipe.TabSilRegressor` (None: the default Hub
-    repo at the v1 tag; a Hub repo id or a local folder; or a model with its `borders`); the
-    weights are loaded once and shared by every series. `n_estimators` and the other keyword
-    arguments go to each series' `TabSilRegressor` (default: the model's settings).
+    repo at the tag `tabsil.recipe.HUB_REVISION`; a Hub repo id or a local folder; or a model
+    with its `borders`); the weights are loaded once and shared by every series. `n_estimators`
+    and the other keyword arguments go to each series' `TabSilRegressor` (default: the model's
+    settings).
 
         fc = TabSilForecaster(device="cuda").fit(context)
         pred = fc.predict(24)
