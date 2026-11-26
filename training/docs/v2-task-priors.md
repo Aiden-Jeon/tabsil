@@ -2,6 +2,8 @@
 
 Status: design. No v2 training job has run. Diagnostics D1-D3 ran on the v1 weights; D4 and D5 are planned.
 
+Update 2026-11-26: [v2-experiment-plan.md](v2-experiment-plan.md) re-checked this document. D1-D3 stand. Its §4 replaces the experiment plan below, and the task priors come after the classification and regression work (its §1 rows 1, 6 and 8, and §6).
+
 ## Decision
 
 v2 is trained from scratch with the v1 architecture and losses (`tabsil.recipe.STRUCTURE`, the retrieval decoder for classification, 999 quantiles with the pinball loss for regression). Only the training data changes: the v2 prior adds task priors to v1's classification and regression tables. The three-stage curriculum keeps v1's lengths (150K / 10K / 2K steps, about 1,550 H100-h). So v1 is the control of the final run: same structure, recipe and budget, and only the prior differs.
@@ -111,6 +113,7 @@ Checked on `dev-v2` (de8225c) and main (f5b26a7).
 ## Base prior and guards
 
 - **Base prior.** #14's `graph_scm_hicard_missing` (merged into dev-v2, de8225c). Its stage 2 run passed every #14 criterion (TabArena-Lite Elo 1769 against 1727 for `stage2-10k`). That run had one seed and no control with the v1 prior (A0). The screening control below uses this prior, so the v2 decisions do not depend on A0.
+  - Changed by [v2-experiment-plan.md](v2-experiment-plan.md) §1.4 and §6: the prior's parts are split by stage as in Kumo-Tabular, and this prior is tested as a stage-2 prior.
 - **Guards for every run.** Each run is compared with its reference: C in the screening, v1 in the final run, both at the same tabsil inference version. A run fails if either holds:
   - TabArena-Lite overall, classification or regression Elo is lower beyond its 95% CI.
   - AMLB ROC AUC or the regression RMSE ratio is worse by more than 0.005.
@@ -159,6 +162,8 @@ The eval rows are held-out data rows with their true label (0 inlier, 1 outlier)
 
 The model has to learn that rows in a small group far from the bulk belong with the reference class, even though the context labels them 0. Contaminated context is the point here. FoMo-0D (2409.05672) and OutFormer (2602.03018) train only with clean context and contaminate only the queries, which does not cover the D3 failure.
 
+Correction ([v2-experiment-plan.md](v2-experiment-plan.md) §1, row 8): TACTIC (2603.14171) and ICLAD (2603.19497) do train on contaminated contexts, and should be read before this prior is built.
+
 At inference a new `TabSilOutlier` appends reference rows built by the same code and returns P(class 1) per test row. No change to the architecture or the loss is needed.
 
 - **Outlier kinds.** These are the D3 kinds plus OutFormer's SCM-based ones:
@@ -202,6 +207,7 @@ At inference a new `TabSilOutlier` appends reference rows built by the same code
 **D4 (to run before the arm).** Imputation error of the v1.1 weights under MCAR, MAR and MNAR masks of the same rate:
 - on SCM tables with a known mechanism, and on the impute suite (`--suite impute`)
 - against the suite's baselines (mean / most frequent, KNN, MICE, MissForest). TabImpute's per-column TabPFN, the scheme `TabSilUnsupervised.impute` follows, lost to MissForest even under MCAR (overall RMSE 2.455 against 1.966), so the MCAR row is read first.
+  - Correction ([v2-experiment-plan.md](v2-experiment-plan.md) §1, row 8): 2.455 and 1.966 are TabImpute's all-pattern numbers, not MCAR ones. Its Self-MNAR model is also worse overall than its default (1.695 against 1.585).
 
 Each arm (MAR, MNAR) runs only if TabSil's error grows from MCAR to that mechanism clearly more than the baselines' does.
 
@@ -244,6 +250,8 @@ This cannot cover hidden confounding or mediators, nor tell the model which colu
    - Checked against the training records ([v2-scaling.md](v2-scaling.md)): prior mismatch, and capacity is not tested. From 150K to 250K steps the prior loss still fell 0.8% / 1.4% while TabArena-Lite stayed at 1428 against 1429. v1 (221.5M) is also already as large as the top TabArena models. That doc's step A (XS and S against C, ≈ 170 H100-h) tests whether v1 can shrink without loss; a larger model is tested only if that curve is steep.
 
 ## Experiment plan (each run needs approval before it starts)
+
+Replaced by [v2-experiment-plan.md](v2-experiment-plan.md) §4. A 30K-step stage-1 run read on TabArena-Lite cannot show a prior effect of this size (its §1.1 and §1.2).
 
 The earlier plan screened each task prior with a stage 2 run from v1's `stage1-150k` (≈ 307 H100-h each). Training from scratch makes that the wrong test, because the task priors would never be in stage 1. Short from-scratch runs cost less and match the final run.
 

@@ -11,7 +11,7 @@ Training, the synthetic-data prior, and the benchmark evaluation of [TabSil](../
 | `src/tabsil_train/hub.py` | MLflow run checkpoints (`runs:/...`) and the model structure in run params |
 | `scripts/` | `train.py`, `eval.py` and their Databricks AI Runtime job specs (`*.yaml`) |
 | `scripts/v2_prior_diag/` | diagnostics of the v1 weights for the v2 prior (forecast extrapolation, calibration, contaminated context) |
-| `docs/` | design notes (`v2-task-priors.md`: the v2 prior, task priors trained from scratch with the v1 architecture) |
+| `docs/` | design notes (`v2-experiment-plan.md`: the v2 experiment plan, with the check of the two notes it replaces; `v2-task-priors.md`: task priors and the diagnostics of the v1 weights; `v2-scaling.md`: model size and the stage-1 records) |
 | `hub/` | `push_to_hub.py`, `sync_hub_card.py`: upload weights from a training run and the model card |
 | `tests/` | training, prior, evaluation and upload tests |
 

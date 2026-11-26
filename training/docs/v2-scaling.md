@@ -2,6 +2,8 @@
 
 Status: design. No run of this plan has started. Every number below was read from MLflow on 2026-11-26 or computed from the model config; nothing was trained or evaluated for this document.
 
+Update 2026-11-26: [v2-experiment-plan.md](v2-experiment-plan.md) re-checked this document. The records match MLflow. The verdict and step A change (its §1.2, §1.3 and phase 2).
+
 ## Question
 
 Which axis would raise TabSil's TabArena classification and regression scores more: a larger model, or the prior? The v2 plan keeps v1's size ([v2-task-priors.md](v2-task-priors.md), open item 9). This document checks that decision against the existing training records and against the sizes of the top TabArena models. It then designs a size experiment, with a rule for when to change the size in either direction.
@@ -68,6 +70,8 @@ No run of this structure at another size has an evaluation (not found).
 
 ## Verdict: prior mismatch; capacity is not tested
 
+Changed by [v2-experiment-plan.md](v2-experiment-plan.md) §1.2: the flat stage-1 Elo is a context-length effect. On tables of the stage-1 training size the real error falls as the prior loss falls, and regression gets worse only on longer tables.
+
 **The prior loss is not flat.** Both runs end with lr 0. The 250K run ends 0.0015 lower in classification (0.1984 against 0.1999, −0.8%) and 0.0007 lower in regression (0.04874 against 0.04945, −1.4%). The train loss falls about as much (−0.9% and −1.1%).
 - Within one run the evaluation noise is small: the last five validations of the 250K run (230K-250K, lr below 1.3e-5) vary by at most 0.0001 and 0.00006.
 - Between the two runs it is larger. At 5K-20K steps, where the two lrs differ by less than 3%, their validation losses differ by up to 0.0025 (classification) and 0.00045 (regression). So the classification gain lies within run-to-run differences, and the regression gain is just above them.
@@ -106,6 +110,8 @@ The same records answer part of open item 8 (screening length):
 - So a 30K stage-1 screen sits on the rising part of the curve and has a run-to-run gap of about 35 Elo. Arm differences smaller than that need the per-dataset paired comparison or the prior loss. The prior loss differed between the runs by at most 0.0025 at the same early step.
 
 ## Size experiment
+
+Changed by [v2-experiment-plan.md](v2-experiment-plan.md) phase 2: the sizes are compared at equal compute and read with the context capped at 1,024 rows. The sizes, costs and the timing runs below stay.
 
 ### Sizes
 
