@@ -44,6 +44,26 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 - The pool is the TabArena results available when the run was made (2026-11-25, TabArena at the submission commit `1360e0e8`): 120 methods plus TabSil, 121 methods. It is not a released leaderboard version, so the live leaderboard's numbers differ. These are the results submitted with the pull request; the maintainers' own run of the full TabArena may change them. The raw results (`results.pkl` of all 51 splits), the hardware and the logs are in [aiden-jeon/tabsil-tabarena-lite](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite).
 - Fit and infer time are defined in [Evaluation](#evaluation). More results (AMLB, per-problem-type and per-stage Elo) are on the [model card](https://huggingface.co/aiden-jeon/tabsil).
 
+### Forecasting (fev-bench)
+
+Zero-shot forecasting with the v1 weights (`TabSilForecaster`, no retraining) on 10 univariate [fev-bench](https://github.com/autogluon/fev) tasks, every rolling window (129), scored with fev's SQL (scaled quantile loss, the main metric) and MASE. The tasks, windows and comparison results are those of [fm-agent-bench](https://github.com/Aiden-Jeon/fm-agent-bench) P7 (commit `b1b0101`), which ran the other methods with the same protocol. Elo is computed over the task means with Seasonal Naive at 1000, with a 95% CI from 200 bootstrap rounds over the tasks.
+
+| Method | SQL Elo | MASE Elo |
+| --- | --- | --- |
+| Chronos-2 | 1843 (+192/−85) | 1689 (+209/−98) |
+| TabPFN-TS-3 (public result) | 1765 (+306/−173) | 1652 (+309/−146) |
+| TimesFM-2.5 | 1708 (+235/−133) | 1628 (+252/−143) |
+| TabPFN-TS (TabPFN v2) | 1594 (+237/−143) | 1490 (+179/−118) |
+| **TabSil** | **1526** (+202/−132) | **1460** (+192/−130) |
+| Chronos-Bolt | 1438 (+125/−148) | 1332 (+144/−174) |
+| TabICL-TS | 1438 (+126/−84) | 1200 (+109/−114) |
+| AutoARIMA (public result) | 1335 (+125/−263) | 1178 (+158/−216) |
+| AutoETS | 1230 (+245/−478) | 1167 (+243/−299) |
+| Seasonal Naive | 1000 (+78/−271) | 1000 (+122/−332) |
+
+- Snapshot 2026-11-26: fev 0.10.0, data `autogluon/fev_datasets` at `d3e7e72`, 1×H100 (42 min for TabSil). Our Seasonal Naive reproduces fm-agent-bench's on every window. No window is imputed. Reproduce with `training/scripts/eval.py --suite fev` (job spec `training/scripts/eval_fev.yaml`).
+- The tasks are redset_1H, solar_with_weather_1H, ercot_1D, epf_be, rohlik_orders_1D, solar_1D, ecdc_ili, hospital, us_consumption_1M and hospital_admissions_1D. Only known covariates are used, and only by TabSil and TabPFN-TS. The pool differs from the fev-bench leaderboard's, so the numbers are not comparable to it.
+
 ## Install
 
 Inference only, from PyPI:
@@ -62,9 +82,10 @@ uv sync                           # tabsil + dev tools, Jupyter (inference tests
 uv sync --all-packages            # tabsil + tabsil-train (training, priors, AMLB evaluation) + dev tools, Jupyter
 uv sync --package tabsil-train    # tabsil-train and its test tools only (tests: uv run --package tabsil-train pytest training/tests)
 uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
+uv sync --package tabsil-train --no-dev --extra fev --group arena-dev     # fev-bench forecasting evaluation
 ```
 
-Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3).
+Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3). The `fev` extra (fev 0.10.0) needs `huggingface-hub<2`, so it is installed without the dev groups too.
 
 Python ≥ 3.11, PyTorch ≥ 2.11 (the benchmark results below were measured with PyTorch 2.11).
 
@@ -92,6 +113,21 @@ reg = TabSilRegressor(model, borders).fit(X_train, y_train)
 ```
 
 Both are scikit-learn style estimators over an ensemble of 8 preprocessing members; each member sees at most 768 of the original columns.
+
+### Forecasting
+
+`TabSilForecaster` forecasts time series zero-shot with the regression model, as TabPFN-TS does: each time step becomes a table row of time features (running index, calendar sin/cos, FFT-detected seasonal sin/cos; no lags), and the horizon is predicted in one pass from the series' own past. The quantiles come from the regressor's predictive distribution; the point forecast is its median.
+
+```python
+from tabsil import TabSilForecaster
+
+# context: one row per (item_id, timestamp) with a target column; other columns are covariates
+fc = TabSilForecaster(device="cuda").fit(context)
+pred = fc.predict(24)  # item_id, timestamp, predictions, "0.1" ... "0.9"
+pred = fc.predict(future=future, quantile_levels=[0.05, 0.5, 0.95])  # known covariates in `future`
+```
+
+Each series is fit on its last 4,096 rows (`max_context_length`; `None` allows up to the supported 1,000,000 rows). See `src/tabsil/forecast.py` for the missing-value and constant-series handling.
 
 ## Model
 
@@ -135,7 +171,7 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 
 ## Evaluation
 
-`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration).
+`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration), and forecasting on 10 fev-bench tasks (`--suite fev`, job spec `training/scripts/eval_fev.yaml`).
 Train and inference time are reported as on the TabArena leaderboard: seconds per 1K train rows (fit) and per 1K test rows (predict), averaged over each dataset's splits, then the median over datasets. In the arenas they appear next to the baselines on the same splits (`summary.json`, `comparison.csv`).
 
 The official-protocol TabArena-Lite result in [Results](#results) is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The arena suites of `training/scripts/eval.py` fit each split once without bagging, a quicker check used to compare checkpoints; their Elo is not the official one.
@@ -147,6 +183,7 @@ TabSil puts together ideas from published work:
 - **TabPFN** (Prior Labs): the prior-fitted network approach; the TabPFN-3 / 3.5 technical reports for the column → row → row-ICL backbone. No weights are used. A few inference routines (balanced feature subsampling, chunked class attention) are adapted from the Apache-2.0 TabPFN inference code; see `NOTICE`.
 - **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package), the three-stage training curriculum, and the QASSMax query gate of the `gated_logscale` attention temperature (BSD-3-Clause, `LICENSES/TabICL-BSD-3-Clause.txt`; see `NOTICE`).
 - **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source. The log-scale attention temperature (`LogScale`) follows the Apache-2.0 NVIDIA code (`sdm/nn/scaling.py`); see `NOTICE`.
+- **TabPFN-TS** (Prior Labs): forecasting with a tabular model; `TabSilForecaster`'s time features are adapted from the Apache-2.0 `tabpfn-time-series` package (see `NOTICE`). The forecasting evaluation uses **fev** / **fev-bench** (AutoGluon) and the comparison results of fm-agent-bench.
 - **Muon** optimizer, and the **nanoTabPFN speedrun** for the training speed options.
 
 TabSil grew out of [minipfn](https://github.com/Aiden-Jeon/minipfn), a hands-on guide that reimplements PFN and TabPFN from scratch. TabSil is now trained in this repository; minipfn no longer holds code for it.

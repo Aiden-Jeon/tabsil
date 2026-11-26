@@ -21,3 +21,16 @@ Copyright (c) 2025, Soda team @ Inria, licensed under the BSD 3-Clause License
 (LICENSES/TabICL-BSD-3-Clause.txt):
 - src/tabsil/models/column_row_transformer.py `LogScale`: the query gate of `gated_logscale`
   follows TabICLv2's QASSMax query MLP (tabicl/_model/ssmax.py `QASSMaxMLP`)
+
+This product includes software adapted from TabPFN-TS
+(https://github.com/PriorLabs/tabpfn-time-series), Copyright 2025 Prior Labs GmbH, licensed under
+the Apache License 2.0:
+- src/tabsil/forecast.py `time_features`, `seasonal_periods`: adapted from version 1.0.10,
+  tabpfn_time_series/features/basic_features.py (`RunningIndexFeature`, `CalendarFeature`,
+  `PeriodicSinCosineFeature`) and tabpfn_time_series/features/auto_features.py
+  (`AutoSeasonalFeature.find_seasonal_periods`, `detrend`), with their default settings
+
+This product includes software adapted from GluonTS (https://github.com/awslabs/gluonts),
+Copyright 2018 Amazon.com, Inc. or its affiliates, licensed under the Apache License 2.0:
+- src/tabsil/forecast.py `_calendar_index`: the zero-based calendar indices of
+  gluonts/time_feature/_base.py (`second_of_minute_index` ... `month_of_year_index`)

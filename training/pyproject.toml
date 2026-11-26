@@ -31,6 +31,11 @@ dependencies = [
 arena = [
     "tabarena[data-foundry]>=0.1.1.dev20261031",
 ]
+# fev-bench forecasting evaluation (tabsil_train.benchmarks.fevbench): the fev package that
+# defines the tasks, windows and metrics (it brings `datasets` for the HF data)
+fev = [
+    "fev==0.10.0",
+]
 
 [tool.uv.sources]
 tabsil = { workspace = true }
