@@ -42,6 +42,8 @@ SPEED_OPTIONS = (
 PHASE_KEYS = ("lr", "muon_weight_decay")
 # Scope of distributed Muon (`muon_distributed`)
 MUON_DISTRIBUTED = ("off", "node", "all")
+# Optimizers (`optimizer`, `training.muon`) and how messages name them
+OPTIMIZER_NAMES = {"muon": "Muon", "muon_adamw": "Muon + AdamW"}
 
 
 @dataclass
@@ -93,7 +95,7 @@ class TrainConfig:
     target_train_rows: bool = False
     missing_dataset_prob: float = 0.3
     border_datasets: int = 20_000  # datasets sampled to set the regression borders (our choice)
-    # optimization (Muon on all parameters, warmup + cosine)
+    # optimization (Muon on all parameters or Muon + AdamW, `optimizer`; warmup + cosine)
     batch_size: int = 256
     micro_batch: int = 4
     steps: int = 250_000  # total length of the lr schedule
@@ -152,6 +154,12 @@ class TrainConfig:
     # parameters, muon_momentum the Muon momentum (TabICLv2 0.9 = `--beta1`)
     muon_weight_decay: float = 0.01
     muon_momentum: float = 0.9
+    # "muon": Muon on every parameter (above, v1). "muon_adamw": Kumo-Tabular's split, Muon on the
+    # Linear weights and AdamW (torch defaults, weight decay 0.01 on matrices and the attention
+    # logit scales, 0 on the other 1-D parameters) on the target encoders, the output and the rest
+    # (`training.muon`). Both share lr and schedule; muon_weight_decay sets only the Muon part. A
+    # run resumes only from a checkpoint of the same optimizer
+    optimizer: str = "muon"
     # Distributed Muon (`training.muon`): instead of every GPU computing the same Newton–Schulz
     # orthogonalization, GPUs split the matrix pieces and all-gather the results. "node" splits
     # among the GPUs of a node, "all" among all GPUs. Updates are bit-identical to "off" (default,
@@ -198,6 +206,8 @@ class TrainConfig:
             raise ValueError(
                 f"muon_distributed must be one of {MUON_DISTRIBUTED}: {self.muon_distributed}"
             )
+        if self.optimizer not in OPTIMIZER_NAMES:
+            raise ValueError(f"optimizer must be one of {tuple(OPTIMIZER_NAMES)}: {self.optimizer}")
         if not 0.0 <= self.muon_momentum < 1.0:
             raise ValueError(f"muon_momentum must be in [0, 1): {self.muon_momentum}")
         if self.reference_val_tables < 0 or self.reference_val_tables % 8:

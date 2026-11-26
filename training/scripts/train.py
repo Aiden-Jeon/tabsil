@@ -24,7 +24,10 @@ The scale is set with arguments or environment variables (`TABSIL_CONFIG_NAME`, 
 `TABSIL_CHECKPOINT_EVERY`, `TABSIL_VAL_EVERY`, `TABSIL_LOG_EVERY`). The training speed options
 (`TrainConfig` comments) are turned on with `--compile`, `--tf32`, `--weight-average K` (or
 `TABSIL_COMPILE=1` etc., `TABSIL_WEIGHT_AVERAGE=K`). The optimizer is Muon on every
-parameter; its weight decay is `TABSIL_MUON_WEIGHT_DECAY`. `--muon-distributed node|all` (or
+parameter; its weight decay is `TABSIL_MUON_WEIGHT_DECAY` and its momentum `TABSIL_MUON_MOMENTUM`
+(resuming keeps the original run's values). `--optimizer muon_adamw` (`TABSIL_OPTIMIZER`) puts
+the target encoders, the output and the parameters that are not Linear weights on AdamW instead
+(`tabsil_train.training.muon`); a resumed run keeps its optimizer. `--muon-distributed node|all` (or
 `TABSIL_MUON_DISTRIBUTED`) splits Muon's Newton–Schulz iteration over the GPUs of a node or over
 all GPUs (same results and checkpoint format; resuming keeps the original run's value, `off`
 turns it off).
@@ -182,6 +185,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--muon-weight-decay", type=float, default=_env("TABSIL_MUON_WEIGHT_DECAY", float)
     )
+    parser.add_argument("--muon-momentum", type=float, default=_env("TABSIL_MUON_MOMENTUM", float))
+    parser.add_argument(
+        "--optimizer",
+        choices=["muon", "muon_adamw"],
+        default=os.environ.get("TABSIL_OPTIMIZER") or None,
+    )
     parser.add_argument(
         "--muon-distributed",
         choices=["off", "node", "all"],
@@ -309,7 +318,7 @@ def inherit_reference_val(args: argparse.Namespace, params: dict[str, str]) -> N
 # Training recipe options a resumed run keeps (TrainConfig field -> parser of its MLflow param).
 # A run must not change them midway, so a different value given on resume stops the script. A run
 # that takes only the weights (`--init-run-id`) uses the preset's or the given values
-RECIPE_OPTIONS = {"target_train_rows": lambda text: text == "True"}
+RECIPE_OPTIONS = {"target_train_rows": lambda text: text == "True", "optimizer": str}
 
 
 def inherit_recipe_options(args: argparse.Namespace, params: dict[str, str]) -> None:
@@ -431,6 +440,8 @@ def _override_values(args: argparse.Namespace) -> dict:
         "weight_average": args.weight_average,
         "weight_average_every": args.weight_average_every,
         "muon_weight_decay": args.muon_weight_decay,
+        "muon_momentum": args.muon_momentum,
+        "optimizer": args.optimizer,
         "muon_distributed": args.muon_distributed,
         "min_rows": args.min_rows,
         "max_rows": args.max_rows,

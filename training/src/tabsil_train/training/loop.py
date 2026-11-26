@@ -10,8 +10,9 @@ the pinball loss of its quantile outputs. The effective batch is
 
 and grad_accumulation is derived from the other values. When micro_batch × world_size exceeds
 batch_size (many GPUs), the per-GPU micro batch shrinks to batch_size / world_size. The optimizer
-is Muon on every parameter (`training.muon`); the learning rate follows a linear warmup and a
-cosine decay.
+is Muon on every parameter, or Muon on the weight matrices and AdamW on the rest
+(`TrainConfig.optimizer`, `training.muon`); the learning rate follows a linear warmup and a cosine
+decay.
 
 Three fixes from training on GPUs are kept:
 - bf16 has no GradScaler, so a step with an inf/nan gradient is skipped
@@ -52,7 +53,7 @@ from tabsil.models import (
 from tabsil.models.quantile_distribution import pinball_loss
 from tabsil_train.priors import prior_module
 from tabsil_train.priors.transforms.target import train_row_scale
-from tabsil_train.training.config import N_BUCKETS, TrainConfig
+from tabsil_train.training.config import N_BUCKETS, OPTIMIZER_NAMES, TrainConfig
 from tabsil_train.training.data import PriorBatches
 from tabsil_train.training.diagnostics import (
     GroupNormWindow,
@@ -193,9 +194,11 @@ def _set_base_lr(opt, sched, lr: float, step: int, verbose: bool) -> None:
 
 
 def _set_muon_weight_decay(opt: Muon, weight_decay: float) -> None:
-    """Set the weight decay of every Muon param group."""
+    """Set the weight decay of every Muon param group (the AdamW groups of `muon_adamw` keep
+    theirs, `training.muon`)."""
     for group in opt.param_groups:
-        group["weight_decay"] = weight_decay
+        if not group.get("adamw"):
+            group["weight_decay"] = weight_decay
 
 
 def _phase_base_lr(config: TrainConfig, step: int, lr_scale: float) -> float:
@@ -267,12 +270,13 @@ def check_resume_step(state: dict, config: TrainConfig) -> None:
     Resuming a run of a different config by mistake (e.g. another curriculum stage) would end
     without training and overwrite that run's results.
     """
-    # only a Muon optimizer state can be continued
+    # only a state of this run's optimizer (`TrainConfig.optimizer`) can be continued
     saved_optimizer = state.get("optimizer_type")
-    if saved_optimizer != "muon":
+    if saved_optimizer != config.optimizer:
         raise ValueError(
-            f"the checkpoint to resume has optimizer_type {saved_optimizer!r}; TabSil continues"
-            " Muon runs only (take its weights with init_from instead)"
+            f"the checkpoint to resume has optimizer_type {saved_optimizer!r}; with optimizer"
+            f" {config.optimizer!r} TabSil continues {OPTIMIZER_NAMES[config.optimizer]} runs"
+            " only (take its weights with init_from instead)"
         )
     step, stop = int(state["step"]), min(config.stop_step or config.steps, config.steps)
     if step >= stop:
@@ -383,8 +387,9 @@ def _train(
     model = config.build_model().to(device)
     if config.activation_checkpointing_rows is not None:  # config check verified the class
         model.activation_checkpointing_rows = config.activation_checkpointing_rows
-    # Muon on every parameter (`training.muon`), warmup + cosine. Distributed Muon splits the
-    # orthogonalization among GPUs (every GPU creates the group together)
+    # Muon on every parameter, or Muon and AdamW with `optimizer="muon_adamw"` (`training.muon`),
+    # warmup + cosine. Distributed Muon splits the orthogonalization among GPUs (every GPU creates
+    # the group together)
     group = None if config.muon_distributed == "off" else shard_group(config.muon_distributed)
     opt = Muon.for_model(
         model,
@@ -392,6 +397,7 @@ def _train(
         weight_decay=config.muon_weight_decay,
         momentum=config.muon_momentum,
         process_group=group,
+        adamw=config.optimizer == "muon_adamw",
     )
     schedule = lambda s: lr_factor(s, config.warmup_steps, config.steps)  # noqa: E731
     sched = torch.optim.lr_scheduler.LambdaLR(opt, schedule)
@@ -441,8 +447,9 @@ def _train(
     # measures its own timing
     norm_groups, grad_window, cosine = None, None, None
     if d.is_main:
-        # every parameter is Muon's (the group names end in `/muon`)
-        norm_groups = parameter_groups(model, {id(p) for p in model.parameters()})
+        # the group names end in `/muon` or, with `muon_adamw`, `/adam`
+        muon_ids = {id(p) for g in opt.param_groups if not g.get("adamw") for p in g["params"]}
+        norm_groups = parameter_groups(model, muon_ids)
         grad_window = GroupNormWindow(norm_groups)
         if config.grad_cosine:
             cosine = TaskGradientCosine(norm_groups, config.tasks, config.log_every)
@@ -830,8 +837,8 @@ def _train(
                 "borders": borders,
                 "rewinds": rewinds,
                 "train_seconds": train_seconds,
-                # optimizer kind (checked on resume, `check_resume_step`)
-                "optimizer_type": "muon",
+                # optimizer kind (`TrainConfig.optimizer`, checked on resume, `check_resume_step`)
+                "optimizer_type": config.optimizer,
             }
             if config.phases:  # checkpoints without phases keep the plain format
                 state["lr_scale"] = lr_scale
