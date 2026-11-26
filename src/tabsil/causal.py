@@ -9,7 +9,7 @@ weights are trained; each base model is one in-context fit.
 
     from tabsil.causal import TabSilCATE
 
-    est = TabSilCATE(learner="x", device="cuda").fit(X, treatment, y)
+    est = TabSilCATE(device="cuda").fit(X, treatment, y)  # the S-learner
     tau = est.effect(X_test)    # (n,) CATE per row
     ate = est.ate()             # mean CATE over the training rows
 
@@ -62,7 +62,9 @@ import torch
 from torch import nn
 
 LEARNERS = ("s", "t", "x", "dr")
-DEFAULT_LEARNER = "x"
+# The S-learner: the best of the four on IHDP and second on ACIC 2016 (best average rank,
+# README "Treatment effects"), and the cheapest (one outcome fit)
+DEFAULT_LEARNER = "s"
 DEFAULT_N_FOLDS = 5
 DEFAULT_PROPENSITY_CLIP = 0.01
 
