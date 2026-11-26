@@ -9,6 +9,10 @@ the part they implement (generic nouns); TabSil's numbers and the combination of
 - `inference`: sklearn-style inference (preprocessing member ensembles)
 - `hub`: save to and load from the Hugging Face Hub format (`save_pretrained`, `from_pretrained`)
 - `recipe`: TabSil's structure and inference defaults (`TabSilClassifier`, `TabSilRegressor`)
+- `forecast`: time series forecasting with the regression model (`TabSilForecaster`)
+- `unsupervised`: per-column conditional distributions, row log densities and outlier scores
+  (`TabSilUnsupervised`)
+- `causal`: treatment effects with TabSil base learners (S/T/X/DR meta-learners, `TabSilCATE`)
 - `utils`: device and seed helpers
 
 Training (priors, training loop, curriculum), evaluation (AMLB/CTR23, TabArena, BeyondArena,
@@ -35,14 +39,20 @@ from tabsil.models.bar_distribution import (
 from tabsil.utils import get_device, set_seed
 
 if TYPE_CHECKING:
+    from tabsil.causal import TabSilCATE
+    from tabsil.forecast import TabSilForecaster
     from tabsil.hub import from_pretrained
     from tabsil.recipe import TabSilClassifier, TabSilRegressor
+    from tabsil.unsupervised import TabSilUnsupervised
 
 # Names loaded on first use -> the module defining them
 _LAZY = {
     "from_pretrained": "tabsil.hub",
     "TabSilClassifier": "tabsil.recipe",
     "TabSilRegressor": "tabsil.recipe",
+    "TabSilForecaster": "tabsil.forecast",
+    "TabSilUnsupervised": "tabsil.unsupervised",
+    "TabSilCATE": "tabsil.causal",
 }
 
 
@@ -69,4 +79,7 @@ __all__ = [
     "from_pretrained",
     "TabSilClassifier",
     "TabSilRegressor",
+    "TabSilForecaster",
+    "TabSilUnsupervised",
+    "TabSilCATE",
 ]

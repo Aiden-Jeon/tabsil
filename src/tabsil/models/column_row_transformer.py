@@ -379,6 +379,44 @@ class Attention(nn.Module):
             out = torch.cat([train, test], dim=2)
         return self.out(out.transpose(1, 2).reshape(n, length, dim))
 
+    # The two methods below split self-attention with `n_context` (row ICL) into the context rows
+    # and the query rows after them, for inference with a train context
+    # (`ColumnRowTransformer.train_context`). They compute the same formulas as `forward`
+
+    def forward_context(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """`forward(x, n_context=len)` when every row is a context row (train rows only), and the
+        keys and values of the first head (N, 1, L, d) that later query rows attend to (multi-query,
+        `forward_queries`). The keys and values are cast to the dtype the attention kernel gets
+        (bfloat16 under autocast), so storing them changes no value."""
+        n, length, dim = x.shape
+        w = self.qkv.weight
+        q = self._heads(F.linear(x, w[:dim]))
+        k = self._heads(F.linear(x, w[dim : 2 * dim]))
+        v = self._heads(F.linear(x, w[2 * dim :]))
+        q, k = self.q_norm(q), self.k_norm(k)
+        if self.rope_base is not None:
+            q, k = _rope(q, self.rope_base), _rope(k, self.rope_base)
+        q = _scale_query(self, q, k.shape[2])
+        out = _batched_sdpa(q, k, v)
+        dtype = _attention_dtype(v)
+        # copies: a view of the first head would keep every head's keys and values alive
+        first = (k[:, :1].to(dtype, copy=True), v[:, :1].to(dtype, copy=True))
+        return self.out(out.transpose(1, 2).reshape(n, length, dim)), *first
+
+    def forward_queries(
+        self, x: torch.Tensor, k: torch.Tensor, v: torch.Tensor, n_keys: int
+    ) -> torch.Tensor:
+        """The query rows after the context rows (test rows) of `forward(x, n_context=...)`: every
+        query head attends to the first head's keys and values `k`, `v` (N, 1, n_keys, d) of the
+        context rows (`forward_context`)."""
+        if self.rope_base is not None:
+            raise ValueError("RoPE attention has no query-only form (positions follow the keys)")
+        n, length, dim = x.shape
+        q = _scale_query(self, self.q_norm(self._heads(F.linear(x, self.qkv.weight[:dim]))), n_keys)
+        h, t, d = q.shape[1:]
+        out = _batched_sdpa(q.reshape(n, 1, h * t, d), k, v).view(n, h, t, d)
+        return self.out(out.transpose(1, 2).reshape(n, length, dim))
+
     # The three methods below split `forward` (cross-attention, no `n_context`) into queries,
     # keys/values and output. Inference that accumulates the softmax over chunks of keys
     # (`_OnlineSummary`) uses them. They compute the same formulas as `forward` (which is left as
@@ -420,6 +458,15 @@ def _batched_sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Te
             for i in range(0, n, step)
         ]
     )
+
+
+def _attention_dtype(t: torch.Tensor) -> torch.dtype:
+    """The dtype the attention kernel computes `t` in: the autocast dtype when autocast is on for
+    t's device (SDPA is in its lower-precision list), else t's own dtype."""
+    device = t.device.type
+    if t.is_floating_point() and torch.is_autocast_enabled(device):
+        return torch.get_autocast_dtype(device)
+    return t.dtype
 
 
 def _wide(t: torch.Tensor) -> torch.Tensor:
@@ -565,6 +612,21 @@ class Block(nn.Module):
             h = h[:, :n_queries] + self.attention(normed[:, :n_queries], context=normed)
         return h + self.mlp(self.mlp_norm(h))
 
+    def forward_context(self, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """`forward(h, n_context=len)` for context rows only (row ICL train rows), and the first
+        head's keys and values the query rows attend to (`Attention.forward_context`)."""
+        out, k, v = self.attention.forward_context(self.attention_norm(h))
+        h = h + out
+        return h + self.mlp(self.mlp_norm(h)), k, v
+
+    def forward_queries(
+        self, h: torch.Tensor, k: torch.Tensor, v: torch.Tensor, n_keys: int
+    ) -> torch.Tensor:
+        """The query rows (row ICL test rows) of `forward(h, n_context=...)`, attending to the
+        stored keys and values of the context rows (`forward_context`)."""
+        h = h + self.attention.forward_queries(self.attention_norm(h), k, v, n_keys)
+        return h + self.mlp(self.mlp_norm(h))
+
 
 class InducedBlock(nn.Module):
     """One column-stage block (ISAB): the inducing points summarize the train rows (`logscale`
@@ -689,6 +751,19 @@ class _CellStats:
         self.sorted = train.transpose(1, 2).sort(-1).values.contiguous()  # (B, C, N)
         self.n_valid = finite.sum(1).clamp_min(1)  # (B, C)
 
+    FIELDS = ("mean", "std", "used", "sorted", "n_valid")
+
+    @classmethod
+    def from_fields(cls, values: dict[str, torch.Tensor]) -> _CellStats:
+        stats = cls.__new__(cls)
+        for name in cls.FIELDS:
+            setattr(stats, name, values[name])
+        return stats
+
+    def map(self, fn) -> _CellStats:
+        """The statistics with `fn` applied to each tensor (batch first)."""
+        return _CellStats.from_fields({n: fn(getattr(self, n)) for n in self.FIELDS})
+
     def features(
         self, x: torch.Tensor, cols: torch.Tensor | None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -756,6 +831,23 @@ class RetrievalDecoder(nn.Module):
             # Probabilities and log in float32 (bf16 blurs the values near the clip)
             scores = (q @ k.transpose(-1, -2)).float() / math.sqrt(self.head_dim)
             p = (torch.softmax(scores, dim=-1) @ onehot[:, None]).mean(1)  # (B, T, n_classes)
+        return torch.log(p.clamp_min(1e-5) + 3e-5)
+
+    def keys(self, h_train: torch.Tensor) -> torch.Tensor:
+        """The keys (B, heads, n_train, head_dim) of the train rows (B, n_train, D), for
+        `from_keys` (inference with a train context)."""
+        b = h_train.shape[0]
+        k = self.k_projection(h_train).view(b, -1, self.heads, self.head_dim).transpose(1, 2)
+        return k.contiguous()
+
+    def from_keys(
+        self, h_test: torch.Tensor, keys: torch.Tensor, onehot: torch.Tensor, n_train: int
+    ) -> torch.Tensor:
+        """`forward(..., fused=True)` for the test rows h_test (B, T, D) with the train rows' keys
+        (`keys`) and one-hot labels (B, n_train, n_classes, float32) computed beforehand."""
+        b = h_test.shape[0]
+        q = self.q_projection(h_test).view(b, -1, self.heads, self.head_dim).transpose(1, 2)
+        p = _retrieve(_scale_query(self, q, n_train), keys, onehot).mean(1)
         return torch.log(p.clamp_min(1e-5) + 3e-5)
 
 
@@ -992,6 +1084,99 @@ class _HostRows:
             self.write_stream.synchronize()
 
 
+@dataclass
+class TrainContext:
+    """What the test rows read from the train rows (`ColumnRowTransformer.train_context`), for B
+    tables with the same train-row count and column count (one ensemble member per table):
+
+    - `stats`: the train-row statistics of the cell normalization and the ECDF (`_CellStats`)
+    - `summaries`: per column block, the inducing points' summary (B x C, n_inducing, E)
+    - `icl_kv`: per row ICL layer, the first head's keys and values of the train rows
+      (B, 1, n_train, head dim) that the test rows attend to (multi-query)
+    - classification: the retrieval decoder's train-row keys (B, heads, n_train, head dim) and
+      the one-hot labels it averages (B, n_train, classes)
+
+    Tensors are batch first, except `summaries` (batch x columns first, batch major)."""
+
+    task: str
+    n_train: int
+    n_columns: int
+    stats: _CellStats
+    summaries: list[torch.Tensor]
+    icl_kv: list[tuple[torch.Tensor, torch.Tensor]]
+    decoder_keys: torch.Tensor | None = None
+    labels: torch.Tensor | None = None
+
+    @property
+    def batch(self) -> int:
+        return self.stats.mean.shape[0]
+
+    def _map(self, batch_first, per_column) -> TrainContext:
+        # a new context with `batch_first` applied to the batch-first tensors and `per_column` to
+        # the summaries
+        def opt(t):
+            return None if t is None else batch_first(t)
+
+        return TrainContext(
+            self.task,
+            self.n_train,
+            self.n_columns,
+            self.stats.map(batch_first),
+            [per_column(s) for s in self.summaries],
+            [(batch_first(k), batch_first(v)) for k, v in self.icl_kv],
+            opt(self.decoder_keys),
+            opt(self.labels),
+        )
+
+    def select(self, start: int, stop: int) -> TrainContext:
+        """Tables start..stop-1 (views, no copy)."""
+        c = self.n_columns
+        return self._map(lambda t: t[start:stop], lambda s: s[start * c : stop * c])
+
+    @staticmethod
+    def cat(contexts: list[TrainContext]) -> TrainContext:
+        """The contexts stacked along the batch (they share the task, train-row and column
+        counts)."""
+        if len(contexts) == 1:
+            return contexts[0]
+        first = contexts[0]
+        if any(
+            (c.task, c.n_train, c.n_columns) != (first.task, first.n_train, first.n_columns)
+            for c in contexts
+        ):
+            raise ValueError("only train contexts of the same task and table shape are stacked")
+
+        def stack(get):
+            parts = [get(c) for c in contexts]
+            return None if parts[0] is None else torch.cat(parts)
+
+        def field(name):
+            return stack(lambda c: getattr(c.stats, name))
+
+        return TrainContext(
+            first.task,
+            first.n_train,
+            first.n_columns,
+            _CellStats.from_fields({n: field(n) for n in _CellStats.FIELDS}),
+            [stack(lambda c, i=i: c.summaries[i]) for i in range(len(first.summaries))],
+            [
+                (stack(lambda c, i=i: c.icl_kv[i][0]), stack(lambda c, i=i: c.icl_kv[i][1]))
+                for i in range(len(first.icl_kv))
+            ],
+            stack(lambda c: c.decoder_keys),
+            stack(lambda c: c.labels),
+        )
+
+    def tensors(self) -> list[torch.Tensor]:
+        out = [getattr(self.stats, n) for n in _CellStats.FIELDS] + list(self.summaries)
+        out += [t for kv in self.icl_kv for t in kv]
+        return out + [t for t in (self.decoder_keys, self.labels) if t is not None]
+
+    @property
+    def nbytes(self) -> int:
+        return sum(t.numel() * t.element_size() for t in self.tensors())
+
+
 class ColumnRowTransformer(nn.Module):
     # Model type (`tabsil.models.MODEL_TYPES`)
     model_type = "column_row_transformer"
@@ -1172,6 +1357,37 @@ class ColumnRowTransformer(nn.Module):
           Test rows do not see each other, so the values are the same (only the computation order
           differs)
         """
+        self._check_targets(y_train, task, y_classes, n_classes)
+        b, r, c = x.shape
+        n_train = y_train.shape[1]
+        ckpt = self._checkpointing(r)
+        if inference and b * r * c > self.inference_chunk_cells:
+            rows = self._rows_interleaved_chunked(x, y_train, task)
+        else:
+            rows = self._rows(x, y_train, task, ckpt=ckpt)
+
+        # 3) Row ICL: add a second target embedding to the train row vectors
+        rows = rows + self._target("icl", task, y_train, r, rows)
+        for layer in self.icl_layers:
+            rows = _call(layer, ckpt, rows, n_context=n_train)
+        rows = self.icl_norm(rows)
+
+        # 4) Output
+        rows = self.pre_head[task](rows)
+        if task == "classification":
+            labels = y_train if y_classes is None else y_classes
+            fused = inference or (ckpt and CHECKPOINT_FUSED_DECODER)
+            return self.heads[task](rows, labels, n_train, n_classes=n_classes, fused=fused)
+        return self.heads[task](rows[:, n_train:])
+
+    def _check_targets(
+        self,
+        y_train: torch.Tensor,
+        task: str,
+        y_classes: torch.Tensor | None,
+        n_classes: int | None,
+    ) -> None:
+        """The argument checks of `forward` (and `train_context`)."""
         cfg = self.config
         if task not in TASKS:
             raise ValueError(f"the task of this model is one of {TASKS}: {task}")
@@ -1196,35 +1412,132 @@ class ColumnRowTransformer(nn.Module):
                 raise ValueError(
                     "with y_classes, y_train must hold grouped indices within the target embeddings"
                 )
-        b, r, c = x.shape
-        n_train = y_train.shape[1]
-        ckpt = self._checkpointing(r)
-        if inference and b * r * c > self.inference_chunk_cells:
-            rows = self._rows_interleaved_chunked(x, y_train, task)
+
+    # Inference with a train context: the train rows never see the test rows (module docstring:
+    # the column summaries read train rows only, the spread and the row blocks work per row, and
+    # train rows attend to train rows in the row ICL), so everything the test rows read from them
+    # is computed once (`train_context`, at fit) and each prediction runs the test rows only
+    # (`forward_test`). `tabsil.inference.ensemble` uses it when the model has this flag
+    supports_train_context = True
+
+    def train_context(
+        self,
+        x_train: torch.Tensor,
+        y_train: torch.Tensor,
+        task: str,
+        *,
+        y_classes: torch.Tensor | None = None,
+        n_classes: int | None = None,
+    ) -> TrainContext:
+        """What the test rows of `forward(x, y_train, task, inference=True)` read from the train
+        rows x_train (B, n_train, C) (`TrainContext`), for `forward_test`. The arguments are those
+        of `forward` (inference). The train rows take the same path as in `forward`: in row chunks
+        (and with the cell state on the CPU) when they are too many for the device."""
+        self._check_targets(y_train, task, y_classes, n_classes)
+        b, n, c = x_train.shape
+        summaries: list[torch.Tensor] = []
+        if b * n * c > self.inference_chunk_cells:
+            rows = self._rows_interleaved_chunked(x_train, y_train, task, summaries=summaries)
         else:
-            rows = self._rows(x, y_train, task, ckpt=ckpt)
-
-        # 3) Row ICL: add a second target embedding to the train row vectors
-        rows = rows + self._target("icl", task, y_train, r, rows)
+            rows = self._rows(x_train, y_train, task, summaries=summaries)
+        rows = rows + self._target("icl", task, y_train, n, rows)
+        icl_kv = []
         for layer in self.icl_layers:
-            rows = _call(layer, ckpt, rows, n_context=n_train)
-        rows = self.icl_norm(rows)
-
-        # 4) Output
-        rows = self.pre_head[task](rows)
+            rows, k, v = layer.forward_context(rows)
+            icl_kv.append((k, v))
+        keys = labels = None
         if task == "classification":
-            labels = y_train if y_classes is None else y_classes
-            fused = inference or (ckpt and CHECKPOINT_FUSED_DECODER)
-            return self.heads[task](rows, labels, n_train, n_classes=n_classes, fused=fused)
-        return self.heads[task](rows[:, n_train:])
+            decoder = self.heads[task]
+            keys = decoder.keys(self.pre_head[task](self.icl_norm(rows)))
+            width = n_classes or decoder.n_classes
+            classes = y_train if y_classes is None else y_classes
+            labels = F.one_hot(classes.long().clamp(0, width - 1), width).float()
+        return TrainContext(task, n, c, _CellStats(x_train, n), summaries, icl_kv, keys, labels)
+
+    def forward_test(self, x_test: torch.Tensor, context: TrainContext) -> torch.Tensor:
+        """Test-row outputs (B, T, outputs), the values of `forward(x, y_train, task,
+        inference=True)` for x = [train rows, x_test] (within float rounding: the train rows are
+        computed in other shapes), from the train context (`train_context`). Test rows do not see
+        each other, so they are computed `inference_chunk_cells / (B x C)` rows at a time."""
+        b, t, c = x_test.shape
+        if (b, c) != (context.batch, context.n_columns):
+            raise ValueError(
+                f"test rows (batch {b}, {c} columns) do not match the train context (batch"
+                f" {context.batch}, {context.n_columns} columns)"
+            )
+        if t == 0:
+            width = (
+                context.labels.shape[-1]
+                if context.task == "classification"
+                else self.config.output_size("regression")
+            )
+            return x_test.new_zeros(b, 0, width)
+        step = max(1, self.inference_chunk_cells // (b * c))
+        parts = [self._test_rows(x_test[:, r0 : r0 + step], context) for r0 in range(0, t, step)]
+        return parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
+
+    def _test_rows(self, x: torch.Tensor, context: TrainContext) -> torch.Tensor:
+        # `forward_test` on one chunk of test rows: stages 0-2 with the stored column summaries,
+        # row ICL against the stored train keys/values, then the output head
+        cfg, task = self.config, context.task
+        b, t, _ = x.shape
+        h = self._encode_cells(*context.stats.features(x, None))  # (B, t, C, E)
+        cls = self.cls_tokens.to(h.dtype).expand(b, t, -1, -1).clone()  # (B, t, n_cls, E)
+        last = len(self.row_blocks) - 1
+        blocks = zip(self.column_blocks, self.row_blocks, context.summaries, strict=True)
+        for i, (column, row, summary) in enumerate(blocks):
+            new = self._interleaved_pair(column, row, h, summary, cls, 0, i == last)
+            if new is not None:
+                h = new.to(h.dtype)
+        rows = self.row_norm(cls).reshape(b, t, cfg.icl_dim)
+        for layer, (k, v) in zip(self.icl_layers, context.icl_kv, strict=True):
+            rows = layer.forward_queries(rows, k, v, context.n_train)
+        rows = self.pre_head[task](self.icl_norm(rows))
+        if task == "classification":
+            decoder = self.heads[task]
+            return decoder.from_keys(rows, context.decoder_keys, context.labels, context.n_train)
+        return self.heads[task](rows)
+
+    def train_context_bytes(
+        self,
+        n_train: int,
+        columns: int,
+        *,
+        classes: int | None,
+        batch: int = 1,
+        attention_itemsize: int = 2,
+    ) -> int:
+        """Bytes of the train context (`train_context`) of `batch` tables with `n_train` rows and
+        `columns` columns: float32 column summaries and train-row statistics, and the row ICL
+        keys/values in the attention dtype (`attention_itemsize`: 2 under bfloat16 autocast, 4 in
+        float32). For classification (`classes`: the one-hot label width, at least the target
+        embedding count `n_out`) also the decoder keys and the float32 one-hot labels; None for
+        regression, which keeps neither."""
+        cfg = self.config
+        summaries = cfg.column_blocks * columns * cfg.n_inducing * cfg.emsize * 4
+        stats = columns * (n_train * 4 + 3 * 4 + 8)  # sorted train values, mean/std/used, count
+        icl = cfg.nlayers * 2 * n_train * (cfg.icl_dim // cfg.nhead) * attention_itemsize
+        head = 0
+        if classes is not None:
+            decoder = n_train * cfg.decoder_heads * cfg.decoder_head_dim * attention_itemsize
+            head = decoder + n_train * max(classes, cfg.n_out) * 4
+        return batch * (summaries + stats + icl + head)
 
     def _rows(
-        self, x: torch.Tensor, y_train: torch.Tensor, task: str, *, ckpt: bool = False
+        self,
+        x: torch.Tensor,
+        y_train: torch.Tensor,
+        task: str,
+        *,
+        ckpt: bool = False,
+        summaries: list[torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Stages 0-2 (cell encoder, interleaved column and row stages): x (B, R, C) -> row vectors
         (B, R, n_cls x E). The cell tokens pass [column block i -> row block i] in turn; the CLS
         tokens carry over between row blocks and the last row block has only the CLS tokens as
-        queries. With `ckpt`, each block uses activation checkpointing (`_call`)."""
+        queries. With `ckpt`, each block uses activation checkpointing (`_call`). With
+        `summaries` (a list, inference), each column block's summary (B x C, n_inducing, E) is
+        appended to it."""
         cfg = self.config
         n_train = y_train.shape[1]
         cells = self._embed_cells(x, n_train)  # (B, R, C, E)
@@ -1234,7 +1547,11 @@ class ColumnRowTransformer(nn.Module):
         last = len(self.row_blocks) - 1
         for i, (column, row) in enumerate(zip(self.column_blocks, self.row_blocks, strict=True)):
             hc = h.permute(0, 2, 1, 3).reshape(b * c, r, e)
-            hc = _call(column, ckpt, hc, n_train)
+            if summaries is None:
+                hc = _call(column, ckpt, hc, n_train)
+            else:  # the same as `column(hc, n_train)`, keeping the summary
+                summaries.append(column.summary(hc[:, :n_train]))
+                hc = column.spread(hc, summaries[-1])
             hr = hc.view(b, c, r, e).transpose(1, 2).reshape(b * r, c, e)
             tokens = torch.cat([cls.to(hr.dtype), hr], dim=1)
             if i == last:
@@ -1268,7 +1585,12 @@ class ColumnRowTransformer(nn.Module):
         return embed
 
     def _rows_interleaved_chunked(
-        self, x: torch.Tensor, y_train: torch.Tensor, task: str
+        self,
+        x: torch.Tensor,
+        y_train: torch.Tensor,
+        task: str,
+        *,
+        summaries: list[torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """The values of `_rows`, computed in chunks (inference).
 
@@ -1280,7 +1602,9 @@ class ColumnRowTransformer(nn.Module):
         the row block, which update the state. All summaries are computed before (2), so they see
         the train-row state before it changes. The cell encoder also runs in row chunks. When the
         cell state is larger than `interleaved_state_device_bytes`, the computation takes another
-        order that keeps only part of it, on the CPU if needed (`_rows_interleaved_offload`)."""
+        order that keeps only part of it, on the CPU if needed (`_rows_interleaved_offload`). With
+        `summaries` (a list), each column block's summary (B x C, n_inducing, E) is appended to it
+        (`train_context`)."""
         b, r, c = x.shape
         n_train = y_train.shape[1]
         embed = self._chunk_embedder(x, y_train, task)
@@ -1293,7 +1617,9 @@ class ColumnRowTransformer(nn.Module):
             # would keep a chunk of device memory (up to `inference_chunk_cells` x E) busy
             e, dtype = first.shape[-1], first.dtype
             del first
-            return self._rows_interleaved_offload(x, n_train, embed, step, e, dtype)
+            return self._rows_interleaved_offload(
+                x, n_train, embed, step, e, dtype, summaries=summaries
+            )
         h = torch.empty(shape, dtype=first.dtype, device=device)
         for r0 in range(0, r, step):
             r1 = min(r0 + step, r)
@@ -1315,6 +1641,8 @@ class ColumnRowTransformer(nn.Module):
                     summary = ind.new_empty(b, c, *ind.shape[1:])
                 summary[:, c0:c1] = ind.view(b, c1 - c0, *ind.shape[1:])
             summary = summary.reshape(b * c, *summary.shape[2:])
+            if summaries is not None:
+                summaries.append(summary)
             # (2) Per row chunk: spread -> row block
             for r0 in range(0, r, step):
                 r1 = min(r0 + step, r)
@@ -1353,7 +1681,15 @@ class ColumnRowTransformer(nn.Module):
         return tokens[:, cfg.n_cls :].view(b, rj, c, e)
 
     def _rows_interleaved_offload(
-        self, x: torch.Tensor, n_train: int, embed, step: int, e: int, dtype: torch.dtype
+        self,
+        x: torch.Tensor,
+        n_train: int,
+        embed,
+        step: int,
+        e: int,
+        dtype: torch.dtype,
+        *,
+        summaries: list[torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """`_rows_interleaved_chunked` when the cell state (B, R, C, E) does not fit on the device.
         The values are equal within numerical error (only the computation order of the column
@@ -1377,7 +1713,9 @@ class ColumnRowTransformer(nn.Module):
         - Block 0 does not read the state: it recomputes the cell encoder (same input and chunks, so
           the same values)
         - Without train rows, or with one block pair, nothing is kept (without train rows the
-          summaries attend to no keys, as on the device)"""
+          summaries attend to no keys, as on the device)
+        - With `summaries` (a list), the column summaries are appended to it, as in
+          `_rows_interleaved_chunked`"""
         cfg = self.config
         b, r, c = x.shape
         device = x.device
@@ -1385,6 +1723,7 @@ class ColumnRowTransformer(nn.Module):
         last = len(blocks) - 1
         chunks = [(r0, min(r0 + step, r)) for r0 in range(0, r, step)]
         n_held = self._held_rows(r, n_train, step)
+        block_summaries = [] if summaries is None else summaries
 
         def cells(r0: int, r1: int) -> torch.Tensor:
             return embed(x[:, r0:r1], rows=(r0, r1))
@@ -1407,7 +1746,7 @@ class ColumnRowTransformer(nn.Module):
             for r0, r1 in chunks:
                 if r0 < n_train:
                     add(acc, cells(r0, r1), r0)
-            summaries = [acc.finish()]  # per block (B x C, n_inducing, E)
+            block_summaries.append(acc.finish())  # per block (B x C, n_inducing, E)
             # Chunks with train rows: every chunk, block pair by block pair
             for i, (column, row) in enumerate(blocks):
                 acc = None if i == last else _OnlineSummary(blocks[i + 1][0], b * c, n_train, dtype)
@@ -1416,14 +1755,14 @@ class ColumnRowTransformer(nn.Module):
                 )
                 for r0, r1, part in source:
                     new = self._interleaved_pair(
-                        column, row, part, summaries[i], cls, r0, i == last
+                        column, row, part, block_summaries[i], cls, r0, i == last
                     )
                     if new is not None:
                         add(acc, new, r0)
                         rows.write(r0, r1, new)
                 rows.flush()
                 if acc is not None:
-                    summaries.append(acc.finish())
+                    block_summaries.append(acc.finish())
             # Chunks without train rows: every block pair, chunk by chunk. The state between block
             # pairs is cast to the state dtype, as when it is kept
             for r0, r1 in chunks:
@@ -1432,7 +1771,7 @@ class ColumnRowTransformer(nn.Module):
                 part = cells(r0, r1)
                 for i, (column, row) in enumerate(blocks):
                     part = self._interleaved_pair(
-                        column, row, part, summaries[i], cls, r0, i == last
+                        column, row, part, block_summaries[i], cls, r0, i == last
                     )
                     if part is not None:
                         part = part.to(dtype)

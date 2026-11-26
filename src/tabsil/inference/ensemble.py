@@ -8,8 +8,14 @@ model with `forward(x, y_train, task)` (the `tabsil.models` model).
 at most 768 columns per member chosen `balanced`).
 
 `fit` trains no weights. Each member fits its preprocessing to the training rows
-(`tabsil.inference.preprocessing`), and prediction runs the training and test rows through the
-model together.
+(`tabsil.inference.preprocessing`). With a model that has a train context
+(`supports_train_context`, `tabsil.models.column_row_transformer`), `fit` also runs each member's
+training rows through the model once and keeps what the test rows read from them
+(`train_context`), so a prediction runs only the test rows (`forward_test`); members with the same
+column count go through the model together, as one batch. The values are those of running the
+training and test rows together (within float rounding). Other models, and tables whose train
+contexts would take more than `train_context_device_bytes` of device memory, run the training and
+test rows through the model together at every prediction, one member at a time.
 
 - per member: shuffled feature order, (classification) shuffled class indices, and a sample
   identifier column of standard normal noise
@@ -62,6 +68,7 @@ from sklearn.preprocessing import LabelEncoder, PowerTransformer
 from torch import nn
 
 from tabsil.inference.preprocessing import (
+    CATEGORY_ENCODINGS,
     FEATURE_SUBSAMPLINGS,
     MEMBER_KINDS,
     Member,
@@ -74,13 +81,17 @@ from tabsil.inference.preprocessing import (
     select_features,
     to_numeric,
 )
+from tabsil.models.column_row_transformer import TrainContext
 from tabsil.models.quantile_distribution import quantiles_to_bucket_probs
 
 # One-hot width cap of a model whose config records no feature cap (`max_features_of`)
 MAX_FEATURES = 160
 
 SOFTMAX_TEMPERATURE = 0.9
-DEFAULT_MEMBER_KINDS = MEMBER_KINDS
+# Output width counted per test row when sizing a member batch at prediction (`_iter_logits`): at
+# least the regression quantiles (999) and the class cap (160)
+PREDICT_OUTPUT_WIDTH = 1000
+DEFAULT_MEMBER_KINDS = ("standard",)
 
 
 def resolve_member_kinds(
@@ -129,6 +140,16 @@ def forward_kwargs(model: nn.Module, task: str) -> dict:
 class _Base:
     # the task this ensemble predicts (passed to the forward of a multitask model)
     task = ""
+    # Device memory all members' train contexts may take (`_fit_contexts`); above it, prediction
+    # runs the training rows again (module docstring)
+    train_context_device_bytes = 16 << 30
+    # Test inputs and logits of the members predicted in one forward (`_iter_logits`)
+    predict_batch_bytes = 2 << 30
+    # CUDA forwards whose row ICL attention (query rows x train rows, over the batch) is smaller
+    # than this do not use cuDNN attention: it builds a plan for every new input shape (about
+    # 0.2 s per forward on an H100, paid by every table), and it is faster than the other kernels
+    # only on large attention (15% on a table with 87K train rows)
+    cudnn_attention_pairs = 1 << 31
 
     def __init__(
         self,
@@ -143,14 +164,20 @@ class _Base:
         feature_subsampling: str = "random",
         device: str = "cpu",
         random_state: int = 0,
+        train_context: bool = True,
+        categories: str = "codes",
     ) -> None:
         if feature_subsampling not in FEATURE_SUBSAMPLINGS:
             raise ValueError(
                 f"feature_subsampling is one of {FEATURE_SUBSAMPLINGS}: {feature_subsampling}"
             )
         self.feature_subsampling = feature_subsampling
-        # `member_kinds` is kept for the saved inference settings; TabSil has one kind, "standard"
+        # numeric transform kinds over the members (`_kind_index`, `tabsil.inference.preprocessing`)
         self.member_kinds = resolve_member_kinds(member_kinds)
+        if categories not in CATEGORY_ENCODINGS:
+            raise ValueError(f"categories is one of {CATEGORY_ENCODINGS}: {categories}")
+        # many-category columns (`Member.categories`), the same for every member
+        self.categories = categories
         self.softmax_temperature = softmax_temperature
         # cap on the column count after one-hot expansion: the feature count the model saw in
         # training (max_features of the model config)
@@ -164,6 +191,9 @@ class _Base:
         self.categorical_features_indices = categorical_features_indices
         self.device = torch.device(device)
         self.random_state = random_state
+        # keep each member's train context at fit (module docstring); False: run the training and
+        # test rows together at every prediction
+        self.train_context = train_context
 
     def _fit_members(self, X: Any, members: list[Member]) -> None:
         # training rows as a numeric array: `cat_ix_` are the categorical columns (strings and
@@ -195,23 +225,154 @@ class _Base:
         """The training-row targets for the model (1, train rows) and extra forward kwargs."""
         return y, {}
 
-    def _iter_inputs(self, X: Any, y_trains: list[np.ndarray]):
-        """Per member (index, model input x (1, train + test rows, F), y_train (1, train rows))."""
+    def _kind_index(self, i: int) -> int:
+        """Member i's position in `member_kinds` before taking it modulo the kind count: round
+        robin."""
+        return i
+
+    def _member_options(self, i: int) -> dict:
+        """The preprocessing options of member i (`Member` fields)."""
+        kinds = self.member_kinds
+        return {"kind": kinds[self._kind_index(i) % len(kinds)], "categories": self.categories}
+
+    def _test_inputs(self, X: Any):
+        """A function `inputs(i)`: member i's model input columns of the test rows X (T, F_i)."""
         X_test = apply_encoder(pd.DataFrame(X), self.cat_ix_, self.encoder_)
         # a test row's identifier depends on that row only (not on the batch or row order): a hash
         # of all its encoded values, hashed once and mixed with each member's seed
         hashes = row_hashes(X_test)
-        for i, (prep, y_train) in enumerate(zip(self.preprocessors_, y_trains, strict=True)):
+
+        def inputs(i: int) -> np.ndarray:
+            prep = self.preprocessors_[i]
             x_test, _ = select_features(X_test, self.cat_ix_, self.feature_subsets_[i])
-            x_test = prep.transform(x_test, row_identifier(hashes, prep.member.seed + 3))
-            x = np.concatenate([self.X_trains_[i], x_test])
+            return prep.transform(x_test, row_identifier(hashes, prep.member.seed + 3))
+
+        return inputs
+
+    def _iter_inputs(self, X: Any, y_trains: list[np.ndarray]):
+        """Per member (index, model input x (1, train + test rows, F), y_train (1, train rows))
+        (prediction without a train context)."""
+        inputs = self._test_inputs(X)
+        for i, y_train in enumerate(y_trains):
+            x = np.concatenate([self.X_trains_[i], inputs(i)])
             x = torch.as_tensor(x, dtype=torch.float32, device=self.device).unsqueeze(0)
             y = torch.as_tensor(y_train, dtype=torch.float32, device=self.device).unsqueeze(0)
             yield i, x, y
 
+    def _device_model(self) -> nn.Module:
+        return self.model.to(self.device).eval()
+
+    @contextlib.contextmanager
+    def _forward_mode(self, attention_pairs: int):
+        # bfloat16 autocast on CUDA, as in training; no autograd; cuDNN attention only for large
+        # attention (`cudnn_attention_pairs`, `attention_pairs` of this forward)
+        cuda = self.device.type == "cuda"
+        kernels = contextlib.nullcontext()
+        if cuda and attention_pairs < self.cudnn_attention_pairs:
+            from torch.nn.attention import SDPBackend, sdpa_kernel
+
+            backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
+            kernels = sdpa_kernel(backends)
+        with (
+            torch.autocast(self.device.type, dtype=torch.bfloat16, enabled=cuda),
+            torch.inference_mode(),
+            kernels,
+        ):
+            yield
+
+    def _member_runs(self) -> list[tuple[int, int]]:
+        """(start, stop) of the runs of consecutive members with the same input column count
+        (the members a train context batch can hold)."""
+        widths = [x.shape[1] for x in self.X_trains_]
+        runs, start = [], 0
+        for i in range(1, len(widths) + 1):
+            if i == len(widths) or widths[i] != widths[start]:
+                runs.append((start, i))
+                start = i
+        return runs
+
+    def _context_budget(self) -> int:
+        # device bytes all train contexts may take: `train_context_device_bytes`, and at most an
+        # eighth of the GPU's memory (fit briefly holds two copies while stacking a run)
+        budget = self.train_context_device_bytes
+        if self.device.type == "cuda":
+            total = torch.cuda.get_device_properties(self.device).total_memory
+            budget = min(budget, total // 8)
+        return budget
+
+    def _fit_contexts(self, y_trains: list[np.ndarray]) -> None:
+        """Each member's train context (module docstring), kept per run of members with the same
+        column count (`contexts_`: (start, stop, context of members start..stop-1)), or None when
+        the model has none or they would not fit in `_context_budget`."""
+        self.contexts_ = None
+        model = self.model
+        if not (self.train_context and getattr(model, "supports_train_context", False)):
+            return
+        n_train = self.X_trains_[0].shape[0]
+        itemsize = 2 if self.device.type == "cuda" else 4  # bfloat16 autocast on CUDA
+        classes = len(self.classes_) if self.task == "classification" else None
+        need = sum(
+            model.train_context_bytes(
+                n_train, x.shape[1], classes=classes, attention_itemsize=itemsize
+            )
+            for x in self.X_trains_
+        )
+        if need > self._context_budget():
+            return
+        model = self._device_model()
+        runs = []
+        hold = getattr(model, "hold_host_state", None)
+        with hold() if hold is not None else contextlib.nullcontext():
+            for start, stop in self._member_runs():
+                # members that stay within one unchunked forward go through the model together
+                width = self.X_trains_[start].shape[1]
+                step = max(1, model.inference_chunk_cells // max(1, n_train * width))
+                parts = []
+                for a in range(start, stop, step):
+                    b = min(a + step, stop)
+                    x = torch.as_tensor(
+                        np.stack(self.X_trains_[a:b]), dtype=torch.float32, device=self.device
+                    )
+                    y = torch.as_tensor(
+                        np.stack(y_trains[a:b]), dtype=torch.float32, device=self.device
+                    )
+                    y, extra = self._model_targets(y)
+                    with self._forward_mode((b - a) * n_train * n_train):
+                        parts.append(model.train_context(x, y, self.task, **extra))
+                    del x, y, extra
+                runs.append((start, stop, TrainContext.cat(parts)))
+                del parts
+        self.contexts_ = runs
+        self.X_trains_ = None  # the contexts hold what prediction needs from the training rows
+
     def _iter_logits(self, X: Any, y_trains: list[np.ndarray]):
-        model = self.model.to(self.device).eval()
-        autocast = self.device.type == "cuda"  # bfloat16, as in training
+        """Per member, in member order: (index, test-row logits (T, outputs), float32)."""
+        if getattr(self, "contexts_", None) is None:
+            yield from self._iter_logits_joint(X, y_trains)
+            return
+        model = self._device_model()
+        inputs = self._test_inputs(X)
+        n_test = len(X)
+        for start, stop, context in self.contexts_:
+            # members per forward: their test inputs and logits stay within `predict_batch_bytes`
+            per_member = n_test * (context.n_columns + PREDICT_OUTPUT_WIDTH) * 4
+            step = max(1, min(stop - start, self.predict_batch_bytes // max(1, per_member)))
+            for a in range(start, stop, step):
+                b = min(a + step, stop)
+                x = np.stack([inputs(i) for i in range(a, b)])
+                x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
+                with self._forward_mode((b - a) * n_test * context.n_train):
+                    logits = model.forward_test(x, context.select(a - start, b - start)).float()
+                del x
+                # yielded outside autocast: the consumer's math (e.g. the regression mean matmul)
+                # runs in float32
+                for j in range(b - a):
+                    yield a + j, logits[j]
+                del logits
+
+    def _iter_logits_joint(self, X: Any, y_trains: list[np.ndarray]):
+        # prediction without a train context: per member, the training and test rows together
+        model = self._device_model()
         kwargs = forward_kwargs(model, self.task)
         # member forwards reuse one large CPU buffer (the cell state of the interleaved
         # column_row_transformer), released after the last member (also on an exception)
@@ -219,10 +380,7 @@ class _Base:
         with hold() if hold is not None else contextlib.nullcontext():
             for i, x, y in self._iter_inputs(X, y_trains):
                 y, extra = self._model_targets(y)
-                with (
-                    torch.autocast(self.device.type, dtype=torch.bfloat16, enabled=autocast),
-                    torch.inference_mode(),
-                ):
+                with self._forward_mode(x.shape[1] * y.shape[1]):
                     logits = model(x, y, **kwargs, **extra)[0].float()
                 # yielded outside autocast: the consumer's math (e.g. the regression mean matmul)
                 # runs in float32
@@ -255,6 +413,7 @@ class EnsembleClassifier(_Base):
                 class_permutation=rng.permutation(n_classes),
                 target_power=False,
                 seed=int(rng.integers(0, 2**31 - 1)),
+                **self._member_options(i),
             )
             for i in range(self.n_estimators)
         ]
@@ -284,6 +443,7 @@ class EnsembleClassifier(_Base):
         self._fit_members(X, members)
         # each member gets the training targets as shuffled indices: original class c -> perm[c]
         self.y_trains_ = [m.class_permutation[y] for m in members]
+        self._fit_contexts(self.y_trains_)
         return self
 
     def member_logits(self, X: Any):
@@ -318,20 +478,33 @@ def _probs_on_borders(probs: torch.Tensor, frm: torch.Tensor, to: torch.Tensor) 
     return (at_to[:, 1:] - at_to[:, :-1]).clamp_min(0)
 
 
-def _clipped_inverse(transform: PowerTransformer, u_train: np.ndarray):
+def _clipped_inverse(
+    transform: PowerTransformer, u_train: np.ndarray, z_train: np.ndarray | None = None
+):
     """Inverse of the power transform, with values outside the training target range [lo, hi]
     set to its end values.
 
     The inverse is undefined beyond the right end for λ < 0 and beyond the left end for λ > 2, and
     arbitrarily steep near it, so extending it past the range (even linearly with the end slope)
     sends z into the thousands.
+
+    With a λ far below 0 (about -14 on a target that is 95% zeros, about -19 on one with most
+    values just above 0 and a long right tail) the training end itself lies at the edge of the
+    domain up to rounding, and its inverse is NaN or inf. With the training targets `z_train` a
+    non-finite value is set to the end of `z_train` on that side (the exact inverse of the end),
+    and the rest is kept within [min z_train, max z_train]. Without them it behaves as before.
     """
     lo, hi = float(u_train.min()), float(u_train.max())
 
     def g(u: np.ndarray) -> np.ndarray:
         u = np.clip(np.asarray(u, dtype=np.float64).reshape(-1, 1), lo, hi)
         with np.errstate(all="ignore"):
-            return transform.inverse_transform(u).ravel()
+            z = transform.inverse_transform(u).ravel()
+        if z_train is None:
+            return z
+        z_lo, z_hi = float(np.min(z_train)), float(np.max(z_train))
+        end = np.where(u.ravel() > (lo + hi) / 2, z_hi, z_lo)
+        return np.clip(np.where(np.isfinite(z), z, end), z_lo, z_hi)
 
     return g
 
@@ -364,12 +537,19 @@ class EnsembleRegressor(_Base):
         rng = np.random.default_rng(self.random_state)
         return self.fit_members(X, y, self._default_members(rng))
 
+    def _kind_index(self, i: int) -> int:
+        # the target power runs off, off, on, on (`_default_members`), as long as the 4-kind cycle:
+        # members 0, 1, 2, 3, 4, 5, 6, 7 take kinds 0, 1, 0, 1, 2, 3, 2, 3, so each kind gets
+        # the plain and the power-transformed target once in 8 members
+        return i % 2 + 2 * (i // 4)
+
     def _default_members(self, rng: np.random.Generator) -> list[Member]:
         return [
             Member(
                 class_permutation=None,
                 target_power=(i // 2) % 2 == 1,  # off, off, on, on, ...
                 seed=int(rng.integers(0, 2**31 - 1)),
+                **self._member_options(i),
             )
             for i in range(self.n_estimators)
         ]
@@ -387,7 +567,7 @@ class EnsembleRegressor(_Base):
             if m.target_power:
                 transform = PowerTransformer(method="yeo-johnson", standardize=True)
                 u = np.asarray(transform.fit_transform(z.reshape(-1, 1))).ravel()
-                inverse = _clipped_inverse(transform, u)
+                inverse = _clipped_inverse(transform, u, z)
                 # bucket values and borders from member space to z space (the borders are used
                 # by predict_distribution)
                 values = np.clip(inverse(_bucket_values(self.borders, u)), b[0], b[-1])
@@ -396,6 +576,7 @@ class EnsembleRegressor(_Base):
             self.y_trains_.append(u)
             self.bucket_values_.append(torch.as_tensor(values, dtype=torch.float32))
             self.border_maps_.append(border_map)
+        self._fit_contexts(self.y_trains_)
         return self
 
     def predict_distribution(self, X: Any) -> tuple[torch.Tensor, torch.Tensor]:

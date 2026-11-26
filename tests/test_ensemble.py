@@ -148,6 +148,68 @@ def test_clipped_inverse_stays_in_training_range_on_both_sides():
         assert np.allclose(g(u), z, atol=1e-6)  # the exact inverse within the training range
 
 
+def test_clipped_inverse_sets_a_non_finite_end_to_the_training_end():
+    from tabsil.inference.ensemble import _clipped_inverse
+
+    u_train = np.linspace(-1.0, 2.0, 7)
+    z_train = 3 * u_train
+
+    class EdgeNonFinite:  # inverse undefined at the training ends (Yeo-Johnson λ far from 1)
+        def inverse_transform(self, u):
+            return np.where(u >= 2.0, np.nan, np.where(u <= -1.0, -np.inf, 3.1 * u))
+
+    g = _clipped_inverse(EdgeNonFinite(), u_train, z_train)
+    # non-finite -> the training end on that side; finite values kept within [z_min, z_max]
+    np.testing.assert_array_equal(g(np.array([-5.0, 0.0, 1.0, 1.99, 9.0])), [-3, 0, 3.1, 6, 6])
+    assert np.isnan(_clipped_inverse(EdgeNonFinite(), u_train)(np.array([9.0]))).all()  # without z
+
+
+def _power_member_end_is_nan(reg: TabSilRegressor, y: np.ndarray) -> bool:
+    """Whether the plain Yeo-Johnson inverse of the power members is NaN at the training maximum
+    (the case the tests below are about; it depends on the library versions)."""
+    from sklearn.preprocessing import PowerTransformer
+
+    power = [i for i, m in enumerate(reg.border_maps_) if m is not None]
+    z = (y - reg.y_mean_) / reg.y_std_
+    transform = PowerTransformer(method="yeo-johnson", standardize=True).fit(z.reshape(-1, 1))
+    with np.errstate(all="ignore"):
+        return bool(np.isnan(transform.inverse_transform([[max(reg.y_trains_[power[0]])]])).all())
+
+
+def _check_finite_distribution(y: np.ndarray, seed: int) -> None:
+    x = np.random.default_rng(seed).normal(size=(len(y), 2))
+    # TabSil's borders end at about ±22.6, beyond the power members' training range
+    borders = torch.cat(
+        [torch.tensor([-22.6]), torch.linspace(-4.3, 4.2, 31), torch.tensor([22.6])]
+    )
+    reg = TabSilRegressor(_tiny_model(), borders, n_estimators=4).fit(x, y)
+    assert _power_member_end_is_nan(reg, y)
+    assert all(torch.isfinite(m).all() for m in reg.border_maps_ if m is not None)
+    log_probs, out_borders = reg.predict_distribution(x[:10])
+    assert torch.isfinite(log_probs).all() and torch.isfinite(out_borders).all()
+    assert np.isfinite(reg.predict(x[:10])).all()
+
+
+def test_zero_inflated_target_gives_a_finite_distribution():
+    # 95% zeros and a few spikes (a redset_1H series): Yeo-Johnson λ ≈ -20, whose inverse at the
+    # training maximum is NaN up to rounding. It made the power members' border maps, and so the
+    # whole predict_distribution mixture, NaN
+    rng = np.random.default_rng(4)
+    y = np.zeros(1440)
+    spikes = rng.choice(1440, 75, replace=False)
+    y[spikes] = np.round(rng.lognormal(1.5, 1.0, 75))
+    y[spikes[0]] = 143
+    _check_finite_distribution(y, 4)
+
+
+def test_right_tailed_target_near_zero_gives_a_finite_distribution():
+    # most values just above 0 and a few far right (ADBench PageBlocks column 6): λ ≈ -25, the
+    # same NaN at the training maximum
+    rng = np.random.default_rng(1)
+    y = np.concatenate([rng.exponential(0.0002, 1500), rng.uniform(0.05, 1, 5)])
+    _check_finite_distribution(y, 1)
+
+
 def test_regressor_bucket_values_stay_in_training_target_range():
     rng = np.random.default_rng(0)
     x = rng.normal(size=(300, 3))
@@ -318,31 +380,43 @@ def test_tabsil_inference_defaults_come_from_the_model():
     model = _tiny_model()
     expected = {
         "n_estimators": 8,
-        "member_kinds": ("standard",),
+        "member_kinds": ("standard", "power", "robust", "quantile"),
         "max_features_per_member": 768,
         "feature_subsampling": "balanced",
+        "categories": "counts",
+        "softmax_temperature": 1.0,
     }
     # 1) without saved settings: TabSil's defaults, for both tasks
     assert default_inference(model, "classification") == expected
     assert default_inference(_tiny_model(), "regression") == expected
     clf = TabSilClassifier(model).fit(X[:60], y[:60])
-    assert len(clf.preprocessors_) == 8 and clf.member_kinds == ("standard",)
+    assert len(clf.preprocessors_) == 8 and clf.member_kinds == (
+        "standard",
+        "power",
+        "robust",
+        "quantile",
+    )
     assert clf.max_features_per_member == 768 and clf.feature_subsampling == "balanced"
+    assert clf.categories == "counts" and clf.softmax_temperature == 1.0
     with pytest.raises(ValueError):
-        TabSilClassifier(_tiny_model(), member_kinds=("quantile",))
+        TabSilClassifier(_tiny_model(), member_kinds=("rank",))
     # 2) settings saved with the weights (the Hub config.json `inference`) come first
     model.inference_config = {
         "member_kinds": ["standard"],
         "n_estimators": 3,
         "max_features_per_member": None,
         "feature_subsampling": "random",
+        "categories": "codes",
+        "softmax_temperature": 0.9,
     }
     clf = TabSilClassifier(model)
     assert clf.member_kinds == ("standard",) and clf.n_estimators == 3
     assert clf.max_features_per_member is None and clf.feature_subsampling == "random"
+    assert clf.categories == "codes" and clf.softmax_temperature == 0.9
     # 3) arguments come before both (experiments)
-    clf = TabSilClassifier(model, member_kinds="tabsil-v1", n_estimators=2)
-    assert clf.member_kinds == ("standard",) and clf.n_estimators == 2
+    clf = TabSilClassifier(model, member_kinds="tabsil-v1", n_estimators=2, categories="counts")
+    assert clf.member_kinds == ("standard", "power", "robust", "quantile") and clf.n_estimators == 2
+    assert clf.categories == "counts"
     clf = TabSilClassifier(_tiny_model(), max_features_per_member=4)
     assert clf.max_features_per_member == 4
 
@@ -355,10 +429,12 @@ def test_tabsil_regressor_needs_borders_with_a_model():
 def test_member_kinds_parse_names_and_lists():
     from tabsil.recipe import resolve_member_kinds
 
-    assert resolve_member_kinds("tabsil-v1") == ("standard",)
+    assert resolve_member_kinds("tabsil-v1") == ("standard", "power", "robust", "quantile")
     assert resolve_member_kinds("standard") == ("standard",)
     assert resolve_member_kinds(["standard", "standard"]) == ("standard", "standard")
-    for bad in ("", "v9", "quantile", "standard,power"):
+    assert resolve_member_kinds("numeric-cycle") == ("standard", "power", "robust", "quantile")
+    assert resolve_member_kinds("standard,power") == ("standard", "power")
+    for bad in ("", "v9", "rank", "standard,yeo"):
         with pytest.raises(ValueError, match="member_kinds"):
             resolve_member_kinds(bad)
 
@@ -467,21 +543,23 @@ def _predict_ways(predict, X_test):
     return full, {"alone": alone, "reversed": reversed_, "twin": twin}
 
 
+@pytest.mark.parametrize("train_context", [True, False], ids=["context", "joint"])
 @pytest.mark.parametrize("chunked", [False, True])
 @pytest.mark.parametrize("table", [0, 1], ids=["numeric", "nan_and_categorical"])
-def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunked):
+def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunked, train_context):
     X, y = _inductive_tables()[table]
     X = pd.DataFrame(X)
     model = _tiny_model()
     if chunked:
         model.inference_chunk_cells = 64  # force the row-chunked forward on this small table
-    clf = TabSilClassifier(model, n_estimators=3).fit(X[:60], (y[:60] > 0).astype(int))
-    reg = TabSilRegressor(model, torch.linspace(-4, 4, 33), n_estimators=3).fit(X[:60], y[:60])
+    kw = {"n_estimators": 3, "train_context": train_context}
+    clf = TabSilClassifier(model, **kw).fit(X[:60], (y[:60] > 0).astype(int))
+    reg = TabSilRegressor(model, torch.linspace(-4, 4, 33), **kw).fit(X[:60], y[:60])
+    assert (clf.contexts_ is not None) == train_context
     # The model inputs of a test row are the same bits alone, in another order or next to a copy
     for est in (clf, reg):
-        y_trains = [np.zeros(60)] * len(est.preprocessors_)
         inputs = {
-            name: [x[0, 60:] for _, x, _ in est._iter_inputs(rows, y_trains)]
+            name: est._test_inputs(rows)
             for name, rows in {
                 "full": X[60:],
                 "alone": X[60:61],
@@ -489,8 +567,9 @@ def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunke
                 "twin": pd.concat([X[60:61], X[60:]]),
             }.items()
         }
-        for full, alone, rev, twin in zip(*inputs.values(), strict=True):
-            for same in (alone[0], full[0]), (twin[1:], full), (rev.flip(0), full):
+        for i in range(len(est.preprocessors_)):
+            full, alone, rev, twin = (get(i) for get in inputs.values())
+            for same in (alone[0], full[0]), (twin[1:], full), (rev[::-1], full):
                 np.testing.assert_array_equal(*same)  # NaN cells (missing) compare equal
     # So predictions differ only by float32 rounding, which depends on the batch shape (up to
     # about 2e-6 on this tiny random model, more with the row-chunked forward); a
@@ -499,3 +578,221 @@ def test_test_row_predictions_do_not_depend_on_the_other_test_rows(table, chunke
         full, ways = _predict_ways(predict, X[60:])
         for name, pred in ways.items():
             np.testing.assert_allclose(pred, full[: len(pred)], atol=1e-5, rtol=0, err_msg=name)
+
+
+def _context_tables():
+    rng = np.random.default_rng(1)
+    X = pd.DataFrame(rng.normal(size=(90, 7)), columns=[f"x{i}" for i in range(7)])
+    X["cat"] = pd.Categorical(rng.choice(list("pqrs"), 90))  # one-hot in members that pick it
+    X.loc[rng.random(90) < 0.1, "x1"] = np.nan
+    y = X["x0"].to_numpy() + 0.3 * rng.normal(size=90)
+    return X, y
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+@pytest.mark.parametrize(
+    "setting", ["all_columns", "column_subsets", "one_per_forward", "many_classes"]
+)
+def test_train_context_predictions_equal_the_joint_forward(setting, chunked):
+    # Fit-time train contexts (`train_context=True`, the default) give the predictions of running
+    # the training and test rows together (`train_context=False`) within float32 rounding
+    X, y = _context_tables()
+    kw = {"n_estimators": 4}
+    if setting == "column_subsets":  # members with and without the one-hot column: several runs
+        kw.update(max_features_per_member=4, feature_subsampling="random")
+    model = _tiny_model() if setting != "many_classes" else tiny_model(n_out=10)
+    if chunked:
+        model.inference_chunk_cells = 64
+    labels = (y > 0).astype(int) if setting != "many_classes" else np.digitize(y, [-1, 0, 1]) * 4
+    if setting == "many_classes":  # 13 classes over 10 target embeddings (grouped)
+        labels = np.arange(90) % 13
+    borders = torch.linspace(-4, 4, 33)
+    estimators = {}
+    for on in (True, False):
+        clf = EnsembleClassifier(model, train_context=on, **kw).fit(X[:60], labels[:60])
+        reg = TabSilRegressor(model, borders, train_context=on, **kw).fit(X[:60], y[:60])
+        if setting == "one_per_forward":
+            clf.predict_batch_bytes = reg.predict_batch_bytes = 1
+        estimators[on] = clf, reg
+    clf, reg = estimators[True]
+    assert clf.contexts_ is not None and reg.contexts_ is not None
+    assert estimators[False][0].contexts_ is None
+    if setting == "column_subsets":
+        assert len({p.order.size for p in clf.preprocessors_}) > 1 and len(clf.contexts_) > 1
+    else:
+        assert [(a, b) for a, b, _ in clf.contexts_] == [(0, 4)]  # one batch of 4 members
+    (clf_joint, reg_joint), X_test = estimators[False], X[60:]
+    np.testing.assert_allclose(
+        clf.predict_proba(X_test), clf_joint.predict_proba(X_test), atol=1e-5, rtol=0
+    )
+    np.testing.assert_allclose(reg.predict(X_test), reg_joint.predict(X_test), atol=1e-5, rtol=0)
+    log_p, b = reg.predict_distribution(X_test)
+    log_p_joint, b_joint = reg_joint.predict_distribution(X_test)
+    assert torch.equal(b, b_joint)
+    torch.testing.assert_close(log_p.exp(), log_p_joint.exp(), atol=1e-5, rtol=0)
+
+
+def test_train_context_falls_back_to_the_joint_forward_above_its_budget():
+    X, y = _context_tables()
+    clf = EnsembleClassifier(_tiny_model(), n_estimators=2)
+    clf.train_context_device_bytes = 0  # no room: predict runs the training rows each time
+    clf.fit(X[:60], (y[:60] > 0).astype(int))
+    assert clf.contexts_ is None and clf.X_trains_ is not None
+    full = EnsembleClassifier(_tiny_model(), n_estimators=2).fit(X[:60], (y[:60] > 0).astype(int))
+    assert full.X_trains_ is None  # the contexts replace the transformed training rows
+    np.testing.assert_allclose(
+        clf.predict_proba(X[60:]), full.predict_proba(X[60:]), atol=1e-5, rtol=0
+    )
+
+
+def test_train_context_bytes_counts_the_context():
+    model = _tiny_model()
+    with torch.inference_mode():
+        x, y = torch.randn(2, 30, 5), torch.randint(0, 3, (2, 30)).float()
+        ctx = model.train_context(x, y, "classification")
+    estimate = model.train_context_bytes(30, 5, classes=3, batch=2, attention_itemsize=4)
+    assert estimate == ctx.nbytes
+    with torch.inference_mode():
+        reg = model.train_context(x, torch.randn(2, 30), "regression")
+    assert model.train_context_bytes(30, 5, classes=None, batch=2, attention_itemsize=4) == (
+        reg.nbytes
+    )
+    # no tensor keeps a larger storage alive (e.g. every head behind the first head's keys; with
+    # one table the first head is a contiguous view of them)
+    with torch.inference_mode():
+        one = model.train_context(x[:1], y[:1], "classification")
+    for t in ctx.tensors() + one.tensors():
+        assert t.untyped_storage().nbytes() == t.numel() * t.element_size()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_train_context_predictions_equal_the_joint_forward_on_cuda():
+    # Under bfloat16 autocast the training rows go through other matrix shapes with and without
+    # the train context, so predictions differ by bf16 rounding (as when the test rows are
+    # predicted in another batch)
+    X, y = _context_tables()
+    model = _tiny_model()
+    labels = (y > 0).astype(int)
+    kw = {"n_estimators": 4, "device": "cuda"}
+    on = EnsembleClassifier(model, **kw).fit(X[:60], labels[:60])
+    off = EnsembleClassifier(model, train_context=False, **kw).fit(X[:60], labels[:60])
+    assert on.contexts_ is not None and on.contexts_[0][2].icl_kv[0][0].dtype == torch.bfloat16
+    got, want = on.predict_proba(X[60:]), off.predict_proba(X[60:])
+    print("cuda context vs joint max |diff|", np.abs(got - want).max())
+    np.testing.assert_allclose(got, want, atol=5e-3, rtol=0)
+
+
+def _option_table():
+    rng = np.random.default_rng(2)
+    X = np.column_stack(
+        [
+            rng.lognormal(size=300),  # skewed numeric
+            rng.normal(size=300),
+            rng.integers(0, 40, 300),  # 40 categories: stays codes
+            rng.integers(0, 3, 300),  # 3 categories: one-hot
+        ]
+    ).astype(float)
+    X[rng.random(X.shape) < 0.1] = np.nan
+    return X
+
+
+@pytest.mark.parametrize("kind", ["power", "robust", "quantile"])
+def test_numeric_member_kinds_are_monotone_and_keep_missing_values(kind):
+    X = _option_table()
+    base = MemberPreprocessor(Member(None, False, seed=0), [2, 3], 100).fit(X)
+    prep = MemberPreprocessor(Member(None, False, seed=0, kind=kind), [2, 3], 100).fit(X)
+    want, got = base._features(base._clip(X)), prep._features(prep._clip(X))
+    assert got.shape == want.shape
+    assert np.array_equal(np.isnan(got), np.isnan(want))
+    np.testing.assert_array_equal(got[:, 2:], want[:, 2:])  # code and one-hot columns unchanged
+    for j in (0, 1):  # numeric columns: an increasing map of the original values
+        ok = np.isfinite(want[:, j])
+        order = np.argsort(want[ok, j], kind="stable")
+        assert (np.diff(got[ok, j][order]) >= -1e-12).all()
+        assert not np.allclose(got[ok, j], want[ok, j])
+    if kind == "robust":
+        assert np.nanmax(np.abs(got[:, :2])) < 3.0
+    if kind == "quantile":  # rank-Gauss: about standard normal
+        assert abs(np.nanmean(got[:, 0])) < 0.1 and abs(np.nanstd(got[:, 0]) - 1) < 0.15
+
+
+def test_power_kind_stays_bounded_where_the_transform_explodes():
+    # Power transform with a large lambda: (z + 1)^40 explodes and overflows within the ±100 z
+    # range. Values are clipped to the z range whose standardized output stays within ±100, so the
+    # map stays finite, bounded and increasing; an ordinary column is not clipped
+    from tabsil.inference.preprocessing import POWER_BOUND, _NumericTransform, _yeo_johnson
+
+    rng = np.random.default_rng(0)
+    X = np.column_stack([rng.normal(size=500), rng.normal(size=500)])
+    t = _NumericTransform("power", X, seed=0)
+    # fitted lambdas ~1: the range lies far outside the 12-sigma outlier clip, so nothing is clipped
+    assert (t.bounds[0] < -50).all() and (t.bounds[1] > 50).all()
+    z = t._standardize(X)
+    t._fit_power(z, np.array([40.0, 1.0]))
+    lo, hi = t.bounds
+    assert 1.0 < hi[0] < 50.0 and hi[1] > 50.0 and lo[1] < -50.0
+    grid = np.linspace(-150, 150, 3001)
+    out = t(np.column_stack([grid * t.std[0] + t.mean[0], grid * t.std[1] + t.mean[1]]))
+    assert np.isfinite(out).all() and np.abs(out).max() <= POWER_BOUND + 1e-9
+    assert (np.diff(out, axis=0) >= -1e-12).all()
+    # the transform itself, against sklearn's (lambda 0 and 2 branches included)
+    from sklearn.preprocessing import PowerTransformer
+
+    v = np.column_stack([np.linspace(-3, 3, 13)] * 4)
+    pt = PowerTransformer(method="yeo-johnson", standardize=False).fit(v)
+    pt.lambdas_ = np.array([0.0, 2.0, 0.5, -1.0])
+    np.testing.assert_allclose(_yeo_johnson(v, pt.lambdas_), pt.transform(v), rtol=1e-12)
+
+
+def test_many_category_codes_get_a_count_column():
+    X = _option_table()
+    base = MemberPreprocessor(Member(None, False, seed=1), [2, 3], 100).fit(X)
+    want = base._features(X)
+    codes = want[:, 2]  # the 40-category code column (after the numerics)
+    ok = np.isfinite(codes)
+    counted = MemberPreprocessor(Member(None, False, seed=1, categories="counts"), [2, 3], 100)
+    got = counted.fit(X)._features(X)
+    assert got.shape[1] == want.shape[1] + 1
+    np.testing.assert_array_equal(got[:, :-1], want)
+    n = np.bincount(codes[ok].astype(int), minlength=40)
+    np.testing.assert_allclose(got[ok, -1], np.log1p(n[codes[ok].astype(int)]))
+    assert np.isnan(got[~ok, -1]).all()
+    unseen = X[:1].copy()
+    unseen[0, 2] = 45.0  # a code beyond the training categories is missing
+    assert np.isnan(counted._features(unseen)[0, -1])
+
+
+def test_member_options_reach_the_members_and_predict():
+    X, y = _context_tables()
+    kw = {"n_estimators": 8, "member_kinds": "numeric-cycle", "categories": "counts"}
+    clf = TabSilClassifier(_tiny_model(), **kw)
+    clf.fit(X[:60], (y[:60] > 0).astype(int))
+    members = [p.member for p in clf.preprocessors_]
+    assert [m.kind for m in members] == ["standard", "power", "robust", "quantile"] * 2
+    assert all(m.categories == "counts" for m in members)
+    assert np.allclose(clf.predict_proba(X[60:]).sum(1), 1)
+    reg = TabSilRegressor(_tiny_model(), torch.linspace(-4, 4, 33), **kw)
+    assert np.isfinite(reg.fit(X[:60], y[:60]).predict(X[60:])).all()
+    # regression: each kind meets the plain and the power-transformed target once in 8 members
+    pairs = {(p.member.kind, p.member.target_power) for p in reg.preprocessors_}
+    assert pairs == {(k, on) for k in ("standard", "power", "robust", "quantile") for on in (0, 1)}
+    with pytest.raises(ValueError, match="categories"):
+        EnsembleClassifier(_tiny_model(), n_estimators=1, categories="shuffled")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_cudnn_attention_only_for_large_attention():
+    # cuDNN attention builds a plan per new input shape (~0.2 s), so small forwards leave it out
+    clf = EnsembleClassifier(_tiny_model(), n_estimators=1, device="cuda")
+    with clf._forward_mode(clf.cudnn_attention_pairs - 1):
+        assert not torch.backends.cuda.cudnn_sdp_enabled()
+        assert torch.backends.cuda.flash_sdp_enabled()
+    enabled = torch.backends.cuda.cudnn_sdp_enabled()
+    with clf._forward_mode(clf.cudnn_attention_pairs):
+        assert torch.backends.cuda.cudnn_sdp_enabled() == enabled
+
+
+def test_an_unknown_member_kind_is_rejected_without_numeric_columns():
+    X = np.random.default_rng(0).integers(0, 5, size=(30, 2)).astype(float)  # all categorical
+    with pytest.raises(ValueError, match="member kind"):
+        MemberPreprocessor(Member(None, False, seed=0, kind="rank"), [0, 1], 100).fit(X)

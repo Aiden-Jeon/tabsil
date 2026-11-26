@@ -1,4 +1,5 @@
-"""Evaluate TabSil on the AMLB benchmark, TabArena-Lite and BeyondArena.
+"""Evaluate TabSil on the AMLB benchmark, TabArena-Lite, BeyondArena, fev-bench forecasting,
+ADBench outlier detection and treatment effect benchmarks (IHDP, ACIC 2016).
 
 The AMLB benchmark is the TabPFN v2 paper's: 29 AMLB classification and 28 AMLB/CTR23 regression
 tasks, each scored as the mean over the OpenML task's 10-fold cross-validation (ROC AUC for
@@ -38,7 +39,7 @@ limits). One fit uses the whole training split. `--datasets` runs only some data
 imputed). Results go to `<out-dir>/<suite>/`.
 
   $RUN --no-dev --extra arena --group arena-dev python $EVAL --suite tabarena-lite \
-    --classifier-path hf://aiden-jeon/tabsil@v1 --regressor-path hf://aiden-jeon/tabsil@v1
+    --classifier-path hf://aiden-jeon/tabsil@v1.1 --regressor-path hf://aiden-jeon/tabsil@v1.1
 
 Columns per member: without `--max-features-per-member` the model's setting applies (768 columns
 chosen `balanced`, per task model). `--max-features-per-member 0` turns the cap off (all columns;
@@ -50,6 +51,32 @@ limit is lifted, so splits wider than the supported size run.
 class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters splits by
 their original training row count.
 
+`--suite fev` is time series forecasting on 10 fev-bench tasks (`tabsil_train.benchmarks.fevbench`,
+needs the `fev` extra, installed apart from the dev group like the arena extra: `uv sync --package
+tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.forecast.TabSilForecaster` with the
+`--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in an Elo
+pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7 methods. Our
+Seasonal Naive is recomputed on the same windows and must match those. `--datasets` picks tasks,
+`--fev-windows N` only the last N windows of each (a quick check; the task-mean Elo pool then
+drops out). A failed series, window or task stops the run (nothing is imputed). Results go to
+`<out-dir>/fev/`.
+
+  $RUN --no-dev --extra fev --group arena-dev python $EVAL --suite fev \
+    --regressor-path hf://aiden-jeon/tabsil@v1 --datasets ecdc_ili --fev-windows 2
+
+`--suite causal` is treatment effect estimation on IHDP (100 realizations) and ACIC 2016 (10
+simulations) (`tabsil_train.benchmarks.causal`, needs the `causal` extra for the EconML baselines:
+`uv sync --package tabsil-train --extra causal`): `tabsil.causal.TabSilCATE` with the S-, T-, X-
+and DR-learner on the `--regressor-path` model (it must serve classification too, for the
+propensity), and EconML's causal forest and GBM-based meta-learners on the same splits. √PEHE and
+the ATE error within-sample and out-of-sample. `--datasets` picks the benchmarks (ihdp, acic2016),
+`--causal-realizations` the realizations (`1-5,9`), `--causal-methods` the methods. Results go to
+`<out-dir>/causal/` and resume from its `results.csv`; a failed cell ends the run with an error
+after the others (nothing is imputed).
+
+  $RUN --extra causal python $EVAL --suite causal --regressor-path hf://aiden-jeon/tabsil@v1 \
+    --datasets ihdp --causal-realizations 1-3
+
 `--latency` (arenas) records each fit's one-row prediction time (median of `LATENCY_REPEATS`) in
 `<out-dir>/fits_<suite>.jsonl`, measured in a hook outside TabArena's train and inference timing.
 
@@ -58,6 +85,19 @@ per 1K test rows (s), averaged over a dataset's splits, median over datasets
 (`time_{train,infer}_s_per_1K_median`). The arenas put it in `summary.json` (with the raw seconds
 and the baselines' value on the same splits, `time_baselines`) and `comparison.csv`; AMLB writes
 each fold's fit and prediction time to `<out-dir>/fits_<suite>.jsonl` and `eval_rows.csv`.
+
+`--suite adbench` is unsupervised outlier detection on 12 ADBench tables x 3 seeds
+(`tabsil_train.benchmarks.adbench`): `tabsil.unsupervised.TabSilUnsupervised` fitted on the
+unlabeled (contaminated) training rows scores the test rows, next to the official TabPFN v2
+extension and pyod's methods from the fm-agent-bench run, with IsolationForest = 1000 Elo. One
+multitask model serves both column kinds (`--regressor-path`, or `--classifier-path`).
+`--adbench-methods` adds IsolationForest (the split check against ADBench Table D4) and the `+clean`
+diagnostic (context = training rows labeled normal; kept out of the Elo); `--datasets` and
+`--adbench-splits` pick tables and seeds. Results go to `<out-dir>/adbench/` and resume from its
+`results.csv`.
+
+  $RUN python $EVAL --suite adbench --regressor-path hf://aiden-jeon/tabsil@v1 \
+    --datasets yeast --adbench-splits s1
 
 On AI Runtime (`training/scripts/eval.yaml`, `training/scripts/eval_arena.yaml`) results are
 logged to the platform's MLflow run (`MLFLOW_RUN_ID`). Locally, `--mlflow` creates a new run in the
@@ -85,21 +125,35 @@ from tabsil.inference.ensemble import (
     max_classes_of,
     max_features_of,
 )
+from tabsil.inference.preprocessing import CATEGORY_ENCODINGS
 from tabsil.inference.subsample import SubsampledEstimator
-from tabsil.recipe import SUPPORTED_SIZE, default_inference
+from tabsil.recipe import SUPPORTED_SIZE, default_inference, resolve_member_kinds
 from tabsil_train.benchmarks import amlb as bm
 from tabsil_train.benchmarks import uncertainty as unc
 from tabsil_train.hub import load_model
 from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
+FEV_SUITE = "fev"
+ADBENCH_SUITE = "adbench"
+CAUSAL_SUITE = "causal"
 LATENCY_REPEATS = 5
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--suite", choices=["classification", "regression", "all", *ARENA_SUITES], default="all"
+        "--suite",
+        choices=[
+            "classification",
+            "regression",
+            "all",
+            *ARENA_SUITES,
+            FEV_SUITE,
+            ADBENCH_SUITE,
+            CAUSAL_SUITE,
+        ],
+        default="all",
     )
     parser.add_argument("--tasks", help="comma-separated OpenML task ids (chosen within the suite)")
     parser.add_argument("--folds", type=int, default=10)
@@ -136,7 +190,51 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--datasets",
-        help="TabArena / BeyondArena: comma-separated dataset names (the rest imputed)",
+        help="TabArena / BeyondArena: comma-separated dataset names (the rest imputed); fev:"
+        " comma-separated task names (only those are evaluated and ranked); ADBench: the tables"
+        " to run; causal: the benchmarks (ihdp, acic2016; default both)",
+    )
+    parser.add_argument(
+        "--causal-realizations",
+        default=None,
+        help="causal: realizations of each benchmark, comma-separated numbers and ranges"
+        " (1-5,9; default all: IHDP 1-100, ACIC 2016 1-10)",
+    )
+    parser.add_argument(
+        "--causal-methods",
+        default=None,
+        help="causal: comma-separated methods (tabsil_s, tabsil_t, tabsil_x, tabsil_dr,"
+        " econml_cf, econml_s, econml_t, econml_x, econml_dr; default all)",
+    )
+    parser.add_argument(
+        "--fev-windows",
+        type=int,
+        default=None,
+        help="fev: evaluate only the last N rolling windows of each task (default: all)",
+    )
+    parser.add_argument(
+        "--max-context-length",
+        type=int,
+        default=None,
+        help="fev: context rows per series (default: TabSilForecaster's, 4096; 0: up to the"
+        " supported size)",
+    )
+    parser.add_argument(
+        "--adbench-splits",
+        default="s1,s2,s3",
+        help="ADBench: comma-separated splits (s1, s2, s3 = ADBench seeds 1, 2, 3)",
+    )
+    parser.add_argument(
+        "--adbench-methods",
+        default="tabsil_unsup,tabsil_unsup+clean,iforest",
+        help="ADBench: comma-separated methods (tabsil_unsup, iforest; +clean = context of the"
+        " training rows labeled normal, a diagnostic outside the Elo)",
+    )
+    parser.add_argument(
+        "--n-permutations",
+        type=int,
+        default=10,
+        help="ADBench: column orders averaged by the chain-rule log density",
     )
     parser.add_argument(
         "--shards",
@@ -195,6 +293,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--method-name", default="tabsil", help="method name in TabArena / BeyondArena results"
     )
+    # inference options (`tabsil.inference.ensemble`, `tabsil.inference.preprocessing`); the
+    # defaults are the model's
+    parser.add_argument(
+        "--softmax-temperature",
+        type=float,
+        default=None,
+        help="classification: divide the logits by this before the softmax (default: the model's;"
+        " TabSil 1.0)",
+    )
+    parser.add_argument(
+        "--member-kinds",
+        default=None,
+        help="member numeric transforms: a preset (numeric-cycle) or comma-separated kinds from"
+        " standard,power,robust,quantile (default: the model's; TabSil numeric-cycle)",
+    )
+    parser.add_argument(
+        "--categories",
+        choices=CATEGORY_ENCODINGS,
+        default=None,
+        help="categorical columns that stay codes with more than 20 categories: keep the codes"
+        " only, or add a log count column (default: the model's; TabSil counts)",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out-dir", default="tabsil_eval")
     parser.add_argument("--mlflow", action="store_true", help="log to MLflow locally as well")
@@ -234,6 +354,8 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
     # architecture)
     inference = default_inference(model, suite)
     member_kinds = inference["member_kinds"]
+    if getattr(args, "member_kinds", None):
+        member_kinds = resolve_member_kinds(args.member_kinds)
     n_estimators = args.n_estimators or inference["n_estimators"]
     fits_log = fits_path(args)
 
@@ -246,6 +368,14 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
             "random_state": args.seed,
             "max_features_per_member": make.max_features_per_member,
             "feature_subsampling": make.feature_subsampling,
+            # the model's inference settings, then the command line's
+            "categories": inference["categories"],
+            **(
+                {"softmax_temperature": inference["softmax_temperature"]}
+                if suite == "classification"
+                else {}
+            ),
+            **inference_options(args, suite),
         }
         if suite == "classification":
             estimator = EnsembleClassifier(model, **kw)
@@ -265,12 +395,28 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
         return estimator
 
     make.max_one_hot_width = max_features_of(model)  # the host memory estimate uses the same cap
+    # `--categories counts` adds up to one column per categorical column (host memory estimate)
+    make.count_columns = (getattr(args, "categories", None) or inference["categories"]) == "counts"
     make.n_estimators = n_estimators
     # this task's columns-per-member cap and subsampling method (`model_feature_cap`, TabSil
     # 768 / balanced)
     make.max_features_per_member, make.feature_subsampling = model_feature_cap(args, inference)
     make.model, make.borders = model, borders  # TabArena / BeyondArena size limits (arena_limits)
     return make
+
+
+def inference_options(args: argparse.Namespace, suite: str | None = None) -> dict:
+    """The inference options given on the command line (`--softmax-temperature`,
+    `--categories`) as estimator arguments; options not given are left out (the model's settings
+    apply). With `suite` ("classification" / "regression"), only those of that task (the
+    temperature is classification only)."""
+    out = {}
+    temperature = getattr(args, "softmax_temperature", None)
+    if temperature is not None and suite in (None, "classification"):
+        out["softmax_temperature"] = temperature
+    if getattr(args, "categories", None) is not None:
+        out["categories"] = args.categories
+    return out
 
 
 def model_feature_cap(args: argparse.Namespace, inference: dict) -> tuple[int | None, str]:
@@ -416,6 +562,12 @@ def arena_fingerprint(args: argparse.Namespace, paths: dict, factories: dict) ->
                 if getattr(args, "subsample_train_rows", None) is not None
                 else {}
             ),
+            **(
+                {"member_kinds": list(resolve_member_kinds(args.member_kinds))}
+                if getattr(args, "member_kinds", None)
+                else {}
+            ),
+            **inference_options(args),
         },
         sort_keys=True,
     )
@@ -835,6 +987,9 @@ def host_state_estimator(factories: dict, caps: dict):
             # expanded columns never exceed the larger of the original count and the cap
             # (`one_hot_sizes`)
             columns = max(columns, width)
+        if categorical and getattr(factory, "count_columns", False):
+            # plus at most one count column per original column (`--categories counts`)
+            columns += n_features if cap is None else min(n_features, cap)
         if train_rows is None:
             return int(fn(rows, columns + 1))
         return int(fn(rows, columns + 1, train_rows=min(train_rows, rows)))
@@ -1032,6 +1187,8 @@ def log_arena_mlflow(args, summary: dict, out_dir: Path, factories: dict) -> Non
             ),
             **{f"n_estimators_{t}": f.n_estimators for t, f in factories.items()},
             "subsample_train_rows": args.subsample_train_rows,
+            "member_kinds": getattr(args, "member_kinds", None) or "default",
+            **inference_options(args),
         }
     )
     paths = {"classifier_path": args.classifier_path, "regressor_path": args.regressor_path}
@@ -1084,9 +1241,9 @@ def main(argv: list[str] | None = None) -> None:
     args.argv = list(sys.argv[1:] if argv is None else argv)  # for `--shards` worker commands
     if args.shards < 1:
         raise SystemExit("--shards must be >= 1.")
-    if args.shards > 1 and args.suite not in ARENA_SUITES:
-        raise SystemExit("--shards is for the TabArena / BeyondArena suites only.")
-    if args.uncertainty and args.suite in ARENA_SUITES:
+    if args.shards > 1 and args.suite not in (*ARENA_SUITES, ADBENCH_SUITE):
+        raise SystemExit("--shards is for the TabArena / BeyondArena / ADBench suites only.")
+    if args.uncertainty and args.suite in (*ARENA_SUITES, FEV_SUITE, ADBENCH_SUITE, CAUSAL_SUITE):
         # the arenas report only the official package's metrics; stop rather than silently ignore
         raise SystemExit("--uncertainty is for AMLB suites only (classification, regression, all).")
     if args.latency and args.suite not in ARENA_SUITES:
@@ -1099,9 +1256,316 @@ def main(argv: list[str] | None = None) -> None:
         with mlflow_run(use_mlflow):
             run_arena(args, out_dir, use_mlflow)
         return
+    if args.suite == FEV_SUITE:
+        with mlflow_run(use_mlflow):
+            run_fev(args, out_dir, use_mlflow)
+        return
+    if args.suite == ADBENCH_SUITE:
+        with mlflow_run(use_mlflow):
+            run_adbench(args, out_dir, use_mlflow)
+        return
+    if args.suite == CAUSAL_SUITE:
+        with mlflow_run(use_mlflow):
+            run_causal(args, out_dir, use_mlflow)
+        return
     tasks = selected_tasks(args)  # exit on bad task ids before creating a run
     with mlflow_run(use_mlflow):
         run_amlb(args, out_dir, tasks, use_mlflow)
+
+
+def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
+    """Forecasting on fev-bench (`tabsil_train.benchmarks.fevbench`): every window of each task,
+    our Seasonal Naive check, the comparison table and the Elo pools."""
+    from tabsil.forecast import TabSilForecaster
+    from tabsil_train.benchmarks import fevbench
+
+    if args.regressor_path is None:
+        raise SystemExit("--suite fev needs --regressor-path.")
+    tasks = [t.strip() for t in args.datasets.split(",") if t.strip()] if args.datasets else None
+    model, borders = load_model(args.regressor_path, "regression", out_dir / "checkpoints" / "fev")
+    context = {}
+    if args.max_context_length is not None:
+        context["max_context_length"] = args.max_context_length or None
+    forecaster = TabSilForecaster(
+        model,
+        borders,
+        n_estimators=args.n_estimators,
+        device=args.device,
+        random_state=args.seed,
+        **context,
+    )
+    print(
+        f"fev: tasks {tasks or list(fevbench.TASKS)}, windows {args.fev_windows or 'all'},"
+        f" context {forecaster.max_context_length}, device {args.device}",
+        flush=True,
+    )
+    if use_mlflow:
+        mlflow.log_params(
+            {
+                "suite": args.suite,
+                "regressor_path": args.regressor_path,
+                "seed": args.seed,
+                "n_estimators": args.n_estimators
+                or default_inference(model, "regression")["n_estimators"],
+                "max_context_length": forecaster.max_context_length,
+                "fev_windows": args.fev_windows or "all",
+                "fev_tasks": ",".join(tasks or fevbench.TASKS),
+            }
+        )
+    summary = fevbench.run(
+        forecaster, tasks, args.fev_windows, out_dir / FEV_SUITE, log=lambda s: print(s, flush=True)
+    )
+    table = pd.read_csv(out_dir / FEV_SUITE / "comparison.csv")
+    show = ["TabSil", "Seasonal Naive", "TabPFN-TS (v2)", "TabICL-TS", "Chronos-2"]
+    for metric in ("SQL", "MASE"):
+        wide = table.pivot(index="task", columns="method", values=metric)
+        print(f"\ntask mean {metric}:\n{wide[[m for m in show if m in wide]].round(4)}")
+    elo = pd.read_csv(out_dir / FEV_SUITE / "elo.csv")
+    print(f"\nElo (Seasonal Naive = 1000):\n{elo.round(1).to_string(index=False)}")
+    print(f"TabSil time {summary['tabsil_seconds']:.0f}s, total {summary['seconds']['total']:.0f}s")
+    if use_mlflow:
+        mlflow.log_metrics(
+            {
+                **{f"fev_elo_{k}": v["elo"] for k, v in summary["elo"].items()},
+                **{
+                    f"fev_{m}_{t}": v
+                    for m, by_task in summary["task_mean"].items()
+                    for t, v in by_task.items()
+                },
+                "fev_tabsil_seconds": summary["tabsil_seconds"],
+                "fev_imputed_pct": 100 * summary["imputed"],
+            }
+        )
+        for path in sorted((out_dir / FEV_SUITE).glob("*.csv")):
+            mlflow.log_artifact(str(path), f"eval/{FEV_SUITE}")
+        mlflow.log_artifact(str(out_dir / FEV_SUITE / "summary.json"), f"eval/{FEV_SUITE}")
+
+
+def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
+    """ADBench unsupervised outlier detection (`tabsil_train.benchmarks.adbench`). Ends with an
+    error if any (table, split, method) failed, after the others ran and the report was written."""
+    from tabsil_train.benchmarks import adbench
+
+    datasets = list(adbench.DATASETS) if args.datasets is None else args.datasets.split(",")
+    splits = args.adbench_splits.split(",")
+    methods = adbench.check_methods(args.adbench_methods.split(","))
+    if bad := [d for d in datasets if d not in adbench.DATASETS]:
+        raise SystemExit(f"tables not in ADBench's 12: {bad} (known: {list(adbench.DATASETS)})")
+    if bad := [s for s in splits if s not in adbench.SPLITS]:
+        raise SystemExit(f"splits are {list(adbench.SPLITS)}: {bad}")
+    scorers: dict = {"iforest": adbench.iforest_scores}
+    opts = {"iforest": "sklearn IsolationForest = pyod IForest defaults"}
+    params = {
+        "suite": args.suite,
+        "datasets": ",".join(datasets),
+        "splits": ",".join(splits),
+        "methods": ",".join(methods),
+    }
+    if any(adbench.base(m) == adbench.OURS for m in methods):
+        path = args.regressor_path or args.classifier_path
+        if not path:
+            raise SystemExit("adbench needs --regressor-path (a model serving both tasks).")
+        model, borders = load_model(path, "regression", out_dir / "checkpoints" / "regression")
+        if "classification" not in model.tasks:
+            raise SystemExit(f"{path} does not serve classification (categorical columns).")
+        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
+        scorers[adbench.OURS] = adbench.tabsil_scorer(
+            model, borders, args.n_permutations, n_estimators, args.device, 100 * args.seed
+        )
+        opts[adbench.OURS] = f"n_permutations={args.n_permutations} n_estimators={n_estimators}"
+        params |= {"model": path, "n_permutations": args.n_permutations,
+                   "n_estimators": n_estimators, "seed": args.seed}  # fmt: skip
+    print(f"adbench: {len(datasets)} tables x {splits} x {methods}, {args.device}", flush=True)
+    if use_mlflow:
+        mlflow.log_params(params)
+    suite_dir = out_dir / ADBENCH_SUITE
+    t0 = time.time()
+    if args.shards > 1:
+        # IsolationForest (seconds) here, TabSil's (table, split, method) jobs on the GPUs
+        cpu = [m for m in methods if adbench.base(m) != adbench.OURS]
+        _, failures = adbench.run(scorers, datasets, splits, cpu, suite_dir, opts)
+        gpu = [m for m in methods if adbench.base(m) == adbench.OURS]
+        failures += run_adbench_shards(args, datasets, splits, gpu, suite_dir, out_dir)
+        rows = adbench.read_results(suite_dir / "results.csv")
+    else:
+        rows, failures = adbench.run(scorers, datasets, splits, methods, suite_dir, opts)
+    summary = adbench.report(rows, suite_dir, [m for m in methods if m == adbench.OURS])
+    summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
+    (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+    print(json.dumps(summary, indent=1, default=str), flush=True)
+    for name in ("summary.csv", "elo.csv"):
+        if (suite_dir / name).exists():
+            print(f"\n{name}\n{pd.read_csv(suite_dir / name).round(4).to_string(index=False)}")
+    if use_mlflow:
+        metrics = {f"adbench_{k}": v for k, v in summary.items() if isinstance(v, int | float)}
+        metrics |= {f"adbench_elo_{k}": v for k, v in summary.get("elo", {}).items()}
+        mlflow.log_metrics({re.sub(r"[^\w\-. /]", "_", k): float(v) for k, v in metrics.items()})
+        mlflow.log_artifacts(str(suite_dir), ADBENCH_SUITE)
+    if failures:
+        raise SystemExit(f"adbench: {len(failures)} failed (table, split, method): {failures}")
+
+
+def run_adbench_shards(
+    args: argparse.Namespace,
+    datasets: list[str],
+    splits: list[str],
+    methods: list[str],
+    suite_dir: Path,
+    out_dir: Path,
+) -> list[dict]:
+    """ADBench `--shards`: one job per (table, split, method) not yet in `results.csv`, most
+    expensive first, each a worker process (`eval.py --suite adbench` on one GPU, without MLflow)
+    started as soon as a GPU is free. A finished job's rows are appended to `results.csv`; a failed
+    job is returned as a failure (with its log under `shards/`)."""
+    import subprocess
+
+    from tabsil_train.benchmarks import adbench
+    from tabsil_train.hub import download_artifact
+
+    done = adbench.read_results(suite_dir / "results.csv")
+    finished = set(zip(done.dataset, done.split, done.method, strict=True))
+    jobs = [
+        (d, s, m) for d in datasets for s in splits for m in methods if (d, s, m) not in finished
+    ]
+    jobs.sort(key=lambda j: -adbench.job_cost(j[0], j[2]))
+    n_gpus = torch.cuda.device_count()
+    if n_gpus and args.shards > n_gpus:
+        raise SystemExit(f"--shards {args.shards} exceeds the GPU count {n_gpus}.")
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    devices = visible.split(",") if visible else [str(i) for i in range(args.shards)]
+    path = args.regressor_path or args.classifier_path
+    if path.startswith("runs:/"):  # the parent's download, reused by every worker
+        path = str(download_artifact(path, out_dir / "checkpoints" / "regression"))
+    base = _strip_flags(
+        args.argv,
+        {
+            "--shards": 1,
+            "--datasets": 1,
+            "--adbench-splits": 1,
+            "--adbench-methods": 1,
+            "--out-dir": 1,
+            "--device": 1,
+            "--mlflow": 0,
+            "--regressor-path": 1,
+            "--classifier-path": 1,
+            "--heartbeat-minutes": 1,
+        },
+    )
+    # a worker sees one GPU (CUDA_VISIBLE_DEVICES), so cuda:<i> becomes cuda
+    device = "cuda" if args.device.startswith("cuda") else args.device
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_RUN")}
+    log_dir = suite_dir / "shards"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    running: dict[str, tuple] = {}  # device -> (process, job, job dir, start, log file)
+    failures: list[dict] = []
+    t0 = last = time.time()
+    print(f"adbench shards: {len(jobs)} jobs -> {len(devices)} GPUs", flush=True)
+    while jobs or running:
+        for dev in devices:
+            if dev not in running and jobs:
+                d, s, m = job = jobs.pop(0)
+                job_dir = log_dir / f"{d}_{s}_{m}"
+                cmd = [sys.executable, __file__, *base, "--regressor-path", path,
+                       "--datasets", d, "--adbench-splits", s, "--adbench-methods", m,
+                       "--device", device, "--out-dir", str(job_dir)]  # fmt: skip
+                log = open(log_dir / f"{d}_{s}_{m}.log", "w")  # noqa: SIM115 (closed when done)
+                proc = subprocess.Popen(
+                    cmd, stdout=log, stderr=subprocess.STDOUT,
+                    env={**env, "CUDA_VISIBLE_DEVICES": dev},
+                )  # fmt: skip
+                running[dev] = (proc, job, job_dir, time.time(), log)
+        time.sleep(5)
+        for dev, (proc, job, job_dir, start, log) in list(running.items()):
+            if proc.poll() is None:
+                continue
+            del running[dev]
+            log.close()
+            rows = adbench.read_results(job_dir / ADBENCH_SUITE / "results.csv")
+            if proc.returncode == 0 and len(rows):
+                path_out = suite_dir / "results.csv"
+                rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
+                print(f"adbench shards: {job} done in {_clock(time.time() - start)}", flush=True)
+            else:
+                d, s, m = job
+                failures.append(dict(dataset=d, split=s, method=m, error=f"exit {proc.returncode}"))
+                print(f"adbench shards: {job} FAILED (exit {proc.returncode})", flush=True)
+        if time.time() - last >= args.heartbeat_minutes * 60:
+            last = time.time()
+            busy = ", ".join(
+                f"GPU {dev}: {j[1]} {_clock(last - j[3])}" for dev, j in running.items()
+            )
+            print(f"adbench shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}", flush=True)
+    return failures
+
+
+def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
+    """Treatment effects on IHDP and ACIC 2016 (`tabsil_train.benchmarks.causal`). Ends with an
+    error if any (benchmark, realization, method) failed or has no result, after the others ran
+    and the summary was written."""
+    from tabsil_train.benchmarks import causal
+
+    benchmarks = args.datasets.split(",") if args.datasets else list(causal.BENCHMARKS)
+    if bad := [b for b in benchmarks if b not in causal.BENCHMARKS]:
+        raise SystemExit(f"causal benchmarks are {list(causal.BENCHMARKS)}: {bad}")
+    try:
+        plan = {b: causal.parse_realizations(args.causal_realizations, b) for b in benchmarks}
+        methods = causal.check_methods(
+            args.causal_methods.split(",") if args.causal_methods else list(causal.METHODS)
+        )
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    estimators: dict = {m: causal.econml_estimator(m) for m in methods if m in causal.ECONML}
+    opts = {m: "EconML defaults, GBM base models" for m in estimators}
+    params = {
+        "suite": args.suite,
+        "benchmarks": ",".join(benchmarks),
+        "realizations": args.causal_realizations or "all",
+        "methods": ",".join(methods),
+    }
+    if ours := [m for m in methods if m in causal.TABSIL]:
+        if not args.regressor_path:
+            raise SystemExit("--suite causal needs --regressor-path (a model serving both tasks).")
+        model, borders = load_model(
+            args.regressor_path, "regression", out_dir / "checkpoints" / "regression"
+        )
+        if "classification" not in model.tasks:
+            raise SystemExit(f"{args.regressor_path} does not serve classification (propensity).")
+        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
+        for m in ours:
+            estimators[m] = causal.tabsil_estimator(
+                model, borders, causal.TABSIL[m], n_estimators, args.device, 1000 * args.seed
+            )
+            opts[m] = f"model={args.regressor_path} n_estimators={n_estimators} seed={args.seed}"
+        params |= {"model": args.regressor_path, "n_estimators": n_estimators, "seed": args.seed}
+    print(f"causal: {plan if args.causal_realizations else benchmarks} x {methods}, "
+          f"{args.device}", flush=True)  # fmt: skip
+    if use_mlflow:
+        mlflow.log_params(params)
+    suite_dir = out_dir / CAUSAL_SUITE
+    t0 = time.time()
+    rows, failures = causal.run(
+        estimators, plan, methods, suite_dir, opts, log=lambda s: print(s, flush=True)
+    )
+    summary = causal.report(rows, suite_dir, plan, methods)
+    summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
+    (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+    table = pd.read_csv(suite_dir / "summary.csv")
+    print(f"\n{table.round(3).to_string(index=False)}", flush=True)
+    print(f"missing {summary['missing_pct']:.1f}%, imputed {summary['imputed_pct']:.1f}%, "
+          f"failures {len(failures)}, {summary['seconds']:.0f}s", flush=True)  # fmt: skip
+    if use_mlflow:
+        metrics = {
+            f"causal_{key.replace('/', '_')}_{m}": float(v)
+            for key, by_metric in summary["methods"].items()
+            for m, v in by_metric.items()
+        }
+        metrics |= {"causal_missing_pct": summary["missing_pct"], "causal_failures": len(failures)}
+        mlflow.log_metrics(metrics)
+        mlflow.log_artifacts(str(suite_dir), CAUSAL_SUITE)
+    if failures:
+        raise SystemExit(f"causal: {len(failures)} failed cells: {failures}")
+    if summary["missing_pct"]:
+        raise SystemExit(f"causal: {summary['missing_pct']:.1f}% of the planned cells are missing")
 
 
 def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: bool) -> None:

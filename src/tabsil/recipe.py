@@ -16,8 +16,11 @@ Structure (`STRUCTURE`):
   regression head with 999 quantiles
 
 Inference (`INFERENCE`, `default_inference`): `EnsembleClassifier` / `EnsembleRegressor` with 8
-`standard` preprocessing members, each seeing at most 768 original columns spread `balanced` over
-the members.
+preprocessing members that cycle through 4 numeric transforms (`standard`, `power`, `robust`,
+`quantile`), each seeing at most 768 original columns spread `balanced` over the members.
+Categorical columns with more than 20 categories also get a log count column
+(`categories="counts"`), and the classification softmax has temperature 1.0 (tabsil 0.1.1; 0.1.0
+used `standard` members only, no count columns and temperature 0.9).
 
 The non-size parts listed above (Fourier + ECDF encoder, gain-free q/k RMSNorm and the
 temperatures, target LayerNorm, pre-head MLP, interleaved stages, retrieval decoder, quantile
@@ -69,17 +72,24 @@ SUPPORTED_SIZE = {"max_train_rows": 1_000_000, "max_features": 6_000}
 # ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
-# 8 `standard` members, each with at most 768 original columns spread evenly over the members
-# (`balanced`). TabSil trains on tables with at most 100 features, and putting every column of a
-# table with thousands of columns into one member hurts a lot
+# Kumo-Tabular's round-robin numeric transforms (`tabsil.inference.preprocessing`)
+NUMERIC_CYCLE = ("standard", "power", "robust", "quantile")
+# 8 members cycling through the numeric transforms, each with at most 768 original columns spread
+# evenly over the members (`balanced`): TabSil trains on tables with at most 100 features, and
+# putting every column of a table with thousands of columns into one member hurts a lot. A log
+# count column for categorical columns with more than 20 categories, and softmax temperature 1.0
+# (classification). TabArena-Lite (the repository's harness, v1 weights): Elo 1726 with 0.1.0's
+# settings (`standard` members, codes only, temperature 0.9) and 1768 with these
 INFERENCE = {
     "n_estimators": {"classification": 8, "regression": 8},
-    "member_kinds": ("standard",),
+    "member_kinds": NUMERIC_CYCLE,
     "max_features_per_member": 768,
     "feature_subsampling": "balanced",
+    "categories": "counts",
+    "softmax_temperature": 1.0,
 }
 # Member kind presets selectable by name (`resolve_member_kinds`, e.g. `--member-kinds tabsil-v1`)
-MEMBER_KIND_PRESETS = {NAME: INFERENCE["member_kinds"]}
+MEMBER_KIND_PRESETS = {NAME: INFERENCE["member_kinds"], "numeric-cycle": NUMERIC_CYCLE}
 
 
 def resolve_member_kinds(value: str | tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -90,9 +100,10 @@ def resolve_member_kinds(value: str | tuple[str, ...] | list[str]) -> tuple[str,
 
 def default_inference(model: nn.Module, task: str) -> dict:
     """The inference settings of `model` for `task`: `{"n_estimators", "member_kinds",
-    "max_features_per_member", "feature_subsampling"}`, all arguments of `EnsembleClassifier` /
-    `EnsembleRegressor`. Settings saved with the weights (`model.inference_config`, the `inference`
-    entry of the Hub config.json) come first; missing keys use `INFERENCE`."""
+    "max_features_per_member", "feature_subsampling", "categories", "softmax_temperature"}`, all
+    arguments of `EnsembleClassifier` / `EnsembleRegressor` (regression ignores the temperature).
+    Settings saved with the weights (`model.inference_config`, the `inference` entry of the Hub
+    config.json) come first; missing keys use `INFERENCE`."""
     saved = getattr(model, "inference_config", None) or {}
     return {
         "n_estimators": int(saved.get("n_estimators", INFERENCE["n_estimators"][task])),
@@ -103,6 +114,10 @@ def default_inference(model: nn.Module, task: str) -> dict:
             "max_features_per_member", INFERENCE["max_features_per_member"]
         ),
         "feature_subsampling": saved.get("feature_subsampling", INFERENCE["feature_subsampling"]),
+        "categories": saved.get("categories", INFERENCE["categories"]),
+        "softmax_temperature": float(
+            saved.get("softmax_temperature", INFERENCE["softmax_temperature"])
+        ),
     }
 
 
@@ -117,11 +132,13 @@ def _inference_kwargs(model: nn.Module, task: str, n_estimators, member_kinds) -
 
 
 # The default Hub repo of `TabSilClassifier()` and `TabSilRegressor()` and the revision they
-# download: the Hub tag `v1` (the v1 weights), so a tabsil release keeps downloading the same
-# weights when `main` moves. One multitask model serves both tasks. A repo id passed by the caller
-# keeps its own revision (`aiden-jeon/tabsil` is `main`, `aiden-jeon/tabsil@stage2-10k` a branch)
+# download: the Hub tag `v1.1`, the v1 weights with tabsil 0.1.1's inference settings in config.json
+# (`INFERENCE`; tabsil 0.1.0 downloads the tag `v1`, the same weights with its own settings), so a
+# tabsil release keeps downloading the same weights and settings when `main` moves. One multitask
+# model serves both tasks. A repo id passed by the caller keeps its own revision
+# (`aiden-jeon/tabsil` is `main`, `aiden-jeon/tabsil@stage2-10k` a branch)
 HUB_REPO = "aiden-jeon/tabsil"
-HUB_REVISION = "v1"
+HUB_REVISION = "v1.1"
 HUB_DEFAULT = f"{HUB_REPO}@{HUB_REVISION}"
 HUB_REPOS = {"classification": HUB_DEFAULT, "regression": HUB_DEFAULT}
 
