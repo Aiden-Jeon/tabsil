@@ -20,6 +20,17 @@ OOB predictions are no better than the mean (bootstrap p ≥ 0.05; dataset filte
 hang, and the mlp/tree prior `SCMPrior` only filters the first 6). Per the paper, about 35% of
 classification and 25% of regression datasets are filtered in stage 1, and training converges
 better. Off by default.
+
+Two TabICL `PriorConfig` corrections, both off by default (TabICLv2 trained without them, and so
+did TabSil v1). Both change y as well as x:
+
+- `corrected_num_converters` (`use_corrected_num_converters`): a numeric node whose converter
+  draws the Kumaraswamy warp passes the warped value to the dataset and the raw value to its
+  children. Without it the two are swapped (TabICL: "this is the wrong version, but it was used
+  in the experiments"), so no dataset column is ever Kumaraswamy-warped. Kumo-Tabular's SCM (sdm
+  `DistributionalMixtureConverter`) warps the dataset value.
+- `corrected_cat_sizes` (`use_corrected_cat_sizes`): categorical columns get up to 100 categories
+  (a per-table limit, log-uniform) instead of at most 9. Kumo-Tabular draws up to 200.
 """
 
 from __future__ import annotations
@@ -77,6 +88,8 @@ class GraphSCM:
         seed: int = 0,
         *,
         filter_unpredictable: bool = False,
+        corrected_num_converters: bool = False,
+        corrected_cat_sizes: bool = False,
     ) -> None:
         self.regression = task == "regression"
         self.filter_unpredictable = filter_unpredictable
@@ -86,6 +99,8 @@ class GraphSCM:
         self._config = prior_config(
             filter_unpredictable_graphs=filter_unpredictable,
             filter_unpredictable_datasets=filter_unpredictable,
+            use_corrected_num_converters=corrected_num_converters,
+            use_corrected_cat_sizes=corrected_cat_sizes,
         )
 
     def __call__(
