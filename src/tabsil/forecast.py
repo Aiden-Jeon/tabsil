@@ -169,20 +169,25 @@ def time_features(
 # Quantiles of the bucket distribution
 # ---------------------------------------------------------------------------
 def bucket_quantiles(
-    log_probs: torch.Tensor | np.ndarray, borders: torch.Tensor | np.ndarray, levels: Sequence
+    log_probs: torch.Tensor | np.ndarray, borders: torch.Tensor | np.ndarray, levels: Any
 ) -> np.ndarray:
-    """Quantiles (n, len(levels)) of bucket distributions: log probabilities (n, K) on `borders`
-    (K + 1,), with the density uniform within each bucket (the CDF is linear between borders)."""
+    """Quantiles (n, m) of bucket distributions: log probabilities (n, K) on `borders`
+    (K + 1,), with the density uniform within each bucket (the CDF is linear between borders).
+    `levels` is m levels shared by every row, or an (n, m) array of levels per row (uniform
+    levels give draws: `tabsil.unsupervised.NumericConditional.sample`). A level q falls in the
+    bucket k with cdf[k] < q <= cdf[k + 1], so a bucket without probability is never chosen."""
     probs = np.exp(np.asarray(log_probs, dtype=np.float64))
     probs = probs / probs.sum(-1, keepdims=True)
     b = np.asarray(borders, dtype=np.float64)
     cdf = np.concatenate([np.zeros((len(probs), 1)), np.cumsum(probs, -1)], axis=-1)
     cdf[:, -1] = 1.0
-    out = np.empty((len(probs), len(levels)))
-    for j, q in enumerate(levels):
-        # bucket k holds the quantile: cdf[k] < q <= cdf[k + 1]
-        k = np.clip((cdf < q).sum(-1) - 1, 0, len(b) - 2)
-        rows = np.arange(len(probs))
+    levels = np.asarray(levels, dtype=np.float64)
+    per_row = levels.ndim == 2
+    rows = np.arange(len(probs))
+    out = np.empty((len(probs), levels.shape[-1]))
+    for j in range(levels.shape[-1]):
+        q = levels[:, j] if per_row else np.full(len(probs), levels[j])
+        k = np.clip((cdf < q[:, None]).sum(-1) - 1, 0, len(b) - 2)
         p = probs[rows, k]
         share = np.where(p > 0, (q - cdf[rows, k]) / np.where(p > 0, p, 1.0), 0.0)
         out[:, j] = b[k] + np.clip(share, 0.0, 1.0) * (b[k + 1] - b[k])

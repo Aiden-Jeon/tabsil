@@ -10,8 +10,8 @@ the part they implement (generic nouns); TabSil's numbers and the combination of
 - `hub`: save to and load from the Hugging Face Hub format (`save_pretrained`, `from_pretrained`)
 - `recipe`: TabSil's structure and inference defaults (`TabSilClassifier`, `TabSilRegressor`)
 - `forecast`: time series forecasting with the regression model (`TabSilForecaster`)
-- `unsupervised`: per-column conditional distributions, row log densities and outlier scores
-  (`TabSilUnsupervised`)
+- `unsupervised`: per-column conditional distributions, row log densities, outlier scores and
+  imputation (`TabSilUnsupervised`)
 - `causal`: treatment effects with TabSil base learners (S/T/X/DR meta-learners, `TabSilCATE`)
 - `utils`: device and seed helpers
 
