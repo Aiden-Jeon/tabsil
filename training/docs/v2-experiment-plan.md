@@ -1,6 +1,6 @@
 # v2 experiment plan
 
-Status: plan. No run of this plan has started, and nothing was trained or evaluated for this document. It re-checks [v2-task-priors.md](v2-task-priors.md) and [v2-scaling.md](v2-scaling.md) against MLflow, the code and the primary sources (2026-11-26), and replaces their experiment plans. Every run below needs approval before it starts.
+Status: plan, in progress. Results are in [v2-experiment-results.md](v2-experiment-results.md) (phase 0 done 2026-11-26). Nothing was trained or evaluated for this document itself. It re-checks [v2-task-priors.md](v2-task-priors.md) and [v2-scaling.md](v2-scaling.md) against MLflow, the code and the primary sources (2026-11-26), and replaces their experiment plans. Every run below needs approval before it starts.
 
 ## Summary
 
@@ -145,7 +145,7 @@ Checked in `NVIDIA/structured-data-models` (`train/kumo/tabular/`) and the paper
 - **Statistic.** G, as in §1.1, between an arm and its control, on the same splits and the same evaluation seed. Splits are averaged within a dataset first. It is reported overall, for classification and for regression, with a bootstrap CI over datasets (2,000 rounds), the Wilcoxon signed-rank p and the count of datasets better and worse. Elo is reported but decides nothing.
 - **Data.**
   - TabArena-Lite with 3 splits per dataset (153 splits).
-  - A development suite outside TabArena: the AMLB and CTR23 datasets of `--suite all` (29 + 28, 10 folds), without those that are also among TabArena's 51. A name match over the full AMLB lists found 10 classification and 3 regression overlaps; the exact list for these 57 is made with the code change.
+  - A development suite outside TabArena (`--suite dev`): the AMLB and CTR23 datasets of `--suite all` (29 + 28, 10 folds), without those that are also among TabArena's 51. Of these 57, 9 are in TabArena (6 classification and 3 regression), which leaves 48: 23 classification and 25 regression. An earlier name match over the full AMLB lists had found 10 classification and 3 regression overlaps. The list for these 57 and its check are in [v2-experiment-results.md](v2-experiment-results.md) (0.5).
   - Decisions use both, pooled and apart. The final claim is made on the full TabArena with the official 8-fold protocol, and on BeyondArena, which no decision has used.
 - **Stage-1 checkpoints** are evaluated with `--subsample-train-rows 1024`. Stage 1 trains on contexts of 307 to 922 rows. TabICLv2 ran its ablations the same way, on 60 datasets cut to 2,048 training rows.
 - **Checkpoints after stage 2** use the full context.

@@ -6,7 +6,7 @@
 #     --override "env_variables.TABSIL_EXTRA_ARGS=--classifier-path runs:/<run_id>/checkpoints/step_0005000.pt \
 #       --regressor-path runs:/<run_id>/checkpoints/step_0005000.pt"
 # A checkpoint is a file, a runs:/ URI or a Hub repo (hf://owner/name). TABSIL_SUITE picks the
-# suite (all, classification, regression); `--uncertainty` in TABSIL_EXTRA_ARGS adds the
+# suite (all, classification, regression, dev); `--uncertainty` in TABSIL_EXTRA_ARGS adds the
 # predictive distribution metrics.
 #
 # ADBench unsupervised outlier detection (12 tables x 3 seeds, `--suite adbench`): TabSil's

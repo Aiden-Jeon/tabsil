@@ -71,9 +71,11 @@ def _method_key(method: str) -> str:
 class Suite:
     """One benchmark: `tabarena` context, splits to evaluate, matching public leaderboard results.
 
-    `subset` is the context's subset expression (e.g. `["lite"]`, `["core2k"]`), `public_csv` is
-    a path under `PUBLIC_LEADERBOARD`. `breakdown` gives per-subset scores
-    {name: (subset expression, public CSV)}.
+    `subset` is the context's subset expression (e.g. `["lite"]`, `["core2k"]`; empty: all
+    splits), `public_csv` is a path under `PUBLIC_LEADERBOARD`. `breakdown` gives per-subset
+    scores {name: (subset expression, public CSV)}. `splits` keeps only the first `splits` splits
+    of each dataset (split index `n_folds * repeat + fold` below it, so 3 is repeat 0, folds 0-2
+    on TabArena), for this method and for every baseline it is scored against (`compare(folds=)`).
     """
 
     name: str
@@ -81,6 +83,11 @@ class Suite:
     subset: tuple[str, ...]
     public_csv: str
     breakdown: dict[str, tuple[tuple[str, ...], str]] = field(default_factory=dict)
+    splits: int | None = None
+
+    def folds(self) -> list[int] | None:
+        """The split indices to score (`compare(folds=)`), None for all."""
+        return None if self.splits is None else list(range(self.splits))
 
 
 @dataclass(frozen=True)
@@ -134,7 +141,10 @@ def skip_reason(limits: Limits, row: pd.Series) -> str | None:
 def task_grid(context, suite: Suite, limits: Limits) -> pd.DataFrame:
     """The suite's splits (dataset, fold, repeat, sizes) and why each is skipped (`skip_reason`)."""
     grid = context.task_metadata_collection.task_grid()
-    grid = grid[_subset_mask(context, grid, suite.subset)].reset_index(drop=True)
+    mask = _subset_mask(context, grid, suite.subset)
+    if suite.splits is not None:
+        mask &= grid["split"] < suite.splits
+    grid = grid[mask].reset_index(drop=True)
     grid["skip_reason"] = [skip_reason(limits, row) for _, row in grid.iterrows()]
     return grid
 
@@ -226,7 +236,7 @@ def run(
         experiments = system.experiments(suite, method, key)
         jobs = context.build_jobs(
             experiments,
-            subset=list(suite.subset),
+            subset=list(suite.subset) or None,
             dataset_names=sorted(todo["dataset"].unique()),
         )
         wanted = set(zip(todo["dataset"], todo["fold"], todo["repeat"], strict=True))
@@ -260,7 +270,8 @@ def run(
         context.compare,
         log,
         output_dir=None,
-        subset=list(suite.subset),
+        subset=list(suite.subset) or None,
+        folds=suite.folds(),
         ta_results=pool,
         return_results=True,
     )
@@ -317,7 +328,9 @@ def run(
     }
     if breakdown and name:
         for label, (subset, public_csv) in suite.breakdown.items():
-            part = _quiet(_breakdown, log, context, pool, subset, name, public_csv, sizes)
+            part = _quiet(
+                _breakdown, log, context, pool, subset, name, public_csv, sizes, suite.folds()
+            )
             if part is None:
                 continue
             board, scores = part
@@ -636,10 +649,15 @@ def _breakdown(
     name: str,
     public_csv: str | None,
     sizes: pd.DataFrame,
+    folds: list[int] | None = None,
 ):
     try:
         board, per_split = context.compare(
-            output_dir=None, subset=list(subset), ta_results=pool, return_results=True
+            output_dir=None,
+            subset=list(subset) or None,
+            folds=folds,
+            ta_results=pool,
+            return_results=True,
         )
     except Exception as e:  # aggregation can fail when the subset has too few datasets
         print(f"subset {subset}: aggregation failed ({e})", file=sys.stderr, flush=True)

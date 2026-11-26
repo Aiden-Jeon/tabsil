@@ -249,12 +249,15 @@ def test_eval_seed_changes_members_and_the_arena_fingerprint(monkeypatch, tmp_pa
     assert estimator.random_state == 3
     # seed 0 (the default) is left out of the fingerprint, another seed is recorded
     paths = {"classification": "unused"}
-    factories = {"classification": types.SimpleNamespace(model=model, n_estimators=8)}
 
     def fingerprint(argv):
-        return json.loads(script.arena_fingerprint(script.parse_args(argv), paths, factories))
+        args = script.parse_args([*argv, "--classifier-path", "unused", "--out-dir", str(tmp_path)])
+        factories = {"classification": script.make_estimator_factory("classification", args)}
+        return json.loads(script.arena_fingerprint(args, paths, factories))
 
-    assert fingerprint(["--seed", "0"]) == {"paths": paths, "n_estimators": {"classification": 8}}
+    default = fingerprint(["--seed", "0"])
+    assert "seed" not in default
+    assert default["paths"] == paths and default["n_estimators"] == {"classification": 8}
     assert fingerprint(["--seed", "3"])["seed"] == 3
     assert fingerprint(["--max-features-per-member", "6000"])["max_features_per_member"] == 6000
 
