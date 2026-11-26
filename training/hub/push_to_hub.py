@@ -8,8 +8,10 @@ The checkpoint is a TabSil multitask checkpoint (`column_row_transformer`, one s
 classification and regression), anything `tabsil_train.hub.load_model` reads. Both tasks are
 uploaded together: the regression borders go into the same `model.safetensors`, and the inference
 settings of the two tasks must be equal so that `config.json` holds one `inference` entry
-(`tabsil.recipe.default_inference`: 8 `standard` members, at most 768 columns per member,
-`balanced`). Other model settings are in the `model` entry of `config.json`.
+(`tabsil.recipe.default_inference`: 8 members cycling through the numeric kinds, at most 768
+columns per member, `balanced`, count columns for many-category columns, softmax temperature 1.0).
+To give already published weights a release's settings without new weights, use
+`training/hub/tag_inference.py`. Other model settings are in the `model` entry of `config.json`.
 
 The checkpoint is converted to `model.safetensors` + `config.json` and uploaded with a model card.
 The card is given by `--model-card`, or else found at `training/hub/<name>/README.md` from the repo

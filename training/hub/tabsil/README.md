@@ -29,7 +29,13 @@ TabSil combines published designs (TabPFN-3.5, Kumo-Tabular, TabICLv2; see Ackno
   - **Attention temperature** (Kumo-Tabular): gain-free q/k RMSNorm × a learned log-scale (`logscale`; the row stage uses `gated_logscale`, whose query gate follows TabICLv2's QASSMax). No logit soft-cap.
   - **Outputs:** classification uses a many-class retrieval decoder (TabPFN-3.5). Regression predicts 999 quantiles trained with the pinball loss (Kumo-Tabular), turned into a distribution over 5,000 buckets for prediction. The target encoders and a pre-head MLP are per task; everything else is shared.
 - Inputs: up to 160 classes, 1,000,000 training rows and 6,000 features (the limits TabSil is evaluated with, the same as TabPFN-3.5's). Training covered up to 60,000 rows and 100 features.
-- Inference: an ensemble of 8 members with standard scaling. Each member shuffles features and classes and adds a row-identifier column: random for the training rows, a hash of the row's values for test rows (so a test row's prediction does not depend on the other test rows). Categorical columns with at most 20 categories are one-hot encoded, as long as the table stays within 100 columns. Tables with more than 768 columns give each member 768 of them, split so that every column is used about equally often (`balanced`). Classification averages the members' softmax at temperature 0.9; in regression, half of the members also power-transform the target. The member count, kinds and column cap ship in `config.json` (`inference`).
+- Inference (tabsil 0.1.1): an ensemble of 8 members. Each member shuffles features and classes and adds a row-identifier column: random for the training rows, a hash of the row's values for test rows (so a test row's prediction does not depend on the other test rows).
+  - Numeric columns: the members cycle through four transforms, following Kumo-Tabular: the values as they are, Yeo-Johnson, robust scaling (median and interquartile range, squashed smoothly into ±3) and rank-Gauss.
+  - Categorical columns: those with at most 20 categories are one-hot encoded, as long as the table stays within 100 columns. Those with more also get a column of log(1 + training-row count of the category).
+  - Wide tables: tables with more than 768 columns give each member 768 of them, split so that every column is used about equally often (`balanced`).
+  - Outputs: classification averages the members' softmax at temperature 1.0. In regression, half of the members also power-transform the target, and each numeric transform meets both target forms.
+  - Settings: the member count, kinds, column cap, category counts and temperature ship in `config.json` (`inference`). The tag `v1.1` has these settings; `v1` has tabsil 0.1.0's: standard members only, no count columns, temperature 0.9.
+  - Speed: `fit` runs the training rows through the model once and keeps what the test rows read from them, so `predict` runs only the test rows.
 
 ## Training
 
@@ -46,7 +52,7 @@ In every stage, tables have at most 100 features (fewer for the longest tables).
 What differs from the TabICLv2 scripts (our choices):
 
 - **One multitask model, batch 256.** TabICLv2 trains separate classification and regression models with batch 64.
-- **Shorter stages.** The recipe in `tabsil_train.recipe` keeps the per-task table count of the scripts (250k / 20k / 5k steps). These weights were trained for 150k / 10k / 2k steps (`--steps`). A separate 250k stage-1 run did not do better than the 150k run: TabArena-Lite 1423 at 225k vs 1429 at 150k (the repository's harness without bagging; see TabArena-Lite), and AMLB classification 0.9383 in both (measured before the tabsil 0.1.0 inference change, which moved the 150k Elo to 1431). In both runs the AMLB regression ratio rose during stage 1 (to 1.137 at 225k and 1.136 at 150k); stage 2 brings it back below 1.
+- **Shorter stages.** The recipe in `tabsil_train.recipe` keeps the per-task table count of the scripts (250k / 20k / 5k steps). These weights were trained for 150k / 10k / 2k steps (`--steps`). A separate 250k stage-1 run did not do better than the 150k run: TabArena-Lite 1423 at 225k vs 1429 at 150k (the repository's harness without bagging; see TabArena-Lite), and AMLB classification 0.9383 in both (measured before the tabsil 0.1.0 inference change, which moved the 150k Elo to 1431; with tabsil 0.1.1's inference it is 1444). In both runs the AMLB regression ratio rose during stage 1 (to 1.137 at 225k and 1.136 at 150k); stage 2 brings it back below 1.
 - **Activation checkpointing** for tables longer than 2,048 rows in stages 2 and 3, to fit long tables in GPU memory. It changes memory and speed only.
 
 Compute: 32×H100 for about 30 hours (stage 1), 9.6 hours (stage 2) and 9.0 hours (stage 3), about 1,550 H100-hours. This does not count the 250k stage-1 run or shorter experiments.
@@ -65,17 +71,19 @@ The 29 AMLB classification and 28 regression datasets from the TabPFN v2 paper, 
 
 | Checkpoint | Mean ROC AUC | RMSE ratio (geo. mean) |
 | --- | --- | --- |
-| Stage 1 (150k steps) | 0.9383 | 1.136 |
-| Stage 2 (+10k steps) | 0.9390 | 0.997 |
-| **Stage 3 (+2k steps, this model)** | **0.9390** | **0.996** |
+| Stage 1 (150k steps) | 0.9380 | 1.138 |
+| Stage 2 (+10k steps) | 0.9387 | 0.994 |
+| **Stage 3 (+2k steps, this model)** | **0.9387** | **0.992** |
 | minipfn TabPFN-3.5 | 0.9371 | 1.005 |
 | TabPFN v2 paper | 0.9323 | 1 |
 
-Classification: this model beats the paper on 25 of 29 datasets, ties on 1 (car, 1.000) and is below on 3: credit-g (−0.005), cmc (−0.003) and Australian (−0.001).
+The TabSil rows use tabsil 0.1.1's inference. Classification: this model beats the paper on 25 of 29 datasets, ties on 1 (car, 1.000) and is below on 3: credit-g (−0.006), cmc (−0.003) and Australian (−0.001).
 
-Regression: the median RMSE ratio is 0.982. 21 of 28 datasets are better than the paper and 25 of 28 are within 1.1×. The worst are socmob (1.22), auction_verification (1.21) and energy_efficiency (1.18); the best are SAT11-HAND-runtime-regression (0.87), geographical_origin_of_music (0.92) and cpu_activity (0.92).
+Regression: the median RMSE ratio is 0.982. 21 of 28 datasets are better than the paper and 25 of 28 are within 1.1×. The worst are auction_verification (1.22), energy_efficiency (1.18) and socmob (1.17); the best are SAT11-HAND-runtime-regression (0.87), cpu_activity (0.92) and geographical_origin_of_music (0.93).
 
-Most of the regression gain came from stage 2, the first stage with long tables: the ratio fell from 1.136 to 0.997. Stage 3 changed little on this suite.
+Most of the regression gain came from stage 2, the first stage with long tables: the ratio fell from 1.138 to 0.994. Stage 3 changed little on this suite.
+
+With tabsil 0.1.0's inference (standard members only, no category counts, temperature 0.9) the same weights scored 0.9390 / 0.996 (stage 3), 0.9390 / 0.997 (stage 2) and 0.9383 / 1.136 (stage 1). 0.1.1's inference is 0.0003 lower in mean ROC AUC on every stage and better in regression on stages 2 and 3.
 
 ### TabArena-Lite
 
@@ -104,7 +112,12 @@ Most of the regression gain came from stage 2, the first stage with long tables:
 
 By problem type, from the same results scored on each subset (TabArena's `compare` with `subset="classification"` or `"regression"`; methods without results on a subset drop out), this model's Elo is 1722 (+118/−86, 19th of 119) on the 38 classification datasets and 2123 (+216/−100, 18th of 116) on the 13 regression datasets.
 
-The stage numbers come from the repository's own harness (`training/scripts/eval.py --suite tabarena-lite`), not the official protocol: each split is fit once without bagging, and Elo is computed against the public leaderboard v0.1.9.12 pool plus the checkpoint. It is a quicker check for comparing checkpoints (this model scored 1726 there, against 1755 above). By stage, the Elo was 1431 after stage 1, 1727 after stage 2 and 1726 after stage 3; almost all of the stage-2 gain is regression (1188 → 2074). minipfn TabPFN-3.5 scored 1563 with the same harness (measured in a separate run, so against a slightly different pool).
+The official-protocol results above are tabsil 0.1.0's. tabsil 0.1.1 changed the inference defaults (see Inference); its official-protocol run follows the release.
+
+The numbers below come from the repository's own harness (`training/scripts/eval.py --suite tabarena-lite`), not the official protocol: each split is fit once without bagging, and Elo is computed against the public leaderboard v0.1.9.12 pool plus the checkpoint. It is a quicker check for comparing checkpoints and inference settings.
+
+- **Inference settings:** with tabsil 0.1.1's inference this model scores 1768 (+94/−86, 9th of 99), against 1726 (11th of 99) with 0.1.0's and 1755 with 0.1.0 under the official protocol above. By problem type that is classification 1741 (0.1.0: 1698) and regression 2130 (2080). Per split, 31 of 51 errors are lower and 20 higher. Median times are 0.23 s per 1K training rows to fit and 0.16 s per 1K test rows to predict, against 0.014 and 0.81 with 0.1.0; 0.1.1's fit runs the training rows through the model, so its predictions skip them.
+- **Stages (0.1.1's inference):** the Elo was 1444 after stage 1, 1762 after stage 2 and 1768 after stage 3. Almost all of the stage-2 gain is regression (1189 → 2122). With 0.1.0's inference the stages scored 1431, 1727 and 1726. minipfn TabPFN-3.5 scored 1563 with the same harness (measured in a separate run, so against a slightly different pool).
 
 ### BeyondArena
 
@@ -126,7 +139,7 @@ uv add tabsil   # or: pip install tabsil
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor
 
-# both download aiden-jeon/tabsil at the tag v1 (one multitask model)
+# both download aiden-jeon/tabsil at the tag v1.1 (one multitask model)
 # x_train can be a pandas DataFrame with categorical columns
 clf = TabSilClassifier(device="cuda").fit(x_train, y_train)
 proba = clf.predict_proba(x_test)  # (n_test, n_classes), columns in clf.classes_ order
@@ -140,32 +153,32 @@ Each class above loads its own copy of the 222M weights. To use both tasks with 
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor, from_pretrained
 
-model, borders = from_pretrained("aiden-jeon/tabsil@v1")
+model, borders = from_pretrained("aiden-jeon/tabsil@v1.1")
 clf = TabSilClassifier(model, device="cuda")
 reg = TabSilRegressor(model, borders, device="cuda")
 ```
 
-`fit` does not train weights. It fits each ensemble member's preprocessing on the training rows, which then serve as context at prediction time. To reproduce the benchmark (from a clone, `uv sync --all-packages`; downloads the OpenML tasks):
+`fit` does not train weights. It fits each ensemble member's preprocessing on the training rows and runs them through the model once; prediction reads that context and runs only the test rows. To reproduce the benchmark (from a clone, `uv sync --all-packages`; downloads the OpenML tasks):
 
 ```bash
 uv run --package tabsil-train python training/scripts/eval.py --suite all \
-  --classifier-path hf://aiden-jeon/tabsil@v1 \
-  --regressor-path hf://aiden-jeon/tabsil@v1
+  --classifier-path hf://aiden-jeon/tabsil@v1.1 \
+  --regressor-path hf://aiden-jeon/tabsil@v1.1
 ```
 
 `--suite tabarena-lite` and `--suite beyondarena` run the arena suites (they need the `arena` extra; see the repository README). They fit each split once without bagging, a quicker check; the official-protocol TabArena-Lite result above is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)).
 
 ## Intermediate checkpoints
 
-The v1 weights on `main` are also tagged `v1`; `TabSilClassifier()` and `TabSilRegressor()` (tabsil ≥ 0.1.0) download that tag, so they keep the same weights if `main` changes. The weights at the end of stages 1 and 2 are kept as branches of this repo. Each branch holds the weights, config and a short README that points back here; this card on `main` describes all of them.
+The v1 weights on `main` are also tagged `v1`. tabsil 0.1.0's `TabSilClassifier()` and `TabSilRegressor()` download that tag; tabsil 0.1.1's download `v1.1`, the same weights with 0.1.1's inference settings in `config.json`. So both keep the same weights if `main` changes. The weights at the end of stages 1 and 2 are kept as branches of this repo. Each branch holds the weights, config and a short README that points back here; this card on `main` describes all of them.
 
 | Branch | Weights | Mean ROC AUC | RMSE ratio | TabArena-Lite Elo (harness) |
 | --- | --- | --- | --- | --- |
-| `stage1-150k` | `sha256:46ff015e71f8` | 0.9383 | 1.136 | 1431 |
-| `stage2-10k` | `sha256:f7d460f62732` | 0.9390 | 0.997 | 1727 |
-| `main` (stage 3, +2k) | `sha256:e03c8c32849a` | 0.9390 | 0.996 | 1726 |
+| `stage1-150k` | `sha256:46ff015e71f8` | 0.9380 | 1.138 | 1444 |
+| `stage2-10k` | `sha256:f7d460f62732` | 0.9387 | 0.994 | 1762 |
+| `main` (stage 3, +2k) | `sha256:e03c8c32849a` | 0.9387 | 0.992 | 1768 |
 
-The Elo column is the repository's harness without bagging, for comparing the stages (see TabArena-Lite); with the official protocol, `main` scores 1755.
+The scores use tabsil 0.1.1's inference (see TabArena-Lite and the TabPFN v2 benchmark for 0.1.0's). The Elo column is the repository's harness without bagging, for comparing the stages; with the official protocol and tabsil 0.1.0, `main` scores 1755.
 
 ```python
 clf = TabSilClassifier("aiden-jeon/tabsil@stage2-10k")

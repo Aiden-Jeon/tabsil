@@ -79,7 +79,7 @@ NUMERIC_CYCLE = ("standard", "power", "robust", "quantile")
 # putting every column of a table with thousands of columns into one member hurts a lot. A log
 # count column for categorical columns with more than 20 categories, and softmax temperature 1.0
 # (classification). TabArena-Lite (the repository's harness, v1 weights): Elo 1726 with 0.1.0's
-# settings (`standard` members, codes only, temperature 0.9) and NEW_ELO with these
+# settings (`standard` members, codes only, temperature 0.9) and 1768 with these
 INFERENCE = {
     "n_estimators": {"classification": 8, "regression": 8},
     "member_kinds": NUMERIC_CYCLE,
