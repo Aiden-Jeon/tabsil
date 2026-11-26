@@ -380,31 +380,43 @@ def test_tabsil_inference_defaults_come_from_the_model():
     model = _tiny_model()
     expected = {
         "n_estimators": 8,
-        "member_kinds": ("standard",),
+        "member_kinds": ("standard", "power", "robust", "quantile"),
         "max_features_per_member": 768,
         "feature_subsampling": "balanced",
+        "categories": "counts",
+        "softmax_temperature": 1.0,
     }
     # 1) without saved settings: TabSil's defaults, for both tasks
     assert default_inference(model, "classification") == expected
     assert default_inference(_tiny_model(), "regression") == expected
     clf = TabSilClassifier(model).fit(X[:60], y[:60])
-    assert len(clf.preprocessors_) == 8 and clf.member_kinds == ("standard",)
+    assert len(clf.preprocessors_) == 8 and clf.member_kinds == (
+        "standard",
+        "power",
+        "robust",
+        "quantile",
+    )
     assert clf.max_features_per_member == 768 and clf.feature_subsampling == "balanced"
+    assert clf.categories == "counts" and clf.softmax_temperature == 1.0
     with pytest.raises(ValueError):
-        TabSilClassifier(_tiny_model(), member_kinds=("quantile",))
+        TabSilClassifier(_tiny_model(), member_kinds=("rank",))
     # 2) settings saved with the weights (the Hub config.json `inference`) come first
     model.inference_config = {
         "member_kinds": ["standard"],
         "n_estimators": 3,
         "max_features_per_member": None,
         "feature_subsampling": "random",
+        "categories": "codes",
+        "softmax_temperature": 0.9,
     }
     clf = TabSilClassifier(model)
     assert clf.member_kinds == ("standard",) and clf.n_estimators == 3
     assert clf.max_features_per_member is None and clf.feature_subsampling == "random"
+    assert clf.categories == "codes" and clf.softmax_temperature == 0.9
     # 3) arguments come before both (experiments)
-    clf = TabSilClassifier(model, member_kinds="tabsil-v1", n_estimators=2)
-    assert clf.member_kinds == ("standard",) and clf.n_estimators == 2
+    clf = TabSilClassifier(model, member_kinds="tabsil-v1", n_estimators=2, categories="counts")
+    assert clf.member_kinds == ("standard", "power", "robust", "quantile") and clf.n_estimators == 2
+    assert clf.categories == "counts"
     clf = TabSilClassifier(_tiny_model(), max_features_per_member=4)
     assert clf.max_features_per_member == 4
 
@@ -417,10 +429,12 @@ def test_tabsil_regressor_needs_borders_with_a_model():
 def test_member_kinds_parse_names_and_lists():
     from tabsil.recipe import resolve_member_kinds
 
-    assert resolve_member_kinds("tabsil-v1") == ("standard",)
+    assert resolve_member_kinds("tabsil-v1") == ("standard", "power", "robust", "quantile")
     assert resolve_member_kinds("standard") == ("standard",)
     assert resolve_member_kinds(["standard", "standard"]) == ("standard", "standard")
-    for bad in ("", "v9", "quantile", "standard,power"):
+    assert resolve_member_kinds("numeric-cycle") == ("standard", "power", "robust", "quantile")
+    assert resolve_member_kinds("standard,power") == ("standard", "power")
+    for bad in ("", "v9", "rank", "standard,yeo"):
         with pytest.raises(ValueError, match="member_kinds"):
             resolve_member_kinds(bad)
 
@@ -668,6 +682,104 @@ def test_train_context_predictions_equal_the_joint_forward_on_cuda():
     np.testing.assert_allclose(got, want, atol=5e-3, rtol=0)
 
 
+def _option_table():
+    rng = np.random.default_rng(2)
+    X = np.column_stack(
+        [
+            rng.lognormal(size=300),  # skewed numeric
+            rng.normal(size=300),
+            rng.integers(0, 40, 300),  # 40 categories: stays codes
+            rng.integers(0, 3, 300),  # 3 categories: one-hot
+        ]
+    ).astype(float)
+    X[rng.random(X.shape) < 0.1] = np.nan
+    return X
+
+
+@pytest.mark.parametrize("kind", ["power", "robust", "quantile"])
+def test_numeric_member_kinds_are_monotone_and_keep_missing_values(kind):
+    X = _option_table()
+    base = MemberPreprocessor(Member(None, False, seed=0), [2, 3], 100).fit(X)
+    prep = MemberPreprocessor(Member(None, False, seed=0, kind=kind), [2, 3], 100).fit(X)
+    want, got = base._features(base._clip(X)), prep._features(prep._clip(X))
+    assert got.shape == want.shape
+    assert np.array_equal(np.isnan(got), np.isnan(want))
+    np.testing.assert_array_equal(got[:, 2:], want[:, 2:])  # code and one-hot columns unchanged
+    for j in (0, 1):  # numeric columns: an increasing map of the original values
+        ok = np.isfinite(want[:, j])
+        order = np.argsort(want[ok, j], kind="stable")
+        assert (np.diff(got[ok, j][order]) >= -1e-12).all()
+        assert not np.allclose(got[ok, j], want[ok, j])
+    if kind == "robust":
+        assert np.nanmax(np.abs(got[:, :2])) < 3.0
+    if kind == "quantile":  # rank-Gauss: about standard normal
+        assert abs(np.nanmean(got[:, 0])) < 0.1 and abs(np.nanstd(got[:, 0]) - 1) < 0.15
+
+
+def test_power_kind_stays_bounded_where_the_transform_explodes():
+    # Power transform with a large lambda: (z + 1)^40 explodes and overflows within the ±100 z
+    # range. Values are clipped to the z range whose standardized output stays within ±100, so the
+    # map stays finite, bounded and increasing; an ordinary column is not clipped
+    from tabsil.inference.preprocessing import POWER_BOUND, _NumericTransform, _yeo_johnson
+
+    rng = np.random.default_rng(0)
+    X = np.column_stack([rng.normal(size=500), rng.normal(size=500)])
+    t = _NumericTransform("power", X, seed=0)
+    # fitted lambdas ~1: the range lies far outside the 12-sigma outlier clip, so nothing is clipped
+    assert (t.bounds[0] < -50).all() and (t.bounds[1] > 50).all()
+    z = t._standardize(X)
+    t._fit_power(z, np.array([40.0, 1.0]))
+    lo, hi = t.bounds
+    assert 1.0 < hi[0] < 50.0 and hi[1] > 50.0 and lo[1] < -50.0
+    grid = np.linspace(-150, 150, 3001)
+    out = t(np.column_stack([grid * t.std[0] + t.mean[0], grid * t.std[1] + t.mean[1]]))
+    assert np.isfinite(out).all() and np.abs(out).max() <= POWER_BOUND + 1e-9
+    assert (np.diff(out, axis=0) >= -1e-12).all()
+    # the transform itself, against sklearn's (lambda 0 and 2 branches included)
+    from sklearn.preprocessing import PowerTransformer
+
+    v = np.column_stack([np.linspace(-3, 3, 13)] * 4)
+    pt = PowerTransformer(method="yeo-johnson", standardize=False).fit(v)
+    pt.lambdas_ = np.array([0.0, 2.0, 0.5, -1.0])
+    np.testing.assert_allclose(_yeo_johnson(v, pt.lambdas_), pt.transform(v), rtol=1e-12)
+
+
+def test_many_category_codes_get_a_count_column():
+    X = _option_table()
+    base = MemberPreprocessor(Member(None, False, seed=1), [2, 3], 100).fit(X)
+    want = base._features(X)
+    codes = want[:, 2]  # the 40-category code column (after the numerics)
+    ok = np.isfinite(codes)
+    counted = MemberPreprocessor(Member(None, False, seed=1, categories="counts"), [2, 3], 100)
+    got = counted.fit(X)._features(X)
+    assert got.shape[1] == want.shape[1] + 1
+    np.testing.assert_array_equal(got[:, :-1], want)
+    n = np.bincount(codes[ok].astype(int), minlength=40)
+    np.testing.assert_allclose(got[ok, -1], np.log1p(n[codes[ok].astype(int)]))
+    assert np.isnan(got[~ok, -1]).all()
+    unseen = X[:1].copy()
+    unseen[0, 2] = 45.0  # a code beyond the training categories is missing
+    assert np.isnan(counted._features(unseen)[0, -1])
+
+
+def test_member_options_reach_the_members_and_predict():
+    X, y = _context_tables()
+    kw = {"n_estimators": 8, "member_kinds": "numeric-cycle", "categories": "counts"}
+    clf = TabSilClassifier(_tiny_model(), **kw)
+    clf.fit(X[:60], (y[:60] > 0).astype(int))
+    members = [p.member for p in clf.preprocessors_]
+    assert [m.kind for m in members] == ["standard", "power", "robust", "quantile"] * 2
+    assert all(m.categories == "counts" for m in members)
+    assert np.allclose(clf.predict_proba(X[60:]).sum(1), 1)
+    reg = TabSilRegressor(_tiny_model(), torch.linspace(-4, 4, 33), **kw)
+    assert np.isfinite(reg.fit(X[:60], y[:60]).predict(X[60:])).all()
+    # regression: each kind meets the plain and the power-transformed target once in 8 members
+    pairs = {(p.member.kind, p.member.target_power) for p in reg.preprocessors_}
+    assert pairs == {(k, on) for k in ("standard", "power", "robust", "quantile") for on in (0, 1)}
+    with pytest.raises(ValueError, match="categories"):
+        EnsembleClassifier(_tiny_model(), n_estimators=1, categories="shuffled")
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_cudnn_attention_only_for_large_attention():
     # cuDNN attention builds a plan per new input shape (~0.2 s), so small forwards leave it out
@@ -678,3 +790,9 @@ def test_cudnn_attention_only_for_large_attention():
     enabled = torch.backends.cuda.cudnn_sdp_enabled()
     with clf._forward_mode(clf.cudnn_attention_pairs):
         assert torch.backends.cuda.cudnn_sdp_enabled() == enabled
+
+
+def test_an_unknown_member_kind_is_rejected_without_numeric_columns():
+    X = np.random.default_rng(0).integers(0, 5, size=(30, 2)).astype(float)  # all categorical
+    with pytest.raises(ValueError, match="member kind"):
+        MemberPreprocessor(Member(None, False, seed=0, kind="rank"), [0, 1], 100).fit(X)

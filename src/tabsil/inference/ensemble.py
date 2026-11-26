@@ -68,6 +68,7 @@ from sklearn.preprocessing import LabelEncoder, PowerTransformer
 from torch import nn
 
 from tabsil.inference.preprocessing import (
+    CATEGORY_ENCODINGS,
     FEATURE_SUBSAMPLINGS,
     MEMBER_KINDS,
     Member,
@@ -90,7 +91,7 @@ SOFTMAX_TEMPERATURE = 0.9
 # Output width counted per test row when sizing a member batch at prediction (`_iter_logits`): at
 # least the regression quantiles (999) and the class cap (160)
 PREDICT_OUTPUT_WIDTH = 1000
-DEFAULT_MEMBER_KINDS = MEMBER_KINDS
+DEFAULT_MEMBER_KINDS = ("standard",)
 
 
 def resolve_member_kinds(
@@ -164,14 +165,19 @@ class _Base:
         device: str = "cpu",
         random_state: int = 0,
         train_context: bool = True,
+        categories: str = "codes",
     ) -> None:
         if feature_subsampling not in FEATURE_SUBSAMPLINGS:
             raise ValueError(
                 f"feature_subsampling is one of {FEATURE_SUBSAMPLINGS}: {feature_subsampling}"
             )
         self.feature_subsampling = feature_subsampling
-        # `member_kinds` is kept for the saved inference settings; TabSil has one kind, "standard"
+        # numeric transform kinds over the members (`_kind_index`, `tabsil.inference.preprocessing`)
         self.member_kinds = resolve_member_kinds(member_kinds)
+        if categories not in CATEGORY_ENCODINGS:
+            raise ValueError(f"categories is one of {CATEGORY_ENCODINGS}: {categories}")
+        # many-category columns (`Member.categories`), the same for every member
+        self.categories = categories
         self.softmax_temperature = softmax_temperature
         # cap on the column count after one-hot expansion: the feature count the model saw in
         # training (max_features of the model config)
@@ -218,6 +224,16 @@ class _Base:
     def _model_targets(self, y: torch.Tensor) -> tuple[torch.Tensor, dict]:
         """The training-row targets for the model (1, train rows) and extra forward kwargs."""
         return y, {}
+
+    def _kind_index(self, i: int) -> int:
+        """Member i's position in `member_kinds` before taking it modulo the kind count: round
+        robin."""
+        return i
+
+    def _member_options(self, i: int) -> dict:
+        """The preprocessing options of member i (`Member` fields)."""
+        kinds = self.member_kinds
+        return {"kind": kinds[self._kind_index(i) % len(kinds)], "categories": self.categories}
 
     def _test_inputs(self, X: Any):
         """A function `inputs(i)`: member i's model input columns of the test rows X (T, F_i)."""
@@ -397,6 +413,7 @@ class EnsembleClassifier(_Base):
                 class_permutation=rng.permutation(n_classes),
                 target_power=False,
                 seed=int(rng.integers(0, 2**31 - 1)),
+                **self._member_options(i),
             )
             for i in range(self.n_estimators)
         ]
@@ -520,12 +537,19 @@ class EnsembleRegressor(_Base):
         rng = np.random.default_rng(self.random_state)
         return self.fit_members(X, y, self._default_members(rng))
 
+    def _kind_index(self, i: int) -> int:
+        # the target power runs off, off, on, on (`_default_members`), as long as the 4-kind cycle:
+        # members 0, 1, 2, 3, 4, 5, 6, 7 take kinds 0, 1, 0, 1, 2, 3, 2, 3, so each kind gets
+        # the plain and the power-transformed target once in 8 members
+        return i % 2 + 2 * (i // 4)
+
     def _default_members(self, rng: np.random.Generator) -> list[Member]:
         return [
             Member(
                 class_permutation=None,
                 target_power=(i // 2) % 2 == 1,  # off, off, on, on, ...
                 seed=int(rng.integers(0, 2**31 - 1)),
+                **self._member_options(i),
             )
             for i in range(self.n_estimators)
         ]
