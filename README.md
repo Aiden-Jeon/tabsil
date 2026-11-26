@@ -42,6 +42,10 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 - TabArena-Lite has 51 datasets, one split each. TabSil ran as the `TabSil` model of TabArena ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)) at its default configuration: tabsil 0.1.0 from PyPI, the weights at the tag `v1`, 8×H100 with one process per GPU. No split is imputed. Elo puts RandomForest (default) at 1000, with a 95% CI. Lower is better for improvability, fit and infer.
 - All methods use the same protocol, so the Fit and Infer columns are like-for-like; the other methods' times were measured by TabArena on its own hardware.
 - The pool is the TabArena results available when the run was made (2026-11-25, TabArena at the submission commit `1360e0e8`): 120 methods plus TabSil, 121 methods. It is not a released leaderboard version, so the live leaderboard's numbers differ. These are the results submitted with the pull request; the maintainers' own run of the full TabArena may change them. The raw results (`results.pkl` of all 51 splits), the hardware and the logs are in [aiden-jeon/tabsil-tabarena-lite](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite).
+- tabsil 0.1.1 changed the inference defaults (see [Use](#use)); the table above is tabsil 0.1.0's, and the official-protocol run of 0.1.1 follows its release.
+  - In the repository's harness (each split fit once, no bagging; see [Evaluation](#evaluation)) the same weights score 1768 with 0.1.1's inference against 1726 with 0.1.0's.
+  - Median fit time is 0.23 s per 1K training rows, against 0.014; 0.1.1's fit runs the training rows through the model.
+  - Median predict time is 0.16 s per 1K test rows, against 0.81.
 - Fit and infer time are defined in [Evaluation](#evaluation). More results (AMLB, per-problem-type and per-stage Elo) are on the [model card](https://huggingface.co/aiden-jeon/tabsil).
 
 ### Forecasting (fev-bench)
@@ -106,7 +110,7 @@ Python ≥ 3.11, PyTorch ≥ 2.11 (the benchmark results below were measured wit
 
 ## Use
 
-Without a model, `TabSilClassifier()` and `TabSilRegressor()` download the v1 weights from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`, [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil)) at the tag `v1` (`tabsil.recipe.HUB_REVISION`), so a release keeps downloading the same weights when the repo's `main` changes:
+Without a model, `TabSilClassifier()` and `TabSilRegressor()` download the v1 weights from the default Hugging Face Hub repo (`tabsil.recipe.HUB_REPO`, [aiden-jeon/tabsil](https://huggingface.co/aiden-jeon/tabsil)) at the tag `v1.1` (`tabsil.recipe.HUB_REVISION`): the v1 weights with tabsil 0.1.1's inference settings. A release keeps downloading the same weights when the repo's `main` changes; tabsil 0.1.0 downloads the tag `v1`, the same weights with its own settings:
 
 ```python
 from tabsil import TabSilClassifier, TabSilRegressor
@@ -127,7 +131,14 @@ model, borders = load_checkpoint("tabsil_run/final.pt")  # a training checkpoint
 reg = TabSilRegressor(model, borders).fit(X_train, y_train)
 ```
 
-Both are scikit-learn style estimators over an ensemble of 8 preprocessing members; each member sees at most 768 of the original columns.
+Both are scikit-learn style estimators over an ensemble of 8 preprocessing members:
+
+- each member sees at most 768 of the original columns
+- members cycle through four numeric transforms: the values as they are, Yeo-Johnson, robust scaling, and rank-Gauss
+- categorical columns with more than 20 categories also get a log count column
+- classification averages the members' softmax at temperature 1.0
+
+`fit` runs each member's training rows through the model once and keeps what the test rows read from them, so `predict` runs only the test rows (`tabsil.inference.ensemble`). The settings come with the weights (`config.json` `inference`, `tabsil.recipe.INFERENCE`); tabsil 0.1.0 used standard members only, no count columns and temperature 0.9.
 
 ### Forecasting
 
@@ -210,7 +221,7 @@ TabSil puts together ideas from published work:
 
 - **TabPFN** (Prior Labs): the prior-fitted network approach; the TabPFN-3 / 3.5 technical reports for the column → row → row-ICL backbone. No weights are used. A few inference routines (balanced feature subsampling, chunked class attention) are adapted from the Apache-2.0 TabPFN inference code; see `NOTICE`.
 - **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package), the three-stage training curriculum, and the QASSMax query gate of the `gated_logscale` attention temperature (BSD-3-Clause, `LICENSES/TabICL-BSD-3-Clause.txt`; see `NOTICE`).
-- **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source. The log-scale attention temperature (`LogScale`) follows the Apache-2.0 NVIDIA code (`sdm/nn/scaling.py`); see `NOTICE`.
+- **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source. The per-member numeric transforms and the category count columns of the inference ensemble follow its `numerical_processor` and `AddCategoryCounts` (re-implemented, not copied). The log-scale attention temperature (`LogScale`) follows the Apache-2.0 NVIDIA code (`sdm/nn/scaling.py`); see `NOTICE`.
 - **TabPFN-TS** (Prior Labs): forecasting with a tabular model; `TabSilForecaster`'s time features are adapted from the Apache-2.0 `tabpfn-time-series` package (see `NOTICE`). The forecasting evaluation uses **fev** / **fev-bench** (AutoGluon) and the comparison results of fm-agent-bench.
 - **Muon** optimizer, and the **nanoTabPFN speedrun** for the training speed options.
 

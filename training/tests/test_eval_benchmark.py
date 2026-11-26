@@ -38,6 +38,8 @@ def test_unknown_task_ids_are_reported():
 
 def test_removed_inference_flags_are_rejected():
     script = _eval_script()
-    for flag in ("--one-hot", "--member-kinds", "--official-v35", "--target-transform"):
+    for flag in ("--one-hot", "--official-v35", "--target-transform"):
         with pytest.raises(SystemExit):
             script.parse_args([flag, "all"])
+    # `--member-kinds` is back as an inference option: kinds from MEMBER_KINDS or a preset
+    assert script.parse_args(["--member-kinds", "numeric-cycle"]).member_kinds == "numeric-cycle"

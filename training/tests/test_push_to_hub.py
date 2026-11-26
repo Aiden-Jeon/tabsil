@@ -19,9 +19,11 @@ import sync_hub_card  # noqa: E402
 
 INFERENCE = {
     "n_estimators": 8,
-    "member_kinds": ["standard"],
+    "member_kinds": ["standard", "power", "robust", "quantile"],
     "max_features_per_member": 768,
     "feature_subsampling": "balanced",
+    "categories": "counts",
+    "softmax_temperature": 1.0,
 }
 
 

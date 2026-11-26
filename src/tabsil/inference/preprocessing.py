@@ -16,6 +16,22 @@ values are kept as they are (the model standardizes them with the training rows)
 How the members differ (seeds, class permutations, the regression target transform) is in
 `tabsil.inference.ensemble`.
 
+Options (inference experiments; the defaults are TabSil's):
+
+- `Member.kind` (`MEMBER_KINDS`): a transform of the numeric columns fitted on the training rows,
+  after the outlier clip. `"standard"` keeps the values; the others first standardize the column
+  and clip it to ±100, then `"power"` applies a Yeo-Johnson power transform (standardized),
+  `"robust"` centers on the median, divides by the interquartile range and squashes smoothly into
+  ±3 (x / sqrt(1 + (x / 3)^2)), and `"quantile"` maps the column to standard normal quantiles of
+  its training-row ranks (rank-Gauss). The choices follow the round-robin numeric processor of
+  Kumo-Tabular (NVIDIA structured-data-models `sdm/models/kumo/tabular/recipe.py`). The power
+  transform's values are kept within ±100 by clipping z to the range that maps there (found at fit),
+  so a test value beyond the training rows cannot overflow or explode and the map stays increasing
+- `Member.categories` (`CATEGORY_ENCODINGS`), for categorical columns that stay codes and have more
+  than `MAX_ONE_HOT_CATEGORIES` categories: `"codes"` keeps the codes, `"counts"` adds a column
+  with log(1 + the number of training rows with that category) (Kumo's `AddCategoryCounts`; a
+  missing or unseen category is missing)
+
 A table with more features than the member cap gives each member a subset of its original columns:
 `feature_subset` draws one per member from the member seed, `balanced_feature_subsets` spreads the
 columns evenly over the members.
@@ -28,11 +44,14 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import OrdinalEncoder
+from sklearn.preprocessing import OrdinalEncoder, PowerTransformer, QuantileTransformer
 
 OUTLIER_SIGMA = 12.0
 MAX_ONE_HOT_CATEGORIES = 20  # benchmark socmob (17) is expanded; colleges (thousands) stays codes
-MEMBER_KINDS = ("standard",)
+MEMBER_KINDS = ("standard", "power", "robust", "quantile")
+CATEGORY_ENCODINGS = ("codes", "counts")
+ROBUST_BOUND = 3.0  # the "robust" kind squashes values into ±this
+POWER_BOUND = 100.0  # the "power" kind's standardized values stay within ±this (as the z clip)
 FEATURE_SUBSAMPLINGS = ("random", "balanced")
 
 
@@ -177,6 +196,11 @@ def one_hot_sizes(n_categories: dict[int, int], n_features: int, max_width: int)
     return sizes
 
 
+def _known_codes(codes: np.ndarray, n: int) -> np.ndarray:
+    """Which codes are categories 0..n-1 (missing and other codes are not)."""
+    return np.isfinite(codes) & (codes >= 0) & (codes < n)
+
+
 @dataclass
 class Member:
     class_permutation: np.ndarray | None
@@ -184,6 +208,117 @@ class Member:
     seed: int
     one_hot: bool = True
     outlier_sigma: float = OUTLIER_SIGMA  # clip beyond this many std devs from the mean
+    kind: str = "standard"  # numeric column transform (`MEMBER_KINDS`, module docstring)
+    categories: str = "codes"  # many-category code columns (`CATEGORY_ENCODINGS`)
+
+
+def _yeo_johnson(z: np.ndarray, lambdas: np.ndarray) -> np.ndarray:
+    """The Yeo-Johnson transform of each column of z with its own lambda (NaN stays NaN; overflow
+    gives inf, without warnings)."""
+    lam = np.broadcast_to(lambdas, z.shape)
+    with np.errstate(all="ignore"):
+        pos = np.where(
+            np.abs(lam) < 1e-12,
+            np.log1p(z),
+            (np.power(z + 1.0, lam) - 1.0) / np.where(lam == 0, 1, lam),
+        )
+        two = 2.0 - lam
+        neg = np.where(
+            np.abs(two) < 1e-12,
+            -np.log1p(-z),
+            -(np.power(1.0 - z, two) - 1.0) / np.where(two == 0, 1, two),
+        )
+    return np.where(z >= 0, pos, np.where(np.isnan(z), np.nan, neg))
+
+
+class _NumericTransform:
+    """A member kind's transform of the numeric columns (module docstring), fitted on the training
+    rows. Missing values stay missing.
+
+    `"power"`: the Yeo-Johnson lambdas are fitted by sklearn's `PowerTransformer`; the transform
+    and its standardization (training-row mean and std of the transformed values) are computed here,
+    so that a value whose transform overflows does not stop the prediction (sklearn's standardize
+    step raises on inf). Values are clipped to the z range whose standardized output stays within
+    ±`POWER_BOUND` (`_power_bounds`), so a test value beyond the training rows cannot explode."""
+
+    def __init__(self, kind: str, X: np.ndarray, seed: int) -> None:
+        self.kind = kind
+        self.mean = np.nan_to_num(np.nanmean(X, axis=0)) if X.shape[0] else np.zeros(X.shape[1])
+        std = np.nan_to_num(np.nanstd(X, axis=0)) if X.shape[0] else np.ones(X.shape[1])
+        self.std = np.where(std > 1e-12, std, 1.0)
+        z = self._standardize(X)
+        self.fitted = None
+        if kind == "power":
+            fit = PowerTransformer(method="yeo-johnson", standardize=False).fit(z)
+            self._fit_power(z, np.asarray(fit.lambdas_, dtype=np.float64))
+        elif kind == "quantile":
+            n = int(np.isfinite(z).sum(0).max(initial=1))
+            self.fitted = QuantileTransformer(
+                n_quantiles=max(2, min(1000, n)),
+                output_distribution="normal",
+                subsample=10**9,
+                random_state=seed % 2**32,
+            ).fit(z)
+        elif kind == "robust":
+            lo, self.median, hi = np.nanpercentile(z, [25, 50, 75], axis=0)
+            iqr = np.nan_to_num(hi - lo)
+            self.median = np.nan_to_num(self.median)
+            self.iqr = np.where(iqr > 1e-12, iqr, 1.0)
+
+    def _standardize(self, X: np.ndarray) -> np.ndarray:
+        return np.clip((X - self.mean) / self.std, -100.0, 100.0)
+
+    def _fit_power(self, z: np.ndarray, lambdas: np.ndarray) -> None:
+        # standardization of the transformed training values, then the clip range (`_power`)
+        self.lambdas = lambdas
+        self.bounds = (np.full(z.shape[1], -100.0), np.full(z.shape[1], 100.0))
+        y = _yeo_johnson(z, lambdas)
+        y = np.where(np.isfinite(y), y, np.nan)
+        with np.errstate(all="ignore"):
+            self.y_mean = np.nan_to_num(np.nanmean(y, axis=0))
+            y_std = np.nan_to_num(np.nanstd(y, axis=0))
+        self.y_std = np.where(y_std > 1e-12, y_std, 1.0)
+        self.bounds = self._power_bounds()
+
+    def _power(self, z: np.ndarray) -> np.ndarray:
+        z = np.clip(z, *self.bounds)  # NaN stays NaN
+        return (_yeo_johnson(z, self.lambdas) - self.y_mean) / self.y_std
+
+    def _power_bounds(self, steps: int = 64) -> tuple[np.ndarray, np.ndarray]:
+        """Per column, the z range [lo, hi] within ±100 whose standardized power transform stays
+        within ±`POWER_BOUND`: ±100 where it does, otherwise found by bisection from z = 0 (the
+        transform is increasing). For an ordinary column the range lies far beyond the 12 standard
+        deviations the member's outlier clip allows (`OUTLIER_SIGMA`), so it clips nothing."""
+
+        def ok(v: np.ndarray) -> np.ndarray:
+            with np.errstate(all="ignore"):
+                y = (_yeo_johnson(v[None, :], self.lambdas)[0] - self.y_mean) / self.y_std
+            return np.isfinite(y) & (np.abs(y) <= POWER_BOUND)
+
+        out = []
+        for far in (-100.0, 100.0):
+            good = np.zeros(len(self.lambdas))
+            bad = np.full_like(good, far)
+            done = ok(bad)
+            good = np.where(done, bad, good)
+            for _ in range(0 if done.all() else steps):
+                mid = (good + bad) / 2
+                fine = ok(mid) | done
+                good, bad = np.where(fine, mid, good), np.where(fine, bad, mid)
+            out.append(good)
+        return out[0], out[1]
+
+    def __call__(self, X: np.ndarray) -> np.ndarray:
+        if self.kind == "standard" or X.shape[1] == 0:
+            return X
+        z = self._standardize(X)
+        if self.kind == "robust":
+            r = (z - self.median) / self.iqr
+            return r / np.sqrt(1.0 + np.square(r / ROBUST_BOUND))
+        if self.kind == "power":
+            return self._power(z)
+        with np.errstate(all="ignore"):
+            return np.asarray(self.fitted.transform(z), dtype=np.float64)
 
 
 class MemberPreprocessor:
@@ -196,6 +331,11 @@ class MemberPreprocessor:
 
     def fit(self, X: np.ndarray) -> MemberPreprocessor:
         rng = np.random.default_rng(self.member.seed)
+        member = self.member
+        if member.categories not in CATEGORY_ENCODINGS:
+            raise ValueError(f"categories is one of {CATEGORY_ENCODINGS}: {member.categories}")
+        if member.kind not in MEMBER_KINDS:
+            raise ValueError(f"the member kind is one of {MEMBER_KINDS}: {member.kind}")
         sigma = self.member.outlier_sigma
         mean, std = np.nanmean(X, axis=0), np.nanstd(X, axis=0)
         self.lower, self.upper = mean - sigma * std, mean + sigma * std
@@ -215,9 +355,52 @@ class MemberPreprocessor:
         self.empty_ix = [
             i for i in range(X.shape[1]) if i not in self.cat_ix and not np.isfinite(X[:, i]).any()
         ]
-        # column order: shuffle the transformed columns and the one sample identifier together
-        self.order = rng.permutation(self._base(X).shape[1] + 1)
+        self._fit_options(X, n_categories)
+        # column order: shuffle the transformed columns and the one sample identifier together. The
+        # numeric transform keeps the width, so `_base` and the count columns give it
+        width = self._base(X).shape[1] + len(self.count_maps)
+        self.order = rng.permutation(width + 1)
         return self
+
+    def _fit_options(self, X: np.ndarray, n_categories: dict[int, int]) -> None:
+        # the member options of the module docstring, from their own random streams (so that the
+        # defaults draw exactly what they drew before the options existed)
+        member = self.member
+        cat = set(self.cat_ix)
+        self.numeric_ix = [i for i in range(X.shape[1]) if i not in cat and i not in self.empty_ix]
+        self.numeric = None
+        if member.kind != "standard" and self.numeric_ix:
+            self.numeric = _NumericTransform(member.kind, X[:, self.numeric_ix], member.seed + 5)
+        # many-category columns that stay codes
+        many = [
+            i
+            for i in self.cat_ix
+            if i not in self.one_hot_sizes and n_categories[i] > MAX_ONE_HOT_CATEGORIES
+        ]
+        self.count_maps = {}
+        if member.categories == "counts":
+            for i in many:
+                codes = X[:, i][np.isfinite(X[:, i])].astype(int)
+                counts = np.bincount(codes, minlength=n_categories[i]).astype(np.float64)
+                self.count_maps[i] = np.log1p(counts)
+
+    @staticmethod
+    def _lookup(codes: np.ndarray, table: np.ndarray) -> np.ndarray:
+        # table[code] for codes 0..len(table)-1; missing and other codes are missing
+        known = _known_codes(codes, len(table))
+        out = np.full(len(codes), np.nan)
+        out[known] = table[codes[known].astype(int)]
+        return out
+
+    def _features(self, X: np.ndarray) -> np.ndarray:
+        """The member's columns for clipped rows X, before the identifier and the shuffle: the
+        numeric transform on X, then `_base`, then the count columns."""
+        counts = [self._lookup(X[:, i], t) for i, t in self.count_maps.items()]
+        if self.numeric is not None:
+            X = X.copy()
+            X[:, self.numeric_ix] = self.numeric(X[:, self.numeric_ix])
+        base = self._base(X)
+        return np.concatenate([base, np.stack(counts, axis=1)], axis=1) if counts else base
 
     def _clip(self, X: np.ndarray) -> np.ndarray:
         return np.clip(X, self.lower, self.upper)
@@ -236,7 +419,7 @@ class MemberPreprocessor:
     @staticmethod
     def _one_hot(codes: np.ndarray, n: int) -> np.ndarray:
         # missing and out-of-range codes become NaN: treated as missing, as in the code column
-        known = np.isfinite(codes) & (codes >= 0) & (codes < n)
+        known = _known_codes(codes, n)
         block = np.full((len(codes), n), np.nan)
         block[known] = 0.0
         block[np.flatnonzero(known), codes[known].astype(int)] = 1.0
@@ -245,5 +428,5 @@ class MemberPreprocessor:
     def transform(self, X: np.ndarray, identifier: np.ndarray) -> np.ndarray:
         """The member's input columns for rows `X`; `identifier` is the (n, 1) sample identifier
         column (training rows: drawn from the member seed; test rows: `row_identifier`)."""
-        base = self._base(self._clip(X))
+        base = self._features(self._clip(X))
         return np.concatenate([base, identifier], axis=1)[:, self.order]
