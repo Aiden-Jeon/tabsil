@@ -316,7 +316,7 @@ def _train_script():
 
 
 def _clear_env(monkeypatch):
-    for name in ("TABSIL_CONFIG_NAME", "TABSIL_STEPS"):
+    for name in ("TABSIL_CONFIG_NAME", "TABSIL_STEPS", "TABSIL_EMSIZE", "TABSIL_N_CLS"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -361,6 +361,39 @@ def test_train_script_takes_only_a_source_run_of_the_same_structure(monkeypatch)
     args = script.parse_args(["--config-name", "smoke", "--resume-run-id", "abc"])
     config = script.build_config(args, source)
     assert config == smoke and config.n_inducing == 8
+
+
+def test_train_script_changes_the_model_size(monkeypatch):
+    from tabsil_train.hub import run_architecture
+
+    _clear_env(monkeypatch)
+    script = _train_script()
+    # the size arguments change the preset's structure; everything else stays the recipe's
+    args = script.parse_args(["--config-name", "stage1", "--emsize", "192"])
+    config = script.build_config(args)
+    assert config == replace(recipe.curriculum(1), emsize=192)
+    assert config.model_config().icl_dim == 4 * 192
+    monkeypatch.setenv("TABSIL_EMSIZE", "512")
+    monkeypatch.setenv("TABSIL_N_CLS", "2")
+    config = script.build_config(script.parse_args(["--config-name", "stage1"]))
+    assert (config.emsize, config.n_cls, config.model_config().icl_dim) == (512, 2, 1024)
+    # the run logs them as params, so a later stage reads its structure back
+    source = run_architecture({k: str(v) for k, v in vars(config).items()})
+    assert (source["emsize"], source["n_cls"]) == (512, 2)
+    monkeypatch.delenv("TABSIL_EMSIZE")
+    monkeypatch.delenv("TABSIL_N_CLS")
+    # a later stage from a run of another size needs the same values again
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    with pytest.raises(SystemExit, match="--emsize"):
+        script.build_config(args, source)
+    args = script.parse_args(
+        ["--config-name", "stage2", "--init-run-id", "abc", "--emsize", "512", "--n-cls", "2"]
+    )
+    assert script.build_config(args, source) == replace(recipe.curriculum(2), emsize=512, n_cls=2)
+    # a structure the model rejects stops before the run starts
+    for bad, match in ((["--emsize", "130"], "does not divide"), (["--emsize", "100"], "RoPE")):
+        with pytest.raises(SystemExit, match=match):
+            script.build_config(script.parse_args(["--config-name", "stage1", *bad]))
 
 
 def test_train_script_picks_the_prior_and_a_resumed_run_keeps_its_own(monkeypatch):
