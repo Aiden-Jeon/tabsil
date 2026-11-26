@@ -4,7 +4,7 @@ Training, the synthetic-data prior, and the benchmark evaluation of [TabSil](../
 
 | Path | Contents |
 |---|---|
-| `src/tabsil_train/priors/` | the TabICLv2 graph SCM prior (`tabicl` package), table size rules, transforms |
+| `src/tabsil_train/priors/` | the TabICLv2 graph SCM prior (`tabicl` package), table size rules, transforms; `graph_scm_hicard_missing` adds high-cardinality categorical columns and structured missing values (`--prior-type`) |
 | `src/tabsil_train/training/` | training config (`TrainConfig`), the training loop, Muon, losses, stability, diagnostics |
 | `src/tabsil_train/benchmarks/` | AMLB / CTR23, TabArena, BeyondArena, uncertainty metrics |
 | `src/tabsil_train/recipe.py` | the TabICLv2 three-stage curriculum (`curriculum(stage)`) |

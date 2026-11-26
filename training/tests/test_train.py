@@ -363,6 +363,39 @@ def test_train_script_takes_only_a_source_run_of_the_same_structure(monkeypatch)
     assert config == smoke and config.n_inducing == 8
 
 
+def test_train_script_picks_the_prior_and_a_resumed_run_keeps_its_own(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.delenv("TABSIL_PRIOR_TYPE", raising=False)
+    script = _train_script()
+    prior = "graph_scm_hicard_missing"
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    assert script.build_config(args).prior_type == "graph_scm"
+    # a new stage from a run's weights takes the given prior
+    args = script.parse_args(
+        ["--config-name", "stage2", "--init-run-id", "abc", "--prior-type", prior]
+    )
+    script.inherit_prior_type(args, {"prior_type": "graph_scm"})
+    assert script.build_config(args) == replace(recipe.curriculum(2), prior_type=prior)
+    monkeypatch.setenv("TABSIL_PRIOR_TYPE", prior)
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    assert script.build_config(args).prior_type == prior
+    monkeypatch.delenv("TABSIL_PRIOR_TYPE")
+    # a resumed run keeps its prior (runs without the param used graph_scm)
+    args = script.parse_args(["--config-name", "stage2", "--resume-run-id", "abc"])
+    script.inherit_prior_type(args, {"prior_type": prior})
+    assert script.build_config(args).prior_type == prior
+    args = script.parse_args(["--config-name", "stage2", "--resume-run-id", "abc"])
+    script.inherit_prior_type(args, {})
+    assert args.prior_type == "graph_scm"
+    args = script.parse_args(
+        ["--config-name", "stage2", "--resume-run-id", "abc", "--prior-type", prior]
+    )
+    with pytest.raises(SystemExit, match="prior_type"):
+        script.inherit_prior_type(args, {"prior_type": "graph_scm"})
+    with pytest.raises(SystemExit, match="prior_type"):
+        script.build_config(script.parse_args(["--config-name", "smoke", "--prior-type", "nope"]))
+
+
 def test_train_script_checks_the_source_checkpoint_before_the_run(tmp_path):
     # a checkpoint with a mismatched model config stops before opening an MLflow run
     script = _train_script()
@@ -380,6 +413,32 @@ def test_train_script_checks_the_source_checkpoint_before_the_run(tmp_path):
     with pytest.raises(SystemExit, match="regression borders"):
         script._check_source(str(tmp_path / "no_borders.pt"), config, resume=False)
     script._check_source(latest, config, resume=False)  # loading weights only ignores the step
+
+
+def test_train_script_takes_weights_from_a_hub_folder(tmp_path, monkeypatch):
+    # --init-hub: a save_pretrained folder (here local) becomes an init_from checkpoint
+    from tabsil.hub import save_pretrained
+    from tabsil.models import load_checkpoint
+
+    _clear_env(monkeypatch)
+    script = _train_script()
+    config = _smoke(steps=2, collapse_threshold=None)
+    train(config, tmp_path / "a", mlflow_log=False)
+    model, borders = load_checkpoint(tmp_path / "a" / "latest.pt")
+    save_pretrained(model, borders, tmp_path / "hub")
+    path = script.hub_init_checkpoint(str(tmp_path / "hub"), config, tmp_path / "init.pt")
+    result = train(config, tmp_path / "b", mlflow_log=False, init_from=path)
+    trained, trained_borders = load_checkpoint(result["final_path"])
+    assert torch.equal(trained_borders, borders)  # the borders carry over
+    # another structure is refused before the run starts
+    with pytest.raises(SystemExit, match="nhead"):
+        script.hub_init_checkpoint(str(tmp_path / "hub"), replace(config, nhead=4), tmp_path / "x")
+    # one weight source at a time; a later stage accepts --init-hub
+    args = script.parse_args(["--config-name", "stage2", "--init-hub", "aiden-jeon/tabsil@x"])
+    assert args.init_hub == "aiden-jeon/tabsil@x"
+    for other in (["--init-run-id", "abc"], ["--resume-run-id", "abc"]):
+        with pytest.raises(SystemExit):
+            script.parse_args(["--config-name", "stage2", "--init-hub", "r", *other])
 
 
 @pytest.mark.parametrize(

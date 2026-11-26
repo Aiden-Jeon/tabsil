@@ -10,12 +10,14 @@ adds one generator or a few transforms and reuses the other parts.
 - `table_size`: the table size rule that draws the train rows and feature count of each batch
 - `hyperparameters`: class count
 - `generators`: the continuous table of one group (graph SCM)
-- `transforms`: group post-processing (categorical columns, scaling, classes, padding, missing
-  values, filters)
+- `transforms`: group post-processing (classes, missing values, high-cardinality categorical
+  columns, coarse and noisy values, filters)
 
 Assembled priors:
 
 - `graph_scm`: graph SCM generator + table size rule + missing values (TabSil's training prior)
+- `graph_scm_hicard_missing`: `graph_scm` with high-cardinality categorical columns and structured
+  (MAR/MNAR, column-group) missing values (`graph_scm` options at fixed values)
 
 The training loop (`tabsil_train.training.loop`) picks its prior from `PRIOR_TYPES` by name
 (`TrainConfig.prior_type`). A prior module provides:
@@ -44,6 +46,7 @@ from tabsil_train.priors.base import PriorBatch
 # name -> module (imported on use; graph_scm needs the tabicl package)
 PRIOR_TYPES: dict[str, str] = {
     "graph_scm": "tabsil_train.priors.graph_scm",
+    "graph_scm_hicard_missing": "tabsil_train.priors.graph_scm_hicard_missing",
 }
 # old name -> current name, accepted when reading older training runs whose params still use it
 PRIOR_TYPE_ALIASES: dict[str, str] = {
