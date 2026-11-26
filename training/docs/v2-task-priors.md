@@ -190,13 +190,20 @@ At inference a new `TabSilOutlier` appends reference rows built by the same code
 - The batch keeps its single n_train. The n_eval rows are drawn without replacement with probabilities from the score and moved to the end.
 - Start with a share of 0.1 of the classification and of the regression datasets.
 
-TabImpute (2510.02625) found that mixing missingness patterns lowered its default model, which is MCAR-only. So the first arm uses MAR only, and an MNAR arm follows only if the MAR arm passes.
+**What to expect from each mechanism.**
+- MAR is ignorable: P(M | X) = P(M | X_obs) gives p(x_mis | x_obs, M) = p(x_mis | x_obs). The conditional the v1 prior trains is already the right one, and only the rows it is asked for shift. A MAR arm is expected to gain little. TabImpute's Col-MAR specialist was 1.549 overall RMSE on MissBench, against 1.585 for its MCAR-only default.
+- MNAR is not ignorable: the conditional itself changes, and the observed data do not identify the mechanism. This is where a gap is expected. TabImpute's Self-MNAR specialist was 1.716 on Self-MNAR, against 2.184 for the default.
+- So the MAR and MNAR arms are decided separately from D4, and MNAR does not wait for MAR.
+
+**Mixing risk (TabImpute, 2510.02625).** TabImpute's mix of MCAR, Col-MAR and Self-MNAR "degraded overall because it focused only on Self-MNAR", so its default model is MCAR-only. That is one attempt, reported in a sentence without proportions or numbers. It used a model of unreported size, about 75K steps at batch 16 (10-15 H200-h), and a linear factor prior. It is a risk to check, not evidence against mixing at v2's scale and share:
+- Some of the loss cannot be removed by scale. Where the context does not reveal the mechanism, the Bayes answer under a mixed prior averages the MCAR and MNAR posteriors and is worse than either specialist on its own pattern.
+- Some of it may be optimization: self-masking hides tail values, whose loss is large. A share of 0.1 limits that.
 
 **D4 (to run before the arm).** Imputation error of the v1.1 weights under MCAR, MAR and MNAR masks of the same rate:
 - on SCM tables with a known mechanism, and on the impute suite (`--suite impute`)
-- against the suite's baselines
+- against the suite's baselines (mean / most frequent, KNN, MICE, MissForest). TabImpute's per-column TabPFN, the scheme `TabSilUnsupervised.impute` follows, lost to MissForest even under MCAR (overall RMSE 2.455 against 1.966), so the MCAR row is read first.
 
-The arm runs only if TabSil's error grows from MCAR to MAR/MNAR clearly more than the baselines' does.
+Each arm (MAR, MNAR) runs only if TabSil's error grows from MCAR to that mechanism clearly more than the baselines' does.
 
 **Success criteria (final run).** The impute suite error is lower than v1 under MAR and MNAR masks and not higher under MCAR.
 
@@ -240,7 +247,7 @@ GPU costs scale from v1: stage 1 ran 150K steps in about 30 h on 32 H100, so 30K
 | 1 | C (2 seeds) | from scratch, stage 1 only, 30K steps, base prior | 2 × 190 H100-h | each other (seed spread) |
 | 1 | TS | C + forecasting share 0.1 | 190 H100-h | C |
 | 1 | OD | C + outlier share 0.1 | 190 H100-h | C |
-| 1 | IMP, CA | C + imputation or treatment prior, only if D4 or D5 shows a gap | 190 H100-h each | C |
+| 1 | IMP-MAR, IMP-MNAR, CA | C + the MAR or MNAR imputation prior or the treatment prior, each only if D4 or D5 shows its gap | 190 H100-h each | C |
 | 2 | ALL | C + every task prior that passed phase 1 | 190 H100-h | C and each single arm |
 | 3 | v2 | the ALL prior, v1's curriculum 150K / 10K / 2K | ≈ 1,550 H100-h | v1 |
 
@@ -248,8 +255,8 @@ GPU costs scale from v1: stage 1 ran 150K steps in about 30 h on 32 H100, so 30K
 - **Phase 1 pass rule.** An arm passes if its task metric beats both C seeds by more than their spread, and the guards hold against C. The second C seed gives the spread that #14's single run lacked.
 - **Phase 2 pass rule.**
   - Mixing has to keep each task's gain: every task metric of ALL stays within the C seed spread of its single arm.
-  - TabImpute found that mixing training patterns lowered its default model, so this is checked before the full run.
+  - TabImpute's one mix of missingness patterns degraded overall (§3), so this is checked before the full run.
   - A task that drops gets a lower share or leaves the mixture.
 - **Phase 3.** v2 must meet the success criteria of §1-§4 for the task priors it contains, and the guards against v1, at the same tabsil inference version.
-- **Total:** about 0.95-1.33K H100-h for phases 1-2 (5-7 short runs, depending on D4 and D5) and 1.55K for v2.
+- **Total:** about 0.95-1.52K H100-h for phases 1-2 (5-8 short runs, depending on D4 and D5) and 1.55K for v2.
 - **Risk.** Phase 1-2 runs see only 1,024-row tables, and a gain at 30K may not hold at 150K. Phase 3 checks every criterion again on the full run.
