@@ -5,6 +5,7 @@ or monkeypatched."""
 from __future__ import annotations
 
 import importlib.util
+import json
 
 import numpy as np
 import pandas as pd
@@ -77,6 +78,7 @@ def test_score_and_nearest_class():
     assert s["nrmse"] == pytest.approx(np.sqrt(0.5) / std)
     assert s["accuracy"] == pytest.approx(0.5)
     assert (s["masked_numeric"], s["masked_categorical"]) == (2, 2)
+    assert json.loads(s["columns"]) == {"0": pytest.approx(s["nrmse"], abs=1e-5), "1": 0.5}
     np.testing.assert_array_equal(
         bi.nearest_class(np.array([-3.0, 0.5, 1.2, 9.0]), np.array([0.0, 1.0, 2.0])),
         [0.0, 0.0, 1.0, 2.0],

@@ -187,7 +187,19 @@ model = TabSilUnsupervised(device="cuda").fit(X_train)  # unlabeled rows: the co
 scores = model.outlier_score(X_test)  # = -model.log_density(X_test)
 ```
 
-The cost is one fit and prediction per column and order (`n_permutations`, default 10). `model.conditional(X, target, given)` returns the distribution of one column given others, the part imputation and synthetic data can later build on.
+The cost is one fit and prediction per column and order (`n_permutations`, default 10). `model.conditional(X, target, given)` returns the distribution of one column given others, the part imputation builds on (and synthetic data can later).
+
+### Imputation
+
+`TabSilUnsupervised.impute` fills missing values (NaN) from the same conditionals: each column with a missing value is predicted for the rows missing it from all other columns, the row's other missing cells left missing, so there is one fit per column with a missing value. Numeric cells get the predictive mean (`strategy="median"` for the median), categorical cells the most probable class; `n_samples` draws from the distributions instead (multiple imputation):
+
+```python
+model = TabSilUnsupervised(categorical_features=[3, 5], device="cuda").fit(X)  # X with NaN
+X_filled = model.impute(X)                    # observed cells unchanged
+draws = model.impute(X, n_samples=5)          # (5, n, d)
+```
+
+Fit on the table to impute itself or on other rows. Without `categorical_features`, columns with at most 40 distinct values and more than 10 rows per value are treated as categorical. The differences from the official TabPFN extension's `impute` are in the docstring of `src/tabsil/unsupervised.py`.
 
 ### Treatment effects
 

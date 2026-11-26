@@ -99,7 +99,7 @@ OFFICIAL = "tabpfn_impute"
 TABPFN_EXTENSIONS_VERSION = "0.6.3"  # = PriorLabs/tabpfn-extensions a049fd7 for impute
 RESULT_COLUMNS = [
     "dataset", "rate", "seed", "method", "nrmse", "accuracy", "seconds", "n_rows", "n_numeric",
-    "n_categorical", "masked_numeric", "masked_categorical", "opts",
+    "n_categorical", "masked_numeric", "masked_categorical", "columns", "opts",
 ]  # fmt: skip
 
 
@@ -181,9 +181,10 @@ def nearest_class(values: np.ndarray, classes: np.ndarray) -> np.ndarray:
 
 def score(X_true: np.ndarray, X_imp: np.ndarray, mask: np.ndarray, categorical: list[int]) -> dict:
     """nrmse (numeric columns: RMSE / std, averaged) and accuracy (categorical columns: share of
-    masked cells with the true class, averaged), on the masked cells. Categorical imputations are
-    set to the nearest class observed in the column first."""
-    nrmse, accuracy = [], []
+    masked cells with the true class, averaged), on the masked cells, and `columns`, the value of
+    each column as JSON ({column index: nrmse or accuracy}). Categorical imputations are set to
+    the nearest class observed in the column first."""
+    nrmse, accuracy, columns = [], [], {}
     masked_numeric = masked_categorical = 0
     for j in range(X_true.shape[1]):
         m = mask[:, j]
@@ -193,17 +194,20 @@ def score(X_true: np.ndarray, X_imp: np.ndarray, mask: np.ndarray, categorical: 
         if j in categorical:
             classes = np.unique(X_true[~m, j])
             accuracy.append(float((nearest_class(guess, classes) == truth).mean()))
+            columns[j] = round(accuracy[-1], 5)
             masked_categorical += int(m.sum())
         else:
             std = X_true[:, j].std()
             if std > 0:
                 nrmse.append(float(np.sqrt(np.mean((guess - truth) ** 2)) / std))
+                columns[j] = round(nrmse[-1], 5)
                 masked_numeric += int(m.sum())
     return {
         "nrmse": float(np.mean(nrmse)) if nrmse else np.nan,
         "accuracy": float(np.mean(accuracy)) if accuracy else np.nan,
         "masked_numeric": masked_numeric,
         "masked_categorical": masked_categorical,
+        "columns": json.dumps(columns),
     }
 
 
