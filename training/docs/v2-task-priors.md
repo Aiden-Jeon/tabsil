@@ -241,7 +241,7 @@ This cannot cover hidden confounding or mediators, nor tell the model which colu
    - If ALL fails the phase 2 rule, the cause can be capacity or a real conflict between tasks. Only then, run C and ALL again at a larger size (30K steps each). If the drop closes, capacity was the cause; if it stays, the task's share is lowered.
    - A 30K-step model is limited by training length before capacity, so phase 2 can miss a capacity limit that appears at 150K. Phase 3 checks the criteria again.
    - Otherwise a larger model is a v3 candidate, together with the architecture changes listed under Decision.
-   - Checked against the training records ([v2-scaling.md](v2-scaling.md)): prior mismatch, and capacity is not tested. From 150K to 250K steps the prior loss still fell 0.8% / 1.4% while TabArena-Lite stayed at 1428 against 1429. That doc's size experiment (step A, ≈ 580 H100-h on top of C) decides whether this item is reopened.
+   - Checked against the training records ([v2-scaling.md](v2-scaling.md)): prior mismatch, and capacity is not tested. From 150K to 250K steps the prior loss still fell 0.8% / 1.4% while TabArena-Lite stayed at 1428 against 1429. v1 (221.5M) is also already as large as the top TabArena models. That doc's step A (XS and S against C, ≈ 170 H100-h) tests whether v1 can shrink without loss; a larger model is tested only if that curve is steep.
 
 ## Experiment plan (each run needs approval before it starts)
 

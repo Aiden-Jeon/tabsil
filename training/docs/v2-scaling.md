@@ -4,7 +4,7 @@ Status: design. No run of this plan has started. Every number below was read fro
 
 ## Question
 
-Which axis would raise TabSil's TabArena classification and regression scores more: a larger model, or the prior? The v2 plan keeps v1's size ([v2-task-priors.md](v2-task-priors.md), open item 9). This document checks that decision against the existing training records and designs a size experiment with a rule for when to change it.
+Which axis would raise TabSil's TabArena classification and regression scores more: a larger model, or the prior? The v2 plan keeps v1's size ([v2-task-priors.md](v2-task-priors.md), open item 9). This document checks that decision against the existing training records and against the sizes of the top TabArena models. It then designs a size experiment, with a rule for when to change the size in either direction.
 
 Criteria, fixed before reading the records:
 - **Capacity limit:** the prior validation loss is also flat between 150K and 225K/250K steps. The next experiment is a larger model.
@@ -93,21 +93,31 @@ No run of this structure at another size has an evaluation (not found).
 - But at stage 1 a lower prior loss carried over weakly (classification) or negatively (regression). So a lower prior loss from size alone is not expected to move TabArena much.
 - LimiX-2 leads the TabArena leaderboard with 24 blocks at width 256, close to v1's numbers. Its log-linear size curve (12.5M-406M) also changes structure and prior, so it does not say which of the two TabSil lacks.
 
-**Consequence.** Open item 9 stands for now: the prior and objective axes come first. The size experiment below is built as a cheap check first, and its expensive step runs only if the cheap one shows that size moves the prior loss.
+**v1 is already as large as the top models.**
+- **Parameter count.** v1 has 221.5M parameters. PR #26's survey of the TabArena top families gives TabPFN-3.5 220M, Kumo-Tabular L 215M and Seldon 213M, and models of 21M-118M rank above TabSil. The TabPFN v2 and v2.5 reproductions in MLflow have 7.2M-14.7M.
+- **Same backbone as TabPFN-3.5.** v1's row ICL is the TabPFN-3.5 backbone: 24 layers × 16 heads at width 1024 (`tabsil.recipe`). In the tabsil 0.1.1 TabArena-Lite run (`138151a232db44af8a45be80b967c265`, 0% imputed), TabPFN-3.5 (default) is 1858 (+146/−97) and v1.1 is 1768 (+94/−86). This gap is not a size gap. TabPFN-3.5's cell stages were not compared.
+- **Where the parameters sit.** 91% of v1's parameters are in the row ICL (201.4M), which reads one vector per row. The cell stages (column + row blocks) do 65-79% of the stage-1 FLOPs with 9.9M parameters (see Sizes). If capacity is short anywhere, the cell stages are the likelier place, not the total count.
+
+**Consequence.** Open item 9 stands: the prior and objective axes come first. The size experiment below asks whether v1 can **shrink** without losing accuracy, because a smaller model would make every user's inference faster. A larger model is tested only if the shrink curve is steep, and then in the cell stages first.
 
 The same records answer part of open item 8 (screening length):
 - The two runs have the same structure and prior, and at 25K nearly the same lr. Their TabArena-Lite still differs by 36 at 25K (1357.0 against 1392.6), 9 at 50K and 10 at 75K.
 - From 25K to 75K they rise by 64 (150K run) and 19 (250K run). From 75K on, both stay within 1411-1438 up to 250K.
 - So a 30K stage-1 screen sits on the rising part of the curve and has a run-to-run gap of about 35 Elo. Arm differences smaller than that need the per-dataset paired comparison or the prior loss. The prior loss differed between the runs by at most 0.0025 at the same early step.
 
-## Scaling experiment
+## Size experiment
 
 ### Sizes
 
-The grid scales the width `emsize` with everything else at `STRUCTURE`:
+The shrink grid scales the width `emsize` with everything else at `STRUCTURE`:
 - 24 row ICL layers, 16 heads, 6 column/row block pairs, 4 CLS tokens, so the row ICL width is 4 × `emsize`.
-- Width scales every stage: the cell stages, which do most of the stage-1 compute, and the row ICL, which holds most of the parameters.
+- Width shrinks every stage.
 - All heads divide their widths, and the row-stage head dim stays even (`ColumnRowTransformerConfig.__post_init__`).
+
+The growth arm CS widens only the cell stages:
+- `emsize` 512 with `n_cls` 2 keeps the row ICL width at 1024, so the row ICL is exactly v1's (201.4M).
+- The cell stages grow 3.9× (9.9M to 38.7M).
+- The CLS count halves (4 to 2 tokens of width 512), which is the one other change.
 
 Parameters come from `ColumnRowTransformer(config).num_parameters_by_stage()` on the meta device. The v1 count equals the logged `n_parameters`.
 
@@ -117,33 +127,29 @@ The FLOPs ratio is the analytic forward matmul and attention FLOPs per table, re
 - "Inference" is 10,000 rows, 50 features and a train share of 0.8.
 - Backward is a fixed multiple of forward, so the training ratio is the same.
 
-| Arm | `emsize` | Row ICL width | Parameters | of which row ICL | Cell stages (column + row) | FLOPs ratio, stage 1 | FLOPs ratio, inference |
-|---|---|---|---|---|---|---|---|
-| XS | 128 | 512 | 56.0M | 50.4M | 2.6M | 0.29 | 0.37 |
-| S | 192 | 768 | 125.1M | 113.3M | 5.6M | 0.59-0.60 | 0.65 |
-| M (v1, = C) | 256 | 1,024 | 221.5M | 201.4M | 9.9M | 1.00 | 1.00 |
-| L | 384 | 1,536 | 496.7M | 453.1M | 21.9M | 2.12-2.13 | 1.89 |
-| L-depth (optional) | 256, `nlayers` 48 | 1,024 | 422.9M | 402.8M | 9.9M | 1.21-1.35 | 1.60 |
+| Arm | Structure change | Parameters | Row ICL | Cell stages (column + row) | FLOPs ratio, stage 1 | FLOPs ratio, inference |
+|---|---|---|---|---|---|---|
+| XS | `emsize` 128 (row ICL width 512) | 56.0M | 50.4M | 2.6M | 0.29 | 0.37 |
+| S | `emsize` 192 (row ICL width 768) | 125.1M | 113.3M | 5.6M | 0.59-0.60 | 0.65 |
+| M (v1, = C) | none | 221.5M | 201.4M | 9.9M | 1.00 | 1.00 |
+| CS (growth, gated) | `emsize` 512, `n_cls` 2 | 250.4M | 201.4M | 38.7M | 2.68-3.04 | 2.03 |
 
-- The four width points are about 2× apart in parameters, so three intervals fit a log-linear curve.
-- 91% of v1's parameters are in the row ICL. Yet the cell stages do 65-79% of the stage-1 FLOPs, because they run on every cell and not on every row. Depth therefore adds parameters cheaply in stage 1.
-- L-depth runs only if L passes step A, to find out whether depth buys the same for less (see the rules).
+- XS, S and M are about 2× apart in parameters, so two intervals show whether the curve is still falling at M.
+- A uniform width increase is not proposed. `emsize` 384 (496.7M, 2.1× the stage-1 FLOPs) would put 91% of the new parameters back into the row ICL. It would also be larger than LimiX-2's largest reported size (406M).
 
 ### Training lengths
 
-Three levels. Each runs only if the previous one passes.
-
 | Step | Arms | Training | Readout |
 |---|---|---|---|
-| A | XS, S, M, L | stage 1 from scratch, 30K steps (the phase 1 length) | prior validation loss at the end (lr 0); TabArena-Lite and AMLB as guards |
-| B | M, L | stage 1 75K steps, then stage 2 5K steps from it | TabArena-Lite and AMLB after stage 2; prior loss of both stages |
-| C | the chosen size | v1's curriculum 150K / 10K / 2K | the v2 run itself (phase 3 of v2-task-priors.md) |
+| A | XS, S, M | stage 1 from scratch, 30K steps (the phase 1 length) | prior validation loss at the end (lr 0); TabArena-Lite and AMLB as guards; inference time |
+| B | S, M (only if S passes A) | stage 1 75K steps, then stage 2 5K steps from it | TabArena-Lite and AMLB after stage 2; prior loss of both stages |
+| G | CS (only if A is steep) | as step A, then as step B with M | as steps A and B |
 
 Why these lengths:
 - Step A is stage 1 only, as phase 1 is, so M is phase 1's C (see sharing below).
 - Its readout is the prior loss, not TabArena. In stage 1 the regression Elo moved against the prior loss, and the whole stage-1 Elo range from 25K to 250K (1357-1438) is smaller than one CI.
 - Step B reads TabArena after a short stage 2. Stage 2 is where the real-table scores are made (+300 for v1), and v1's 5K checkpoint already had 1693 of its 1725.
-- 75K is where v1's stage-1 TabArena-Lite reached its plateau (1421 and 1412 in the two runs, against a maximum of 1438).
+- 75K is where v1's stage-1 TabArena-Lite reached its plateau (1421 and 1412 in the two runs, against a maximum of 1438). A small model that only ties at 30K could fall behind later, so a smaller size is not chosen from step A alone.
 
 All arms use the cosine schedule of their own length. A 30K point cannot be read from a longer run, because its lr has not decayed.
 
@@ -152,7 +158,7 @@ All arms use the cosine schedule of their own length. A 30K point cannot be read
 - Prior `graph_scm_hicard_missing` (#14, on dev-v2), the same as phase 1's C, with no task prior. Size is the only difference from C.
 - The recipe is `curriculum(1, steps=30_000)` in step A, and `curriculum(1, 75_000)` then `curriculum(2, 5_000)` in step B. Batch 256, lr 8e-4 / 1e-4, `filter_unpredictable` on.
 - Muon scales each matrix's lr by 0.2·sqrt(max(rows, cols)) (`match_rms_adamw`), so the update RMS stays the same across widths, and lr 8e-4 is kept for every size. This was not tested at another width; see the risks.
-- Micro batch: v1's stage 1 used 62-63 GB per H100 at micro batch 4 (`gpu_mem_gb`, `064d9d34…`). L's cell activations are 1.5× as large, so L uses micro batch 2. The batch stays 256, so the math is unchanged. XS and S keep 4.
+- Micro batch: v1's stage 1 used 62-63 GB per H100 at micro batch 4 (`gpu_mem_gb`, `064d9d34…`). XS and S keep 4. CS's cell activations are 2× as large, so CS uses micro batch 2. The batch stays 256, so the math is unchanged.
 
 ### Evaluation
 
@@ -163,13 +169,13 @@ For every run, at its last step:
 - **Guards** as in [v2-task-priors.md](v2-task-priors.md) (Base prior and guards), against M at the same tabsil inference version. A run fails if either holds:
   - TabArena-Lite overall, classification or regression Elo is lower beyond its 95% CI.
   - AMLB ROC AUC or the regression RMSE ratio is worse by more than 0.005.
-- The inference time logged by TabArena-Lite (`tabarena_lite_*_time_infer_s_mean`), for the trade-off below.
+- The inference time logged by TabArena-Lite (`tabarena_lite_*_time_infer_s_mean`), which measures the speed gain of a smaller model.
 
 ### Cost
 
 The basis is v1's throughput: stage 1 ran 150K steps in about 30 h on 32 H100 (0.71 s per step, `064d9d34…`), so 30K steps take about 192 H100-h and 75K about 480. Stage 2 ran 10K steps in 9.58 h on 32 H100 (`bd74e801…`), so 5K steps take about 153 H100-h.
 
-Each arm scales these by its FLOPs ratio. For L's stage 2 the ratio is taken as 2.0, between its stage-1 and 10,000-row values.
+Each arm scales these by its FLOPs ratio. In stage 2 the inference ratio is used, since stage-2 tables are long.
 
 | Step | Run | H100-h |
 |---|---|---|
@@ -177,65 +183,73 @@ Each arm scales these by its FLOPs ratio. For L's stage 2 the ratio is taken as 
 | A | XS 30K | ≈ 56 |
 | A | S 30K | ≈ 115 |
 | A | M 30K | 0 extra: phase 1's two C seeds |
-| A | L 30K | ≈ 409 |
-| A | L-depth 30K (optional) | ≈ 232-259 |
-| | **Step A total** | **≈ 580** (≈ 830 with L-depth) |
+| | **Step A total** | **≈ 170** |
+| B | S 75K + stage 2 5K | ≈ 288 + 100 = 388 |
 | B | M 75K + stage 2 5K | ≈ 480 + 153 = 633 |
-| B | L 75K + stage 2 5K | ≈ 1,022 + 306 = 1,328 |
-| | **Step B total** | **≈ 1,960** |
-| C | v2 at L instead of M | ≈ 3,200 instead of 1,550 |
+| | **Step B total** | **≈ 1,020** |
+| G | CS 30K, then CS 75K + stage 2 5K (M's step B run is reused) | ≈ 515-584, then ≈ 1,290-1,460 + 311 |
+| v2 | the final run at S instead of M | ≈ 950 instead of 1,550 |
 
-- The data loader is not the limit (`data_wait_frac` 0.001 in stage 1), so the FLOPs ratio is the right first guess for L.
-- XS and S are more likely to be held back by non-matmul work and may not be as cheap as their ratio. Step 0 replaces every estimate with a measured seconds per step before step A is approved.
+- The data loader is not the limit (`data_wait_frac` 0.001 in stage 1).
+- XS and S are more likely to be held back by non-matmul work, so they may not be as cheap as their FLOPs ratio, in training or at inference. Step 0 replaces the training estimates with a measured seconds per step before step A is approved. Step A's TabArena-Lite timings replace the inference estimates.
 - Each TabArena-Lite and AMLB evaluation took 0.09 h (8 shards) and 0.31 h of wall time for #14 (`a0a2e4e5…`, `c1cd42f9…`). That is a few H100-h at most, and it is left out of the totals.
 
 ### Decision rules
 
 **Step A** (read at 30K, lr 0). Let s be the spread of the two C seeds' final prior validation loss, for classification and for regression separately.
-- **Steep: run step B.** L's loss is below both C seeds by more than s, in classification and in regression. XS, S and M fall in order, so size acts on the prior loss at all. L's guards hold against C.
-- **Flat: stop.** L is within s of C. Then capacity does not limit the prior loss at this length; open item 9 stays as it is, and the prior and objective axes remain.
-- **Mixed** (one task gains and the other does not): report it. Step B runs only on a separate decision.
-- In every case, record whether S is within s of C on the prior loss and within the guards on TabArena-Lite. A model with 0.56× the parameters and 0.65× the inference FLOPs at the same accuracy is worth a separate decision. It does not change v2 by itself.
-- If L passes, L-depth (optional) shows whether depth buys the same for less (1.2-1.35× the stage-1 cost against 2.1×).
+- **S passes: run step B for S.** S's prior loss is within s of the C seeds (no higher than the worse C seed plus s), in classification and in regression. Its TabArena-Lite and AMLB guards hold against C.
+- **S fails, curve flat at the top.** S is worse than C by more than s, and XS is worse than S. The size matters below v1 but says nothing about above it: keep v1's size, and stop.
+- **Steep: consider G.** XS, S and M each fall by more than s, and the fall from S to M per doubling of parameters is at least as large as from XS to S. The curve is then not flattening at v1, and the growth arm CS is proposed, with separate approval.
+- If neither passes, keep v1's size. The prior and objective axes remain the v2 axes (open item 9).
 
-**Step B** (read after the 5K stage 2). Propose lifting open item 9 only if all hold:
-- L's TabArena-Lite overall Elo is at least 40 above M's. 40 is what #14's prior change bought at a fixed size for about 306 H100-h. A size change costs about twice as much for every later run and for every user's inference, so it has to buy at least as much as one prior change did.
-- L's classification and regression Elo are not lower than M's, and the per-dataset geometric-mean error ratio of L to M is below 1 for binary, multiclass and regression.
-- The guards hold.
+**Step B** (S against M after the 5K stage 2). S becomes the proposed v2 size if all hold:
+- Its guards hold against M.
+- Its per-dataset geometric-mean error ratio to M is at most 1.01 for binary, multiclass and regression.
+  - #14's prior gain showed as 0.987-0.998 per task.
+  - So 1.01 allows a loss about the size of one prior change's gain, in exchange for 0.65× the inference FLOPs.
+  - Whether that is worth it is the user's decision, with the measured inference times next to it.
 
-Otherwise keep v1's size. The prior and objective axes remain the v2 axes, and a larger model stays a v3 candidate (open item 9).
+**Step G** (CS):
+- At 30K, CS has to beat both C seeds by more than s in classification and in regression.
+- After its stage 2, CS has to be at least 40 TabArena-Lite Elo above M. 40 is what #14's prior change bought at a fixed size for about 306 H100-h.
+- CS also needs classification and regression Elo no lower than M's, a per-task error ratio below 1, and the guards holding.
+- Only then is lifting open item 9 upward proposed.
 
-**If item 9 is lifted:**
+**If the size changes, in either direction:**
 - v1 is no longer the clean control of the final run, because the size and the prior would both differ.
-- The size effect is then the step B pair (M and L on the same prior), and the prior effect is phases 1-2 at M.
-- Phase 3 would still be compared with v1 on the success criteria and the guards. The model card would state both changes.
+- The size effect is then the step B (or G) pair: two sizes on the same prior. The prior effect comes from phases 1-2 at M.
+- Phase 3 is still compared with v1 on the success criteria and the guards. The model card states both changes.
 
 ### Trade-off: inference cost
 
-A larger model makes every user's `fit`/`predict` slower, including plain classification and regression, not just v2's new tasks.
-- **Compute.** L is about 1.9× v1's FLOPs per table at 10,000 rows (2.1× at 1,024). On tables where inference is compute-bound, `fit`/`predict` takes about twice as long. For reference, v1's stage-1 checkpoint took a mean 7.2 s per classification split on TabArena-Lite (`tabarena_lite_classification_time_infer_s_mean`, `b3c0f0dd…`). Step A's L run logs the same metric and replaces this estimate.
-- **Memory.** The cell state (batch × rows × columns × `emsize`) is 1.5× larger. Chunked inference starts moving it to the CPU (`interleaved_state_device_bytes`, 16 GiB) at about two-thirds of today's table size.
-- **Weights.** The download is 2.2× larger: 496.7M against 221.5M parameters.
-- **Smaller models.** S and XS go the other way (0.65× and 0.37× the inference FLOPs). They matter only if they hold accuracy.
+The size of the model sets the inference cost of every user, including plain classification and regression, not just v2's new tasks.
+- **Smaller.**
+  - S needs 0.65× and XS 0.37× v1's FLOPs per table at 10,000 rows.
+  - The cell state (batch × rows × columns × `emsize`) shrinks by 0.75× and 0.5×, so chunked inference moves it to the CPU (`interleaved_state_device_bytes`, 16 GiB) only on larger tables than today.
+  - The weights are 0.56× and 0.25× as large.
+  - For reference, v1's stage-1 checkpoint took a mean 7.2 s per classification split on TabArena-Lite (`tabarena_lite_classification_time_infer_s_mean`, `b3c0f0dd…`). Step A logs the same metric for XS and S.
+- **Larger (CS).**
+  - CS needs 2.0× the FLOPs per table at 10,000 rows, and its cell state is 2× as large.
+  - Its weights grow only 1.13×, because the row ICL is unchanged. Most of the cost is compute, not download.
 
 ### Sharing with v2-task-priors phase 1
 
 - Step A's M is phase 1's C: both are v1 size, from scratch, stage 1 only, 30K steps, prior `graph_scm_hicard_missing` and no task prior. Both C seeds serve both plans, and their spread is the noise for step A.
-- This holds only if every step A arm uses C's config except `emsize` (and L's micro batch), and the same evaluation at the same tabsil inference version.
+- This holds only if every step A arm uses C's config except `emsize` (and `n_cls` and micro batch for CS), and the same evaluation at the same tabsil inference version.
 - Step A can run beside phase 1 or after C. Its arms do not depend on the task priors.
 - Step B's M run (75K + 5K stage 2 on the base prior) is not part of phase 1. It also gives open item 8 a measured gap between a 30K and a 75K stage 1 on the new prior.
 
 ### Before step A (code)
 
 - `training/scripts/train.py` always builds `STRUCTURE` ("The model is always the TabSil structure"). A resume or `--init-run-id` must have the preset's structure.
-- Step A needs structure overrides (for example `--emsize`, `--nlayers` and `TABSIL_EMSIZE`, `TABSIL_NLAYERS`). They are already `TrainConfig` fields, so `run_architecture` reads them back from the run params.
+- Step A needs structure overrides (`--emsize`, and `--n-cls` for CS, with `TABSIL_EMSIZE` and `TABSIL_N_CLS`). They are already `TrainConfig` fields, so `run_architecture` reads them back from the run params.
 - Step B needs the stage 2 source check to compare against the source run's own structure.
 - Checkpoints store the model config (`tabsil.models.save_checkpoint`), so `training/scripts/eval.py` loads any size without a change.
 - This is a small PR to dev-v2, before step A.
 
 ### Risks
 
-- **lr.** lr 8e-4 was tuned at v1's size. Suppose L comes out flat with a train loss above M's at the same steps. Then lr cannot be told apart from capacity. One L run at lr 4e-4 (30K, ≈ 409 H100-h, separate approval) separates the two.
-- **Training length.** A 30K-step model is limited by training length before capacity (open item 9). A flat step A can miss a limit that appears at 150K. Larger models usually learn faster per step, so a size gain that is real at 150K should show as a lower prior loss at 30K, but that is not guaranteed. Step C checks again at full length if item 9 is lifted.
-- **One seed per arm.** Except for M, each arm has one seed, and step B uses step A's C spread as its noise. The +40 Elo threshold of step B is below the CI of a single comparison. The paired per-dataset ratio carries the decision.
-- **Prior loss and TabArena.** If L lowers the prior loss without moving TabArena in step B, that repeats the prior mismatch found above. The result then points to the prior, not to size.
+- **lr.** lr 8e-4 was tuned at v1's size. If S loses with a train loss above C's from the first steps, lr cannot be told apart from capacity. One S run at another lr (30K, ≈ 115 H100-h, separate approval) separates the two.
+- **Training length.** Smaller models stop improving sooner. A tie at 30K can turn into a gap at 150K, which is why S is chosen only after step B. Step B's 75K stage 1 is still half of v1's, so the final run can still show a gap. Phase 3 checks the guards against v1.
+- **One seed per arm.** Except for M, each arm has one seed, and step B uses step A's C spread as its noise. The paired per-dataset ratio carries the step B decision, because a single Elo comparison has a CI of about ±100.
+- **Prior loss and TabArena.** In stage 1 the two moved apart. A size that keeps the prior loss can still differ on TabArena, so step B reads TabArena after stage 2 before any size is chosen.
