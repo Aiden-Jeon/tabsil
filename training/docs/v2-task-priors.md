@@ -234,6 +234,12 @@ This cannot cover hidden confounding or mediators, nor tell the model which colu
 6. **Borders.** Keep drawing the regression borders from the base regression prior (`make_borders`), not from the mixture. #14's options change only x, so with v1's sizes they stay at v1's ±22.6 sd, and the forecast clip at ±20 sd stays inside them.
 7. **Forecasting recipe.** The inference change of §1 lands on main with its own fev-bench run. It uses the v1 weights, does not retrain, and is a 0.1.x release. Phase 1 starts after it.
 8. **Screening length.** It is not known whether 30K steps separate the priors. The 250K stage-1 run was measured on TabArena-Lite up to 225K; check its MLflow evals for early checkpoints before fixing the length.
+9. **Model size.** v2 keeps v1's size (`STRUCTURE`: 24 layers, emsize 256, 16 heads), so v1 stays the control of the final run.
+   - The gaps measured so far are not capacity gaps. D1 is a range the prior never asks for, D3 is a correct density on the wrong task, and MNAR is not identifiable.
+   - A larger model would also make every user's inference slower, including plain classification and regression.
+   - If ALL fails the phase 2 rule, the cause can be capacity or a real conflict between tasks. Only then, run C and ALL again at a larger size (30K steps each). If the drop closes, capacity was the cause; if it stays, the task's share is lowered.
+   - A 30K-step model is limited by training length before capacity, so phase 2 can miss a capacity limit that appears at 150K. Phase 3 checks the criteria again.
+   - Otherwise a larger model is a v3 candidate, together with the architecture changes listed under Decision.
 
 ## Experiment plan (each run needs approval before it starts)
 
