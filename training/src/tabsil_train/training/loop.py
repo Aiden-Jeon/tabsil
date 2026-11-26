@@ -49,7 +49,9 @@ from tabsil.models import (
     state_config,
     state_weights,
 )
+from tabsil.models.quantile_distribution import pinball_loss
 from tabsil_train.priors import prior_module
+from tabsil_train.priors.transforms.target import train_row_scale
 from tabsil_train.training.config import N_BUCKETS, TrainConfig
 from tabsil_train.training.data import PriorBatches
 from tabsil_train.training.diagnostics import (
@@ -99,22 +101,41 @@ def _make_val_batches(config: TrainConfig, task: str, n_batches: int = 8):
 
 @torch.no_grad()
 def _validate(
-    model, val_batches, device, autocast, task, inference_rows: int | None = None
+    model,
+    val_batches,
+    device,
+    autocast,
+    task,
+    inference_rows: int | None = None,
+    train_row_targets: bool = False,
 ) -> dict[str, float]:
     """Loss over the validation batches (plus accuracy for classification). With
     `inference_rows`, batches with more rows use the model's inference path (`inference=True`,
-    `TrainConfig.activation_checkpointing_rows`)."""
+    `TrainConfig.activation_checkpointing_rows`).
+
+    `train_row_targets` is for a model trained with `TrainConfig.target_train_rows` on batches
+    drawn without it (the reference set): each regression target is standardized with its train
+    rows as in training, and the loss of a table is multiplied by its train-row sd. The pinball
+    loss scales with the target, so that is the loss of the model's quantiles mapped back to the
+    batch's own units (all rows standardized), the units of a model trained without the option."""
     model.eval()
     total, correct, count = 0.0, 0, 0
     for batch in val_batches:
         x, y = batch.x.to(device), batch.y.to(device)
+        scale = None
+        if train_row_targets and task == "regression":
+            mean, scale = train_row_scale(y, batch.n_train)
+            y = (y - mean) / scale
         kwargs = {"task": task}
         if inference_rows is not None and x.shape[1] > inference_rows:
             kwargs["inference"] = True
         with autocast():
             logits = model(x, y[:, : batch.n_train], **kwargs)
         y_eval = y[:, batch.n_train :]
-        total += prior_loss(logits, y_eval, task).item()
+        if scale is None:
+            total += prior_loss(logits, y_eval, task).item()
+        else:
+            total += (pinball_loss(logits, y_eval.float()) * scale.float()).mean().item()
         if task == "classification":
             correct += (logits.argmax(-1) == y_eval.long()).sum().item()
             count += y_eval.numel()
@@ -132,9 +153,11 @@ def _validate_tasks(
     of the two task losses. `prefix` is "val" for the run's validation batches and "ref" for the
     reference set (`training.reference`)."""
     rows = config.activation_checkpointing_rows
+    # the reference set is drawn without the train-row target scaling (`training.reference`)
+    rescale = prefix == "ref" and config.target_train_rows
     out = {}
     for task, batches in val_sets.items():
-        val = _validate(model, batches, device, autocast, task, rows)
+        val = _validate(model, batches, device, autocast, task, rows, rescale)
         out.update({f"{prefix}{k[3:]}_{task}": v for k, v in val.items()})
     out[f"{prefix}_loss"] = sum(out[f"{prefix}_loss_{t}"] for t in val_sets) / len(val_sets)
     return out

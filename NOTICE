@@ -44,6 +44,9 @@ AFFILIATES, licensed under the Apache License 2.0:
 - training/src/tabsil_train/priors/transforms/dependence.py `CorrelateColumns`, `blend_discrete`,
   `Relabel`, `score_classes`: adapted from sdm/prior/tabular/transform/correlate.py
   (`CorrelateColumns`, `_discretize_correlated_column`) and relabel.py (`Relabel`)
+- training/src/tabsil_train/priors/transforms/target.py `TrainRowTargetScale`: adapted from
+  train/kumo/tabular/loader.py (`PriorDataset`: the context-row target standardization and the
+  `min_regression_train_std` check)
 
 This product includes software derived from TabICLv2 (https://github.com/soda-inria/tabicl),
 Copyright (c) 2025, Soda team @ Inria, licensed under the BSD 3-Clause License

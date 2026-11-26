@@ -86,6 +86,11 @@ class TrainConfig:
     max_train_fraction: float = 0.9
     binary_prob: float = 0.5
     filter_unpredictable: bool = True
+    # Standardize the regression target again with the train rows (mean, sd with ddof 0), after
+    # the prior's clip and its standardization over all rows, as inference does; tables whose
+    # train-row sd is at most 0.1 are drawn again (`priors.transforms.TrainRowTargetScale`,
+    # Kumo-Tabular's loader). The regression borders follow it. Off by default (v1)
+    target_train_rows: bool = False
     missing_dataset_prob: float = 0.3
     border_datasets: int = 20_000  # datasets sampled to set the regression borders (our choice)
     # optimization (Muon on all parameters, warmup + cosine)

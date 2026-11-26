@@ -32,6 +32,9 @@ The table size and prior settings (`TrainConfig` comments) can be changed with
 `TABSIL_MIN_ROWS`·`TABSIL_MAX_ROWS`·`TABSIL_MIN_TRAIN_FRACTION`·
 `TABSIL_MAX_TRAIN_FRACTION`, `TABSIL_BINARY_PROB`, `TABSIL_FILTER_UNPREDICTABLE=1`
 (unset values keep the preset).
+Training recipe options of the v2 experiments (`TrainConfig` comments; off by default, and a
+resumed run keeps the original run's values): `--target-train-rows` (`TABSIL_TARGET_TRAIN_ROWS=1`)
+standardizes the regression target again with the train rows, as inference does.
 `--prior-type` (`TABSIL_PRIOR_TYPE`) trains on another registered prior (`tabsil_train.priors.
 PRIOR_TYPES`, e.g. `graph_scm_hicard_missing`); unset, the preset's (`graph_scm`). A resumed run
 keeps the prior it was trained on (a different `--prior-type` is an error); a run that takes only
@@ -213,6 +216,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         default=_env_flag("TABSIL_FILTER_UNPREDICTABLE"),
     )
+    # Training recipe options of the v2 experiments (TrainConfig comments). A resumed run keeps the
+    # original run's values (`inherit_recipe_options`)
+    parser.add_argument(
+        "--target-train-rows",
+        action="store_true",
+        default=_env_flag("TABSIL_TARGET_TRAIN_ROWS"),
+    )
     # For short comparison runs: the seed changes the initial weights, training data and validation
     # set, and the warmup replaces the preset's length. On resume, pass the original run's values
     # again
@@ -294,6 +304,34 @@ def inherit_reference_val(args: argparse.Namespace, params: dict[str, str]) -> N
     if args.resume_run_id and args.reference_val_tables is None:
         if "reference_val_tables" in params:
             args.reference_val_tables = int(params["reference_val_tables"])
+
+
+# Training recipe options a resumed run keeps (TrainConfig field -> parser of its MLflow param).
+# A run must not change them midway, so a different value given on resume stops the script. A run
+# that takes only the weights (`--init-run-id`) uses the preset's or the given values
+RECIPE_OPTIONS = {"target_train_rows": lambda text: text == "True"}
+
+
+def inherit_recipe_options(args: argparse.Namespace, params: dict[str, str]) -> None:
+    """On resume, the original run's recipe options (`RECIPE_OPTIONS`; runs that predate a param
+    used its default). An on/off option can only be turned on with its flag, so an option the run
+    had on is kept on, and turning on one the run had off stops the script."""
+    if not args.resume_run_id:
+        return
+    defaults = TrainConfig()
+    for name, parse in RECIPE_OPTIONS.items():
+        saved = parse(params[name]) if name in params else getattr(defaults, name)
+        given = getattr(args, name)
+        if isinstance(saved, bool):
+            if given and not saved:
+                raise SystemExit(f"--{name.replace('_', '-')} is off in the resumed run")
+            setattr(args, name, saved)
+        elif given is None:
+            setattr(args, name, saved)
+        elif given != saved:
+            raise SystemExit(
+                f"--{name.replace('_', '-')} {given} differs from the resumed run's {saved}"
+            )
 
 
 def inherit_prior_type(args: argparse.Namespace, params: dict[str, str]) -> None:
@@ -411,6 +449,7 @@ def _override_values(args: argparse.Namespace) -> dict:
                 "grad_cosine",
                 "rank_timing",
                 "filter_unpredictable",
+                "target_train_rows",
             )
             if getattr(args, name)
         },
@@ -490,6 +529,7 @@ def main(argv: list[str] | None = None) -> None:
         inherit_batch_size(args, params)
         inherit_prior_type(args, params)
         inherit_reference_val(args, params)
+        inherit_recipe_options(args, params)
     config = build_config(args, source, speed_options)
     if args.resume_run_id:
         config = resume_phase_lr(config, args, params)  # checked before the checkpoint download

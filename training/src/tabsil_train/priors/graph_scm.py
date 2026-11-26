@@ -37,6 +37,13 @@ borders are drawn with them (`make_borders(..., **options)`, `TARGET_FIELDS`):
 - `corrected_num_converters`, `corrected_cat_sizes` (`generators.graph_scm.GraphSCM`): the two
   TabICL `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 100 categories)
 
+Regression target scaling, off by default: with `target_train_rows`
+(`transforms.TrainRowTargetScale`, a training config field like `filter_unpredictable`), the
+target is standardized again with the train rows after the SCM's clip and standardization over all
+rows, as inference standardizes it, and a table whose train-row sd is at most 0.1 is drawn again
+(Kumo-Tabular's loader). It runs last in step 2, so the regression borders are drawn with it
+(`BORDER_PRIOR_FIELDS`).
+
     prior = GraphSCMPrior(task="classification", seed=0)
     batch = prior.sample_batch(8)  # x (8, rows, features), y (8, rows), n_train
 
@@ -66,6 +73,7 @@ from tabsil_train.priors.transforms import (
     Missing,
     Relabel,
     StructuredMissing,
+    TrainRowTargetScale,
 )
 
 # Most classes of a classification dataset (TabPFN v2 paper); the classifier's output count
@@ -103,6 +111,7 @@ class GraphSCMPrior:
         relabel_prob: float = 0.0,
         corrected_num_converters: bool = False,
         corrected_cat_sizes: bool = False,
+        target_train_rows: bool = False,
     ) -> None:
         self._task = task
         self.min_train_rows = MIN_TRAIN_ROWS[task]
@@ -142,8 +151,12 @@ class GraphSCMPrior:
         if relabel_prob:
             dependence.append(Relabel(relabel_prob, classification=classification))
         self.dependence = tuple(dependence)
-        # Everything before the missing values (regression borders and `_one_dataset` stop here)
-        self._accept = [DropInvalid(), *dependence, *([CoverClasses()] if classification else [])]
+        # Everything before the missing values (regression borders and `_one_dataset` stop here).
+        # The train-row target scaling comes last, after every part that changes y
+        last = [CoverClasses()] if classification else []
+        if target_train_rows and not classification:
+            last.append(TrainRowTargetScale())
+        self._accept = [DropInvalid(), *dependence, *last]
         self._missing = Missing(missing_dataset_prob, max_missing_rate)
         # The options: a part is only added when on, so the v1 settings draw the same numbers
         realism = []
@@ -226,7 +239,7 @@ SIZE_DEFAULTS = {
 }
 SIZE_FIELDS = tuple(SIZE_DEFAULTS)
 # Prior options that change the training data distribution
-PRIOR_FIELDS = ("binary_prob", "filter_unpredictable")
+PRIOR_FIELDS = ("binary_prob", "filter_unpredictable", "target_train_rows")
 # Options that change only x, off by default (module docstring). They are not training config
 # fields: a prior that turns them on is its own module with fixed values (`tabsil_train.priors`)
 REALISM_FIELDS = (
@@ -243,7 +256,7 @@ REALISM_FIELDS = (
 TARGET_FIELDS = ("relabel_prob", "corrected_num_converters", "corrected_cat_sizes")
 # Those that also change the regression target distribution (the regression borders follow the
 # training prior in these; binary_prob only affects classification)
-BORDER_PRIOR_FIELDS = ("filter_unpredictable",)
+BORDER_PRIOR_FIELDS = ("filter_unpredictable", "target_train_rows")
 
 
 def _sizes(config) -> dict:

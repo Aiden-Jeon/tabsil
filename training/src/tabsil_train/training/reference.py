@@ -24,6 +24,22 @@ What the loss compares: the loss of one task on the same tables, between runs of
 or optimizer. It is a second readout for arms that share a prior (the plan's phase 1B and phase
 2). Between runs on different priors it also measures how far the reference prior is from each
 run's own training data, so it is not a measure of accuracy on real tables.
+
+With the train-row target scaling (`TrainConfig.target_train_rows`, the plan's YCTX arm) the set is
+still drawn without it. A run with the scaling gets each reference regression target standardized
+with its train rows, as in its training, and its loss is mapped back to the set's units (each
+table's loss times its train-row sd, `loop._validate`). Then:
+
+- the classification loss and accuracy compare runs with and without the scaling directly (the
+  option changes only regression tables)
+- the regression loss is in the same units for both, on the same tables, each model given the
+  targets in the form it was trained on. It compares how well the two fit the reference prior's
+  targets in those units. It does not compare them in the train-row units in which inference
+  works: there each table would count by 1 / its train-row sd, so tables with a narrow train-row
+  spread would count more. The set also keeps the tables with a train-row sd of at most 0.1 that
+  the scaled run never trained on
+- the `val_*` loss of a run with the scaling is in train-row units on its own prior, so it does
+  not compare with that of a run without it
 """
 
 from __future__ import annotations
@@ -45,6 +61,7 @@ REFERENCE_PRIOR = {
     "binary_prob": 0.5,
     "filter_unpredictable": True,
     "missing_dataset_prob": 0.3,
+    "target_train_rows": False,
 }
 REFERENCE_SEED = 30_000_000  # disjoint from the training (seed tuples), val and border seeds
 REFERENCE_BATCH = 8  # tables per batch (one table size per batch), independent of val_batch
