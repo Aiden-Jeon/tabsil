@@ -165,7 +165,6 @@ class _Base:
         device: str = "cpu",
         random_state: int = 0,
         train_context: bool = True,
-        flip_sign: bool = False,
         categories: str = "codes",
     ) -> None:
         if feature_subsampling not in FEATURE_SUBSAMPLINGS:
@@ -173,13 +172,12 @@ class _Base:
                 f"feature_subsampling is one of {FEATURE_SUBSAMPLINGS}: {feature_subsampling}"
             )
         self.feature_subsampling = feature_subsampling
-        # member i takes kind i mod the kind count (`tabsil.inference.preprocessing`); TabSil's
-        # default is one kind, "standard"
+        # numeric transform kinds over the members (`_kind_index`, `tabsil.inference.preprocessing`)
         self.member_kinds = resolve_member_kinds(member_kinds)
         if categories not in CATEGORY_ENCODINGS:
             raise ValueError(f"categories is one of {CATEGORY_ENCODINGS}: {categories}")
-        # member options (`Member.flip_sign`, `Member.categories`), the same for every member
-        self.flip_sign, self.categories = flip_sign, categories
+        # many-category columns (`Member.categories`), the same for every member
+        self.categories = categories
         self.softmax_temperature = softmax_temperature
         # cap on the column count after one-hot expansion: the feature count the model saw in
         # training (max_features of the model config)
@@ -227,14 +225,15 @@ class _Base:
         """The training-row targets for the model (1, train rows) and extra forward kwargs."""
         return y, {}
 
+    def _kind_index(self, i: int) -> int:
+        """Member i's position in `member_kinds` before taking it modulo the kind count: round
+        robin."""
+        return i
+
     def _member_options(self, i: int) -> dict:
         """The preprocessing options of member i (`Member` fields)."""
         kinds = self.member_kinds
-        return {
-            "kind": kinds[i % len(kinds)],
-            "flip_sign": self.flip_sign,
-            "categories": self.categories,
-        }
+        return {"kind": kinds[self._kind_index(i) % len(kinds)], "categories": self.categories}
 
     def _test_inputs(self, X: Any):
         """A function `inputs(i)`: member i's model input columns of the test rows X (T, F_i)."""
@@ -537,6 +536,12 @@ class EnsembleRegressor(_Base):
     def fit(self, X: Any, y: Any) -> EnsembleRegressor:
         rng = np.random.default_rng(self.random_state)
         return self.fit_members(X, y, self._default_members(rng))
+
+    def _kind_index(self, i: int) -> int:
+        # the target power runs off, off, on, on (`_default_members`), as long as the 4-kind cycle:
+        # members 0, 1, 2, 3, 4, 5, 6, 7 take kinds 0, 1, 0, 1, 2, 3, 2, 3, so each kind gets
+        # the plain and the power-transformed target once in 8 members
+        return i % 2 + 2 * (i // 4)
 
     def _default_members(self, rng: np.random.Generator) -> list[Member]:
         return [

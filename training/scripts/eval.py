@@ -202,25 +202,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--softmax-temperature",
         type=float,
         default=None,
-        help="classification: divide the logits by this before the softmax (default: 0.9)",
+        help="classification: divide the logits by this before the softmax (default: the model's;"
+        " TabSil 1.0)",
     )
     parser.add_argument(
         "--member-kinds",
         default=None,
-        help="member numeric transforms, round robin: a preset (numeric-cycle) or comma-separated"
-        " kinds from standard,power,robust,quantile (default: the model's)",
-    )
-    parser.add_argument(
-        "--flip-sign",
-        action="store_true",
-        help="each member negates each numeric column with probability 1/2",
+        help="member numeric transforms: a preset (numeric-cycle) or comma-separated kinds from"
+        " standard,power,robust,quantile (default: the model's; TabSil numeric-cycle)",
     )
     parser.add_argument(
         "--categories",
         choices=CATEGORY_ENCODINGS,
-        default="codes",
+        default=None,
         help="categorical columns that stay codes with more than 20 categories: keep the codes"
-        " only, or add a log count column",
+        " only, or add a log count column (default: the model's; TabSil counts)",
     )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out-dir", default="tabsil_eval")
@@ -275,6 +271,13 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
             "random_state": args.seed,
             "max_features_per_member": make.max_features_per_member,
             "feature_subsampling": make.feature_subsampling,
+            # the model's inference settings, then the command line's
+            "categories": inference["categories"],
+            **(
+                {"softmax_temperature": inference["softmax_temperature"]}
+                if suite == "classification"
+                else {}
+            ),
             **inference_options(args, suite),
         }
         if suite == "classification":
@@ -296,7 +299,7 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
 
     make.max_one_hot_width = max_features_of(model)  # the host memory estimate uses the same cap
     # `--categories counts` adds up to one column per categorical column (host memory estimate)
-    make.count_columns = getattr(args, "categories", "codes") == "counts"
+    make.count_columns = (getattr(args, "categories", None) or inference["categories"]) == "counts"
     make.n_estimators = n_estimators
     # this task's columns-per-member cap and subsampling method (`model_feature_cap`, TabSil
     # 768 / balanced)
@@ -306,17 +309,15 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
 
 
 def inference_options(args: argparse.Namespace, suite: str | None = None) -> dict:
-    """The inference options given on the command line (`--softmax-temperature`, `--flip-sign`,
-    `--categories`) as estimator arguments; options at their default are left out. With `suite`
-    ("classification" / "regression"), only those of that task (the temperature is
-    classification only)."""
+    """The inference options given on the command line (`--softmax-temperature`,
+    `--categories`) as estimator arguments; options not given are left out (the model's settings
+    apply). With `suite` ("classification" / "regression"), only those of that task (the
+    temperature is classification only)."""
     out = {}
     temperature = getattr(args, "softmax_temperature", None)
     if temperature is not None and suite in (None, "classification"):
         out["softmax_temperature"] = temperature
-    if getattr(args, "flip_sign", False):
-        out["flip_sign"] = True
-    if getattr(args, "categories", "codes") != "codes":
+    if getattr(args, "categories", None) is not None:
         out["categories"] = args.categories
     return out
 
