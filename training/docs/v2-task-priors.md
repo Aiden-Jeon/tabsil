@@ -1,41 +1,80 @@
-# v2 training prior: forecasting and outlier detection
+# v2 training prior: task priors, trained from scratch
 
-Status: design. No training job has run for it. Two of the four problem types planned for v2 are covered here: forecasting and outlier detection. Imputation and causal effect estimation are being evaluated zero-shot on main first.
+Status: design. No v2 training job has run. Diagnostics D1-D3 ran on the v1 weights; D4 and D5 are planned.
 
-TabSil 0.1.x forecasts (`tabsil.forecast`, #17) and scores outliers (`tabsil.unsupervised`, #19) zero-shot with the v1 weights: it turns each task into the regression and classification it was trained on. The fev-bench and ADBench suites measure that. This document asks which training data the v2 prior needs so that these uses improve. It relies on three diagnostics of the v1 weights (`training/scripts/v2_prior_diag/`) and on a check of the code paths involved.
+## Decision
+
+v2 is trained from scratch with the v1 architecture and losses (`tabsil.recipe.STRUCTURE`, the retrieval decoder for classification, 999 quantiles with the pinball loss for regression). Only the training data changes: the v2 prior adds task priors to v1's classification and regression tables. The three-stage curriculum keeps v1's lengths (150K / 10K / 2K steps, about 1,550 H100-h). So v1 is the control of the final run: same structure, recipe and budget, and only the prior differs.
+
+TabSil 0.1.x already handles four tasks zero-shot with the v1 weights. Each wrapper turns its task into the regression or classification the model was trained on:
+- forecasting: `tabsil.forecast`, #17
+- outlier scores: `tabsil.unsupervised`, #19
+- imputation: `TabSilUnsupervised.impute`
+- treatment effects: `TabSilCATE`
+
+The last two are on their branches, waiting for #21. v2 keeps these wrappers and trains on tables shaped like the ones they send.
+
+Keeping the architecture limits what a task prior can do:
+- Every task must be a classification or regression table that the current model reads. There is no task token, no column role and no new head.
+- So a task prior can change only three things: which rows are the eval rows (the split), what the context holds, and how y is scaled.
+- Two ideas need a new architecture and are left out of v2: a separate outlier head (FoMo-0D, OutFormer) and a treatment-column indicator (Do-PFN). They are v3 candidates if v2 falls short on those tasks.
+
+The release is named v2 (Hub tag `v2`, tabsil 0.2.0), because the weights are retrained from scratch on a different prior. The model card states that the structure is v1's.
+
+| Task | Zero-shot gap of the v1 weights | v2 task prior | Status |
+|---|---|---|---|
+| Forecasting | D1: with the 0.1.1 recipe no forecast goes more than 0.14 past the largest context value; without its clipping the forecasts go higher but still miss the trend | temporal split, y scaled with the train rows, and a forecasting recipe that does not clip | design (§1) |
+| Outlier detection | D3: a small dense group of anomalies scores as inliers | reference rows labeled 1 in the context | design (§2) |
+| Imputation | not measured yet (D4) | eval rows chosen by a MAR/MNAR mechanism | proposal, only if D4 shows a gap (§3) |
+| Treatment effects | not measured yet (D5) | eval rows with an intervened binary column | proposal, only if D5 shows a gap (§4) |
 
 ## Diagnostics (v1.1 weights, tabsil 0.1.1 defaults)
 
-AI Runtime, 1x H100, MLflow run `tabsil-v2-prior-diag` `edee9216d2a44f4c9484ae6a91578fa6` (2026-11-26, with the scripts as committed; the earlier run `ffc589d4…` printed identical tables). The code is main (#17, #19) merged with release/0.1.1. Nothing failed and nothing is imputed.
+AI Runtime, 1x H100, MLflow run `tabsil-v2-prior-diag` `27795403ab8d427988f65ab575662179` (2026-11-26). The code is main at f5b26a7, which includes release/0.1.1. The weights are pinned to `aiden-jeon/tabsil@v1.1` (`DIAG_MODEL`), and their config sets the inference recipe. Nothing failed and nothing is imputed.
 
-### D1: forecasts stop at the largest context value
+Earlier runs (`edee9216…`, `ffc589d4…`) had no `plain` arm and gave D1 `default` and D3 identical tables. D2 moved by at most 0.01 once the outer buckets were scored as half-normal tails.
+
+### D1: forecasts stay at the largest context value
 
 Synthetic daily series: 365 context steps and a 56-step horizon. Each is level + trend + weekly and monthly seasonality + noise (sd 1). Strength is the trend's rise over the horizon in noise sds. 4 seeds.
 
-| Trend | Strength | True max − context max | Forecast max − context max | MASE TabSil | MASE seasonal naive | MASE OLS (index + sin/cos) |
-|---|---|---|---|---|---|---|
-| linear | 0 | −1.03 | −2.16 | **0.51** | 0.86 | 0.51 |
-| linear | 2 | 1.67 | −0.47 | 1.53 | 0.95 | 0.51 |
-| linear | 5 | 5.12 | **0.01** | 3.42 | 1.62 | 0.49 |
-| linear | 15 | 14.11 | **0.03** | **11.75** | 3.67 | 0.37 |
-| exponential | 15 | 13.52 | 0.07 | 4.72 | 4.36 | 7.43 |
-| piecewise | 15 | 14.11 | 0.07 | 4.90 | 4.59 | 11.53 |
+The two arms separate the model from the 0.1.1 inference recipe:
+- `default`: the weights' recipe, which is 8 numeric-cycle members, half with the target power transform.
+- `plain`: 2 `standard` members without the target power transform. Nothing in this recipe bounds a forecast; why the default one does is explained below.
 
-- Without a trend TabSil equals OLS and beats seasonal naive, so the periodic part is learned.
-- With a trend, no forecast goes more than 0.07 above the largest context value. The linear trend's forecast even falls back (the trend capture is −1.31). This is the limitation the TabPFN-TS paper reports for TabPFN (Hoo et al. 2025, arXiv 2501.02945, Section 6.1).
+The forecast-max column is the largest forecast minus the largest context value, as the mean and the maximum over seeds.
 
-The v1 prior explains it. The graph SCM's regression target is passed through TabICL's `outlier_removing(threshold=4)` and then `standard_scaling` over all rows of the table, train and eval together (`tabicl/prior/_graph_scm.py`, `_reg2cls.py`). Eval rows are a random subset of the same rows. So the model has practically never been asked for a held-out target far outside the train targets' range.
+| Trend | Strength | True max − context max | Forecast max − context max, default (mean / max) | plain (mean / max) | MASE default | MASE plain | MASE seasonal naive | MASE OLS (index + sin/cos) |
+|---|---|---|---|---|---|---|---|---|
+| linear | 0 | −1.03 | −2.16 / −1.15 | −2.19 / −1.13 | **0.51** | 0.51 | 0.86 | 0.51 |
+| linear | 2 | 1.67 | −0.47 / −0.07 | −0.09 / 0.19 | 1.53 | 1.24 | 0.95 | 0.51 |
+| linear | 5 | 5.12 | 0.01 / 0.03 | 2.56 / 3.13 | 3.42 | 2.73 | 1.62 | 0.49 |
+| linear | 15 | 14.11 | 0.03 / **0.05** | 8.50 / 12.98 | **11.75** | **9.03** | 3.67 | 0.37 |
+| exponential | 15 | 13.52 | 0.07 / 0.09 | 3.56 / 4.69 | 4.72 | 4.19 | 4.36 | 7.43 |
+| piecewise | 15 | 14.11 | 0.07 / 0.14 | 5.37 / 5.68 | 4.90 | 4.16 | 4.59 | 11.53 |
+
+- Without a trend both arms equal OLS and beat seasonal naive, so the periodic part is learned.
+- With the default recipe no forecast, over every seed, goes more than 0.14 above the largest context value. The linear trend's forecast even falls back (trend capture −1.31). This is the limitation the TabPFN-TS paper reports for TabPFN (Hoo et al. 2025, arXiv 2501.02945, Section 6.1).
+- **Part of that is the inference recipe.**
+  - The target-power members map their distribution back through `_clipped_inverse`, which clips it to the train target range (`tabsil/inference/ensemble.py`). Half of the 8 members can put no mass above the context maximum.
+  - The `quantile` feature kind maps every running-index value beyond the train rows to the top quantile, and `robust` squashes it into ±3.
+  - Without these (`plain`), forecasts go up to 13 above the context maximum.
+- **The other part is the model.** Even `plain` misses the trend: on linear 15 its MASE is 9.03, worse than seasonal naive (3.67), and its trend capture is −0.71, so the mean forecast still falls back.
+
+The v1 prior explains the model's part. The graph SCM's regression target is passed through TabICL's `outlier_removing(threshold=4)` and then `standard_scaling` over all rows of the table, train and eval together (`tabicl/prior/_graph_scm.py`, `_reg2cls.py`). Eval rows are a random subset of the same rows. So the model has practically never been asked for a held-out target far outside the train targets' range.
+
+Both parts need a fix: the forecasting prior (§1), and a forecasting recipe that does not clip.
 
 ### D2: unpredictable targets are calibrated about as well as predictable ones
 
-NLL on 500 test rows. The excess is the model's NLL minus the true distribution's NLL, averaged over 100, 500 and 2,000 train rows, 1 and 5 features, and 3 seeds.
+NLL on 500 test rows. The model's density is `predict_distribution`'s: uniform within the inner buckets, half-normal in the two outer ones. The excess is the model's NLL minus the true distribution's NLL, averaged over 100, 500 and 2,000 train rows, 1 and 5 features, and 3 seeds.
 
-| Target | Excess over the true density | Excess over a KDE of the train targets |
+| Target | Excess over the true density | Excess over a model that ignores x |
 |---|---|---|
-| classification, random labels (0.6/0.3/0.1) | 0.001 | 0.004 |
-| y independent of x: normal | 0.087 | 0.077 |
-| y independent of x: lognormal | 0.136 | −0.162 |
-| y independent of x: Student t3 | 0.108 | −0.143 |
+| classification, random labels (0.6/0.3/0.1) | 0.001 | 0.004 (the train label frequencies) |
+| y independent of x: normal | 0.087 | 0.077 (a KDE of the train targets, as below) |
+| y independent of x: lognormal | 0.142 | −0.156 |
+| y independent of x: Student t3 | 0.113 | −0.138 |
 | y independent of x: bimodal | 0.268 | 0.173 |
 | control, y = sin(2 x0) + N(0, 0.3²) | 0.412 | — |
 
@@ -59,12 +98,22 @@ Inliers lie on a nonlinear 6-dimensional manifold. The context has 600 rows, and
 
 ## What the code allows today
 
-Checked on `dev-v2` (8e5007d) and main.
+Checked on `dev-v2` (de8225c) and main (f5b26a7).
 
-- **Regression loss.** The regression output is 999 quantiles with the pinball loss, and a missing (NaN) target contributes 0 (`tabsil/models/quantile_distribution.py`). Eval rows can therefore be left out of the loss without a code change. The regression borders are only used at inference to turn quantiles into bucket probabilities. They span ±22.6 train-target sds (v1), so targets far outside the context range can be represented.
+- **Regression loss.** The regression output is 999 quantiles with the pinball loss, and a missing (NaN) target contributes 0 (`tabsil/models/quantile_distribution.py`). Eval rows can therefore be left out of the loss without a code change. The regression borders are only used at inference to turn quantiles into bucket probabilities.
+- **Out-of-range targets at inference.** The borders span ±22.6 train-target sds (v1), so the model's output can put mass far outside the context range. The 0.1.1 recipe still keeps it in, as D1 shows:
+  - The target-power members clip their distribution to [min, max] of the train targets (`_clipped_inverse`).
+  - The `quantile` and `robust` feature kinds saturate inputs beyond the train range.
 - **Classification decoder.** It is a retrieval decoder (`tabsil/models/column_row_transformer.py`, `RetrievalDecoder`). A test row's probabilities are the attention-weighted average of the train rows' one-hot labels. **A class that no train row carries gets probability 0.** A one-class setup, with every context row labeled 0 and the model asked for P(outlier), is therefore impossible. Eval rows can be left out of the classification loss with `IGNORE_INDEX` (−100).
 - **Scaling at inference.** Inference standardizes x and the regression y with the train rows only (`standardize_cells`; `EnsembleRegressor.fit`, `inference/ensemble.py`). The v1 prior standardizes y over all rows and compresses it beyond 4 sd, so the two disagree whenever eval targets leave the train range.
 - **Batches.** A `PriorBatch` has one `n_train`, and the eval rows are the last rows of every dataset. A temporal split only has to put the time steps in order before that cut.
+
+## Base prior and guards
+
+- **Base prior.** #14's `graph_scm_hicard_missing` (merged into dev-v2, de8225c). Its stage 2 run passed every #14 criterion (TabArena-Lite Elo 1769 against 1727 for `stage2-10k`). That run had one seed and no control with the v1 prior (A0). The screening control below uses this prior, so the v2 decisions do not depend on A0.
+- **Guards for every run.** Each run is compared with its reference: C in the screening, v1 in the final run, both at the same tabsil inference version. A run fails if either holds:
+  - TabArena-Lite overall, classification or regression Elo is lower beyond its 95% CI.
+  - AMLB ROC AUC or the regression RMSE ratio is worse by more than 0.005.
 
 ## 1. Forecasting prior
 
@@ -84,14 +133,17 @@ Goal: tables in which the eval rows are the future of the train rows, built from
 - TabICL's 4 sd outlier compression is not applied. The horizon is clipped at ±20 sd to stay inside the borders.
 
 **Mixture.**
-- Start with a share of 0.1 of the regression datasets. Chronos found about 10% synthetic data best when mixed with real series, and more synthetic data hurt there.
+- Start with a share of 0.1 of the regression datasets, in all three stages. Chronos found about 10% synthetic data best when mixed with real series, and more synthetic data hurt there.
 - Classification batches are unchanged.
-- Stage 2 only, as in #14's option A. The quantile head does not depend on the borders, so the stage 1 weights and borders carry over.
 
-**Success criteria.** These are fixed before a run:
-- fev-bench task-mean SQL Elo above 1526, the v1 zero-shot result, and the D1 linear-15 MASE below seasonal naive.
-- TabArena-Lite overall and regression Elo not lower than the baseline run beyond its 95% CI.
-- AMLB regression RMSE ratio within 0.005.
+**Inference recipe (main, before the runs are judged).**
+- `TabSilForecaster` needs members that can leave the context range: no target power transform, or an inverse that is not clipped to the train targets.
+- The running index also needs a kind that does not saturate (`standard` or `power`, not `quantile` or `robust`).
+- D1's `plain` arm is the first version of this recipe. The forecasting recipe change ships on main with the v1 weights, and fev-bench is measured again with it before phase 1. Every forecasting comparison below then uses that recipe, so a prior gain is not confused with a recipe gain.
+
+**Success criteria (final run).**
+- fev-bench task-mean SQL Elo above v1's with the same forecasting recipe. v1 scored 1526 with the 0.1.1 recipe.
+- The D1 linear-15 MASE below seasonal naive in the `plain` arm.
 
 ## 2. Outlier detection prior
 
@@ -119,30 +171,85 @@ At inference a new `TabSilOutlier` appends reference rows built by the same code
   - Half the time it is a product of the data rows' marginals (each column shuffled independently), which flags dependency anomalies.
   - Half the time it is uniform in the padded bounding box, which flags global ones.
   - The reference rows make up 20-50% of the context. Inference uses one fixed recipe, and the prior draws around it.
-- **Mixture.** Start with a share of 0.1 of the classification datasets. Every other classification dataset is unchanged, and `CoverClasses` still holds (both classes appear in the context).
-- **Success criteria.**
-  - ADBench (12 tables × 3 seeds, #19 protocol) mean AUROC above IsolationForest's 0.722, and contaminated AUROC within 0.05 of TabSil's clean-context 0.820.
+- **Mixture.** Start with a share of 0.1 of the classification datasets, in all three stages. Every other classification dataset is unchanged, and `CoverClasses` still holds (both classes appear in the context).
+- **Success criteria (final run).**
+  - ADBench (12 tables × 3 seeds, #19 protocol) mean AUROC above IsolationForest's 0.722, and contaminated AUROC within 0.05 of v1's clean-context 0.820.
   - The D3 cluster at 2% at or above 0.9.
-  - TabArena-Lite classification Elo not lower than the baseline beyond its 95% CI.
 
-**Fallback.** A separate outlier head as in FoMo-0D and OutFormer, trained with a binary loss on contaminated queries. This changes the architecture. Use it only if the reference-row run fails its criteria.
+**Out of scope: a separate outlier head** as in FoMo-0D and OutFormer, trained with a binary loss on contaminated queries. It changes the architecture, so it is not part of v2. If the reference rows fail, outlier detection stays zero-shot in v2.
 
 **Not recommended: contamination with an inlier-only loss on the per-column conditionals.** The loss would ignore the outlier eval rows, but D3 shows that the context's outlier group is learned as density. The model would stay unconstrained exactly where it fails.
 
+## 3. Imputation prior (only if D4 shows a gap)
+
+**Where the v1 prior differs.** `TabSilUnsupervised.impute` fits one model per column. That column is the target, and the rows missing it are the eval rows. In real tables the missingness mechanism selects those rows: under MAR it depends on the other columns, and under MNAR on the missing value itself. In the v1 prior the eval rows are a random subset, which is MCAR on the target. #14 already puts MAR/MNAR missing cells into x (`StructuredMissing`), so the input side is covered and the target side is not.
+
+**Prior.** Base-prior tables, including #14's missing cells in x, whose eval rows come from a missingness score instead of a random draw:
+- MAR: the score is logistic in 1-3 x columns.
+- MNAR: the score is logistic in y (self-masking).
+- The batch keeps its single n_train. The n_eval rows are drawn without replacement with probabilities from the score and moved to the end.
+- Start with a share of 0.1 of the classification and of the regression datasets.
+
+TabImpute (2510.02625) found that mixing missingness patterns lowered its default model, which is MCAR-only. So the first arm uses MAR only, and an MNAR arm follows only if the MAR arm passes.
+
+**D4 (to run before the arm).** Imputation error of the v1.1 weights under MCAR, MAR and MNAR masks of the same rate:
+- on SCM tables with a known mechanism, and on the impute suite (`--suite impute`)
+- against the suite's baselines
+
+The arm runs only if TabSil's error grows from MCAR to MAR/MNAR clearly more than the baselines' does.
+
+**Success criteria (final run).** The impute suite error is lower than v1 under MAR and MNAR masks and not higher under MCAR.
+
+## 4. Treatment effect prior (only if D5 shows a gap)
+
+**What fits the structure.** In the S-learner, the default of `TabSilCATE`, the treatment is an ordinary feature column, and the model predicts y for each row with t set to 0 and to 1. With every confounder observed, E[y | x, t] is the interventional mean, so the regression prior already trains the right target. What v1 never sees is the query itself: the S-learner asks for (x, t) pairs that are rare in the context, such as treated rows where treatment was unlikely. In the v1 prior the eval rows follow the train rows' distribution.
+
+**Prior.**
+- Base-prior regression tables in which one binary node T is a feature. T's parents are pre-treatment columns, and T enters y.
+- No post-treatment column is passed as a feature, so the conditional mean stays the interventional mean and the target stays correct.
+- Train rows are observational: T comes from its structural equation, with propensities pushed toward 0 and 1 by a random amount to vary overlap.
+- Eval rows draw T ~ Bernoulli(0.5) independently of x, as do(T), and take y from the SCM under that T.
+- Start with a share of 0.05 of the regression datasets.
+
+This cannot cover hidden confounding or mediators, nor tell the model which column is T. Those need the Do-PFN indicator, which is v3.
+
+**D5 (to run before the arm).** On the causal suite the S-learner is already strong (IHDP √PEHE out of sample 0.53, against 2.08 for the EconML T-learner with GBM). D5 measures the v1.1 S-learner's √PEHE on SCM tables while the propensity clip shrinks from 0.5 to 0.02, against the true CATE and the EconML T-learner. The arm runs only if TabSil's error grows clearly faster than the T-learner's as overlap shrinks.
+
+**Success criteria (final run).** IHDP and ACIC √PEHE not higher than v1, and lower on D5's low-overlap tables.
+
 ## Open items before implementation
 
-1. **Sync.** `tabsil.forecast` and `tabsil.unsupervised` are not on dev-v2. Merge main (after release/0.1.1 is merged back into main) into dev-v2 with a PR first.
-2. **Overlap with #14.** #14 changes the same files (`priors/graph_scm.py`, `priors/transforms/`). Build on #14 once it is merged. The baseline prior of the runs below is then #14's `graph_scm_hicard_missing` if it is adopted, and `graph_scm` otherwise.
-3. **Forecast row count.** The SCM covariate path needs a time-indexed root. Either add a generator that wraps the graph SCM with t as an extra root, or use the series generator alone and draw the covariates separately. Decide in the implementation PR.
-4. **Reference rows at inference.** The reference rows must come from shared code in `src/tabsil/` that the prior imports, so the training and inference recipes cannot drift apart.
+1. **Sync.** `tabsil.forecast` and `tabsil.unsupervised` are not on dev-v2. Merge main into dev-v2 with a PR first. Merge again after #21 brings imputation and `TabSilCATE` to main.
+2. **Prior options.** Each task prior is an option of the base prior, as in #14 (`--prior-type`), and is off by default.
+3. **Shared code.** The forecast features (`time_features`, `seasonal_periods`) and the reference rows come from `src/tabsil/` and are imported by the prior, so the training and inference recipes cannot drift apart. The reference rows are new code, shipped with `TabSilOutlier`.
+4. **Forecast covariates.** The SCM covariate path needs a time-indexed root. Either add a generator that wraps the graph SCM with t as an extra root, or use the series generator alone and draw the covariates separately. Decide in the implementation PR.
+5. **Forecast horizon in stage 1.** Stage 1 eval shares go up to 70% of the rows. That is longer than most fev-bench horizons relative to their contexts. The batch has one n_train, so capping the horizon of the forecast datasets means a separate n_train for them. Decide in the implementation PR.
+6. **Borders.** Keep drawing the regression borders from the base regression prior (`make_borders`), not from the mixture. #14's options change only x, so with v1's sizes they stay at v1's ±22.6 sd, and the forecast clip at ±20 sd stays inside them.
+7. **Forecasting recipe.** The inference change of §1 lands on main with its own fev-bench run. It uses the v1 weights, does not retrain, and is a 0.1.x release. Phase 1 starts after it.
+8. **Screening length.** It is not known whether 30K steps separate the priors. The 250K stage-1 run was measured on TabArena-Lite up to 225K; check its MLflow evals for early checkpoints before fixing the length.
 
 ## Experiment plan (each run needs approval before it starts)
 
-| Run | What | GPU time | Compared with |
-|---|---|---|---|
-| TS | stage 2, 10K steps from `stage1-150k`, baseline prior + forecasting share 0.1 | ≈ 307 H100-h (as #14 A) | the baseline stage 2 run (#14 A, `277916ec…`, or `stage2-10k`) |
-| OD | the same with the outlier share 0.1 instead | ≈ 307 H100-h | the same |
+The earlier plan screened each task prior with a stage 2 run from v1's `stage1-150k` (≈ 307 H100-h each). Training from scratch makes that the wrong test, because the task priors would never be in stage 1. Short from-scratch runs cost less and match the final run.
 
-One variable per run, all other settings as #14 A. Evaluate each on TabArena-Lite, AMLB, fev-bench, ADBench and D1/D3 (`training/scripts/v2_prior_diag/`).
+GPU costs scale from v1: stage 1 ran 150K steps in about 30 h on 32 H100, so 30K steps take about 6 h, or 190 H100-h.
 
-The two are only combined after each one passes on its own. TabImpute (2510.02625) found that mixing training patterns lowered its default model. That is a reason not to stack priors untested.
+| Phase | Run | What | GPU time | Compared with |
+|---|---|---|---|---|
+| 0 | D4, D5 | the diagnostics of §3 and §4 on the v1.1 weights | minutes on 1 H100 | — |
+| 1 | C (2 seeds) | from scratch, stage 1 only, 30K steps, base prior | 2 × 190 H100-h | each other (seed spread) |
+| 1 | TS | C + forecasting share 0.1 | 190 H100-h | C |
+| 1 | OD | C + outlier share 0.1 | 190 H100-h | C |
+| 1 | IMP, CA | C + imputation or treatment prior, only if D4 or D5 shows a gap | 190 H100-h each | C |
+| 2 | ALL | C + every task prior that passed phase 1 | 190 H100-h | C and each single arm |
+| 3 | v2 | the ALL prior, v1's curriculum 150K / 10K / 2K | ≈ 1,550 H100-h | v1 |
+
+- **Evaluation of every run:** TabArena-Lite, AMLB, the task suites (fev-bench, ADBench, impute, causal) and the diagnostics D1-D5 (`training/scripts/v2_prior_diag/`).
+- **Phase 1 pass rule.** An arm passes if its task metric beats both C seeds by more than their spread, and the guards hold against C. The second C seed gives the spread that #14's single run lacked.
+- **Phase 2 pass rule.**
+  - Mixing has to keep each task's gain: every task metric of ALL stays within the C seed spread of its single arm.
+  - TabImpute found that mixing training patterns lowered its default model, so this is checked before the full run.
+  - A task that drops gets a lower share or leaves the mixture.
+- **Phase 3.** v2 must meet the success criteria of §1-§4 for the task priors it contains, and the guards against v1, at the same tabsil inference version.
+- **Total:** about 0.95-1.33K H100-h for phases 1-2 (5-7 short runs, depending on D4 and D5) and 1.55K for v2.
+- **Risk.** Phase 1-2 runs see only 1,024-row tables, and a gain at 30K may not hold at 150K. Phase 3 checks every criterion again on the full run.

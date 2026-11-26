@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 import pandas as pd
-from common import DEVICE, OUT, log_density
+from common import DEVICE, OUT, load_model, log_density
 from scipy import stats
 
 from tabsil import TabSilClassifier, TabSilRegressor
@@ -44,7 +44,8 @@ def targets(kind: str, n: int, rng):
 
 
 def main() -> None:
-    reg = TabSilRegressor(device=DEVICE)
+    model, borders = load_model()
+    reg = TabSilRegressor(model, borders, device=DEVICE)
     rows = []
     t0 = time.time()
     for n_train in (100, 500, 2000):
@@ -85,7 +86,7 @@ def main() -> None:
                     flush=True,
                 )
 
-    clf = TabSilClassifier(device=DEVICE)
+    clf = TabSilClassifier(model, device=DEVICE)
     p = np.array([0.6, 0.3, 0.1])
     ent = -(p * np.log(p)).sum()
     for n_train in (100, 500, 2000):
@@ -97,8 +98,14 @@ def main() -> None:
                 y = rng.choice(3, size=n, p=p)
                 clf.fit(x[:n_train], y[:n_train])
                 proba = clf.predict_proba(x[n_train:])
-                ll = -np.log(np.maximum(proba[np.arange(N_TEST), y[n_train:]], 1e-12)).mean()
-                # model that ignores x: train label frequencies
+                # probability of the true class through classes_ (a class missing from the train
+                # rows has no column and gets probability 0)
+                col = {c: j for j, c in enumerate(clf.classes_)}
+                p_true = np.array(
+                    [proba[i, col[c]] if c in col else 0.0 for i, c in enumerate(y[n_train:])]
+                )
+                ll = -np.log(np.maximum(p_true, 1e-12)).mean()
+                # model that ignores x: train label frequencies (stored in the nll_kde column)
                 freq = np.bincount(y[:n_train], minlength=3) / n_train
                 ll_freq = -np.log(np.maximum(freq[y[n_train:]], 1e-12)).mean()
                 rows.append(

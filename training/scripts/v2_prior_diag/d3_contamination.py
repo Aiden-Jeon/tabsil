@@ -21,7 +21,7 @@ import time
 
 import numpy as np
 import pandas as pd
-from common import DEVICE, OUT
+from common import DEVICE, OUT, load_model
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import roc_auc_score
 
@@ -61,6 +61,7 @@ def outliers(kind, n, rng, ref, center_rng):
 
 
 def main() -> None:
+    weights, borders = load_model()
     rows = []
     t0 = time.time()
     for kind in KINDS:
@@ -80,8 +81,10 @@ def main() -> None:
                 test_bad = outliers(kind, N_OUT, rng, ref, np.random.default_rng(200 + seed))
                 test = np.vstack([test_good, test_bad])
                 lab = np.r_[np.zeros(N_IN), np.ones(N_OUT)]
-                model = TabSilUnsupervised(device=DEVICE, n_permutations=3, random_state=seed)
-                ld = model.fit(ctx).log_density(test)
+                scorer = TabSilUnsupervised(
+                    weights, borders, device=DEVICE, n_permutations=3, random_state=seed
+                )
+                ld = scorer.fit(ctx).log_density(test)
                 iso = IsolationForest(random_state=seed).fit(ctx)
                 rows.append(
                     dict(
