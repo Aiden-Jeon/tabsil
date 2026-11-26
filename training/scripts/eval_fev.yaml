@@ -1,0 +1,37 @@
+# TabSil fev-bench forecasting evaluation (training/scripts/eval.py --suite fev) on Databricks AI
+# Runtime: tabsil.forecast.TabSilForecaster on every rolling window of 10 univariate fev-bench
+# tasks (tabsil_train.benchmarks.fevbench), scored with fev's SQL and MASE, with the Elo pools
+# (Seasonal Naive = 1000) against the per-window results copied from fm-agent-bench. The model is
+# TABSIL_REGRESSOR (default: the default Hub repo at the v1 tag). From the repository root:
+#   databricks air run -f training/scripts/eval_fev.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+#     --override "env_variables.TABSIL_EXTRA_ARGS=--datasets ecdc_ili --fev-windows 2"
+experiment_name: tabsil
+mlflow_run_name: tabsil-v1-eval-fev
+environment:
+  version: databricks_ai_v6
+  # fev 0.10.0 needs datasets<5, which needs huggingface-hub<2 (the fev extra of tabsil-train)
+  dependencies:
+    - fev==0.10.0
+    - huggingface-hub>=0.34
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+code_source:
+  type: snapshot
+  snapshot:
+    # the two packages (tabsil, tabsil-train, imported through PYTHONPATH; the reference results
+    # are CSV files next to fevbench.py) and the script, relative to the repository root
+    root_path: ../..
+    include_paths:
+      - src
+      - training/src
+      - training/scripts/eval.py
+env_variables:
+  TABSIL_REGRESSOR: hf://aiden-jeon/tabsil@v1
+  TABSIL_EXTRA_ARGS: ""
+max_retries: 0
+timeout_minutes: 360
+command: >-
+  PYTHONPATH=$CODE_SOURCE_PATH/src:$CODE_SOURCE_PATH/training/src
+  python $CODE_SOURCE_PATH/training/scripts/eval.py --suite fev
+  --regressor-path $TABSIL_REGRESSOR $TABSIL_EXTRA_ARGS

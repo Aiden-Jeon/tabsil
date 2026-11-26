@@ -20,9 +20,11 @@ def test_default_inference_prefers_the_saved_settings():
     for task in ("classification", "regression"):
         assert recipe.default_inference(model, task) == {
             "n_estimators": 8,
-            "member_kinds": ("standard",),
+            "member_kinds": recipe.NUMERIC_CYCLE,
             "max_features_per_member": 768,
             "feature_subsampling": "balanced",
+            "categories": "counts",
+            "softmax_temperature": 1.0,
         }
     model.inference_config = {"n_estimators": 4, "member_kinds": ["standard"]}
     assert recipe.default_inference(model, "classification") == {
@@ -30,7 +32,9 @@ def test_default_inference_prefers_the_saved_settings():
         "member_kinds": ("standard",),
         "max_features_per_member": 768,
         "feature_subsampling": "balanced",
+        "categories": "counts",
+        "softmax_temperature": 1.0,
     }
-    assert recipe.resolve_member_kinds(recipe.NAME) == ("standard",)
+    assert recipe.resolve_member_kinds(recipe.NAME) == recipe.NUMERIC_CYCLE
     assert recipe.SUPPORTED_SIZE == {"max_train_rows": 1_000_000, "max_features": 6_000}
     assert recipe.HUB_REPO == "aiden-jeon/tabsil"

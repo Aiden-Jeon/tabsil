@@ -3,3 +3,42 @@ Copyright 2026 Aiden-Jeon
 
 Third-party code adapted into the TabSil inference package (tabsil, a dependency of this
 package) is listed in its NOTICE.
+
+This product includes material adapted from fev (https://github.com/autogluon/fev), Copyright
+Amazon.com, Inc. or its affiliates, licensed under the Apache License 2.0:
+- src/tabsil_train/benchmarks/fevbench.py `TASKS`: 10 task definitions copied from
+  benchmarks/fev_bench/tasks.yaml at commit ecce67120aae4827e9702b978a9e9327ecde81d0
+- src/tabsil_train/benchmarks/fev_public.csv: public fev-bench results (benchmarks/fev_bench/
+  results/*.csv at the same commit) of 8 methods on those tasks
+- src/tabsil_train/benchmarks/fevbench.py `seasonal_naive`: reimplements the Seasonal Naive of
+  the fev statsforecast model wrapper (models/statsforecast/model.py), which follows statsforecast
+  2.0.1 `SeasonalNaive` (https://github.com/Nixtla/statsforecast, Copyright Nixtla, Apache License
+  2.0), and `freq_seasonality` the frequency table of autogluon.timeseries `get_seasonality`
+  (https://github.com/autogluon/autogluon, Apache License 2.0)
+
+This product includes software adapted from ADBench (https://github.com/Minqi824/ADBench),
+Copyright (c) 2022, Mickey (Minqi), licensed under the BSD 2-Clause License
+(LICENSES/ADBench-BSD-2-Clause.txt in the repository root):
+- src/tabsil_train/benchmarks/adbench.py `adbench_split`: adapted from
+  adbench/datasets/data_generator.py `DataGenerator.generator` at commit 3dac822 (the
+  unsupervised split). The ADBench tables are downloaded at run time, not redistributed
+
+This product includes material adapted from CausalPFN (https://github.com/vdblm/CausalPFN, commit
+b7ed2f1e1d58a83c608d08ced3dee955f0a7c221), Copyright 2025 the CausalPFN authors, licensed under
+the CausalPFN License, Version 1.0 (its terms are those of the Apache License 2.0;
+LICENSES/CausalPFN-License-1.0.txt in the repository root):
+- src/tabsil_train/benchmarks/causal.py `acic_covariates`, `acic_split`: the ACIC 2016 split of
+  benchmarks/acic2016.py `ACIC2016Dataset` (row permutation seeded 42 + table index, 90/10 split,
+  category codes of x_2, x_21, x_24 appended after the other covariates)
+- src/tabsil_train/benchmarks/causal_reference.csv: published numbers copied from the CausalPFN
+  paper (arXiv 2506.07918v2, Tables 1, 3 and 6) and from Shalit et al. 2017 (arXiv 1606.03976v5,
+  Table 1); see the file header
+
+Benchmark data used by src/tabsil_train/benchmarks/causal.py is downloaded at run time and not
+redistributed:
+- IHDP (Hill 2011; the 100-realization files of Shalit et al. 2017,
+  https://www.fredjo.com/files/ihdp_npci_1-100.{train,test}.npz): no data license is stated
+- ACIC 2016 (Dorie et al. 2019) as shipped with causallib
+  (https://github.com/BiomedSciAI/causallib, commit 267e0c72df81ea8264ece46496107f99a599b60d,
+  causallib/datasets/data/acic_challenge_2016): Community Data License Agreement - Sharing 1.0
+  (LICENSES/ACIC2016-CDLA-Sharing-1.0.txt in the repository root)

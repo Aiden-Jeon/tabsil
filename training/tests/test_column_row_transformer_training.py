@@ -168,14 +168,30 @@ def test_train_script_takes_the_batch_size_and_keeps_it_on_resume(monkeypatch):
     assert args.batch_size is None
 
 
-def test_eval_script_takes_tabsil_inference_defaults():
+def test_eval_script_takes_tabsil_inference_defaults(monkeypatch):
+    from types import SimpleNamespace
+
     script = _script("eval")
     assert script.default_inference(_model(), "classification") == {
         "n_estimators": 8,
-        "member_kinds": ("standard",),
+        "member_kinds": ("standard", "power", "robust", "quantile"),
         "max_features_per_member": 768,
         "feature_subsampling": "balanced",
+        "categories": "counts",
+        "softmax_temperature": 1.0,
     }
+    # the estimators get the model's settings; the command line overrides them
+    model = _model()
+    monkeypatch.setattr(script, "load_model", lambda path, suite, dst: (model, None))
+    task = SimpleNamespace(categorical_indices=[], name="t")
+    est = script.make_estimator_factory(
+        "classification", script.parse_args(["--classifier-path", "x"])
+    )(task)
+    assert (est.categories, est.softmax_temperature) == ("counts", 1.0)
+    assert est.member_kinds == ("standard", "power", "robust", "quantile")
+    argv = ["--classifier-path", "x", "--categories", "codes", "--softmax-temperature", "0.9"]
+    est = script.make_estimator_factory("classification", script.parse_args(argv))(task)
+    assert (est.categories, est.softmax_temperature) == ("codes", 0.9)
 
 
 def test_eval_n_estimators_sets_the_member_count(monkeypatch, tmp_path):

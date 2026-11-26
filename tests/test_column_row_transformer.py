@@ -178,13 +178,15 @@ def test_bad_options_raise():
 
 
 def test_ensembles_and_default_inference():
-    # TabSil's inference defaults (8 standard members, 768 columns per member, balanced) for any
-    # model without saved settings
+    # TabSil's inference defaults (8 members cycling through the numeric kinds, 768 columns per
+    # member, balanced, count columns, temperature 1.0) for any model without saved settings
     tabsil = {
         "n_estimators": 8,
-        "member_kinds": ("standard",),
+        "member_kinds": recipe.NUMERIC_CYCLE,
         "max_features_per_member": 768,
         "feature_subsampling": "balanced",
+        "categories": "counts",
+        "softmax_temperature": 1.0,
     }
     X, y = load_breast_cancer(return_X_y=True)
     X[::7, 3] = np.nan
@@ -206,7 +208,12 @@ def test_ensembles_and_default_inference():
     assert len(reg.preprocessors_) == 8
     # Settings saved with the weights come first
     reg_model.inference_config = {"n_estimators": 2, "member_kinds": ["standard"]}
-    caps = {"max_features_per_member": 768, "feature_subsampling": "balanced"}
+    caps = {
+        "max_features_per_member": 768,
+        "feature_subsampling": "balanced",
+        "categories": "counts",
+        "softmax_temperature": 1.0,
+    }
     assert recipe.default_inference(reg_model, "regression") == {
         "n_estimators": 2,
         "member_kinds": ("standard",),
@@ -416,15 +423,15 @@ def test_tabsil_classes_share_the_multitask_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "from_pretrained", fake)
     clf, reg = TabSilClassifier(), TabSilRegressor()
     assert recipe.HUB_REPO == "aiden-jeon/tabsil"
-    assert asked == [recipe.HUB_DEFAULT, recipe.HUB_DEFAULT]  # the same repo, at the tag v1
+    assert asked == [recipe.HUB_DEFAULT, recipe.HUB_DEFAULT]  # the same repo, at the tag v1.1
     for loaded in (clf.model, reg.model):
         assert loaded.config == model.config
         for name, tensor in model.state_dict().items():
             assert torch.equal(loaded.state_dict()[name], tensor), name
     assert torch.equal(reg.borders.cpu(), BORDERS)
-    # TabSil's inference settings (8 standard members)
-    assert (clf.n_estimators, clf.member_kinds) == (8, ("standard",))
-    assert (reg.n_estimators, reg.member_kinds) == (8, ("standard",))
+    # TabSil's inference settings (8 members cycling through the numeric kinds)
+    assert (clf.n_estimators, clf.member_kinds) == (8, recipe.NUMERIC_CYCLE)
+    assert (reg.n_estimators, reg.member_kinds) == (8, recipe.NUMERIC_CYCLE)
     TabSilClassifier(recipe.HUB_REPO + "@stage2-20k")
     assert asked[-1] == recipe.HUB_REPO + "@stage2-20k"
     # A folder without borders is not taken for regression
@@ -448,6 +455,6 @@ def test_tabsil_default_feature_cap_in_classes():
     clf = TabSilClassifier(model, n_estimators=3, member_kinds="standard")
     assert (clf.n_estimators, clf.member_kinds) == (3, ("standard",))
     reg = TabSilRegressor(_model(), BORDERS)
-    assert (reg.n_estimators, reg.member_kinds) == (8, ("standard",))
+    assert (reg.n_estimators, reg.member_kinds) == (8, recipe.NUMERIC_CYCLE)
     # The plain ensemble has no cap
     assert EnsembleClassifier(model, n_estimators=2).max_features_per_member is None

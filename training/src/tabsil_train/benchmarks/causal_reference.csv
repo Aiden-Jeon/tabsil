@@ -1,0 +1,63 @@
+# Published IHDP / ACIC 2016 numbers, copied from the papers' arXiv HTML (checked 2026-11-26).
+# Values are as printed; <metric>_pm is the printed ± (CausalPFN: standard error; Shalit et al. do not
+# say whether it is a standard error or a standard deviation). Metrics as in causal.py:
+# pehe = sqrt PEHE, ate_err = |ATE estimate - true ATE|, ate_rel = ate_err / |true ATE|.
+# Protocols (how they differ from causal.py):
+# - shalit2017: arXiv 1606.03976v5 Table 1, IHDP with 1000 realizations (we use the 100-realization
+#   files), within-sample = train + validation rows, out-of-sample = test rows, hyperparameters chosen
+#   per method (their supplement C.1)
+# - causalpfn_t1: arXiv 2506.07918v2 Table 1 (baselines tuned: EconML 0.15 learners with FLAML-tuned
+#   nuisance models, CATENets grid search, BART/GRF tuning). PEHE on the test rows (IHDP 75 rows of
+#   the 100-realization files; ACIC 2016 the 10% held out of 10 simulations, as causal.py). ATE: the
+#   relative error of a fit on all rows (IHDP: train + test, true ATE = the files' `ate` field, 4;
+#   ACIC: all 4802 rows, true ATE = the sample mean of mu1 - mu0)
+# - causalpfn_t3: the same paper, Table 3 (TabPFN regression used as the outcome model; TabPFN* =
+#   TabPFN fine-tuned on the CausalPFN prior for 48 H100 hours)
+# - causalpfn_t6: the same paper, Table 6 (baselines with default hyperparameters)
+source,protocol,benchmark,method,pehe_in,pehe_in_pm,pehe_out,pehe_out_pm,ate_err_in,ate_err_in_pm,ate_err_out,ate_err_out_pm,ate_rel,ate_rel_pm
+shalit2017,IHDP-1000 63/27/10,ihdp,OLS/LR-2,2.4,0.1,2.5,0.1,0.14,0.01,0.31,0.02,,
+shalit2017,IHDP-1000 63/27/10,ihdp,k-NN,2.1,0.1,4.1,0.2,0.14,0.01,0.79,0.05,,
+shalit2017,IHDP-1000 63/27/10,ihdp,BART,2.1,0.1,2.3,0.1,0.23,0.01,0.34,0.02,,
+shalit2017,IHDP-1000 63/27/10,ihdp,Causal Forest,3.8,0.2,3.8,0.2,0.18,0.01,0.40,0.03,,
+shalit2017,IHDP-1000 63/27/10,ihdp,BNN,2.2,0.1,2.1,0.1,0.37,0.03,0.42,0.03,,
+shalit2017,IHDP-1000 63/27/10,ihdp,TARNet,0.88,0.0,0.95,0.0,0.26,0.01,0.28,0.01,,
+shalit2017,IHDP-1000 63/27/10,ihdp,CFR MMD,0.73,0.0,0.78,0.0,0.30,0.01,0.31,0.01,,
+shalit2017,IHDP-1000 63/27/10,ihdp,CFR Wass,0.71,0.0,0.76,0.0,0.25,0.01,0.27,0.01,,
+causalpfn_t1,tuned baselines,ihdp,CausalPFN,,,0.58,0.07,,,,,0.20,0.04
+causalpfn_t1,tuned baselines,ihdp,T-Learner,,,1.73,0.30,,,,,0.21,0.04
+causalpfn_t1,tuned baselines,ihdp,S-Learner,,,2.57,0.41,,,,,0.20,0.04
+causalpfn_t1,tuned baselines,ihdp,X-Learner,,,3.31,0.51,,,,,0.16,0.04
+causalpfn_t1,tuned baselines,ihdp,DA-Learner,,,2.07,0.36,,,,,0.23,0.04
+causalpfn_t1,tuned baselines,ihdp,Forest DR Learner,,,4.02,0.67,,,,,0.17,0.03
+causalpfn_t1,tuned baselines,ihdp,Forest DML,,,4.53,0.73,,,,,0.08,0.01
+causalpfn_t1,tuned baselines,ihdp,BART,,,2.50,0.39,,,,,0.44,0.09
+causalpfn_t1,tuned baselines,ihdp,GRF,,,3.67,0.61,,,,,0.18,0.03
+causalpfn_t1,tuned baselines,ihdp,TarNet,,,1.82,0.14,,,,,0.20,0.04
+causalpfn_t1,tuned baselines,ihdp,DragonNet,,,2.16,0.25,,,,,0.20,0.04
+causalpfn_t1,tuned baselines,ihdp,RA-Net,,,2.35,0.19,,,,,0.20,0.04
+causalpfn_t3,TabPFN as outcome model,ihdp,TabPFN,,,0.95,0.20,,,,,0.21,0.04
+causalpfn_t3,TabPFN fine-tuned on a causal prior,ihdp,TabPFN*,,,0.90,0.16,,,,,0.21,0.04
+causalpfn_t6,default hyperparameters,ihdp,T-Learner,,,2.94,0.49,,,,,0.22,0.04
+causalpfn_t6,default hyperparameters,ihdp,S-Learner,,,3.91,0.68,,,,,0.28,0.05
+causalpfn_t6,default hyperparameters,ihdp,X-Learner,,,3.70,0.62,,,,,0.19,0.03
+causalpfn_t6,default hyperparameters,ihdp,Forest DR Learner,,,3.90,0.66,,,,,0.19,0.04
+causalpfn_t6,default hyperparameters,ihdp,Forest DML,,,4.40,0.72,,,,,0.09,0.02
+causalpfn_t1,tuned baselines,acic2016,CausalPFN,,,0.92,0.11,,,,,0.05,0.01
+causalpfn_t1,tuned baselines,acic2016,T-Learner,,,0.76,0.07,,,,,0.03,0.01
+causalpfn_t1,tuned baselines,acic2016,S-Learner,,,0.85,0.13,,,,,0.03,0.01
+causalpfn_t1,tuned baselines,acic2016,X-Learner,,,0.60,0.08,,,,,0.03,0.01
+causalpfn_t1,tuned baselines,acic2016,DA-Learner,,,0.72,0.08,,,,,0.03,0.01
+causalpfn_t1,tuned baselines,acic2016,Forest DR Learner,,,1.34,0.29,,,,,0.04,0.02
+causalpfn_t1,tuned baselines,acic2016,Forest DML,,,1.48,0.31,,,,,0.05,0.01
+causalpfn_t1,tuned baselines,acic2016,BART,,,0.68,0.11,,,,,0.04,0.01
+causalpfn_t1,tuned baselines,acic2016,GRF,,,1.32,0.30,,,,,0.07,0.02
+causalpfn_t1,tuned baselines,acic2016,TarNet,,,2.20,0.21,,,,,0.05,0.02
+causalpfn_t1,tuned baselines,acic2016,DragonNet,,,2.11,0.19,,,,,0.06,0.02
+causalpfn_t1,tuned baselines,acic2016,RA-Net,,,2.35,0.25,,,,,0.07,0.03
+causalpfn_t3,TabPFN as outcome model,acic2016,TabPFN,,,0.54,0.08,,,,,0.03,0.01
+causalpfn_t3,TabPFN fine-tuned on a causal prior,acic2016,TabPFN*,,,0.47,0.05,,,,,0.03,0.01
+causalpfn_t6,default hyperparameters,acic2016,T-Learner,,,2.06,0.20,,,,,0.11,0.03
+causalpfn_t6,default hyperparameters,acic2016,S-Learner,,,2.23,0.28,,,,,0.12,0.05
+causalpfn_t6,default hyperparameters,acic2016,X-Learner,,,1.71,0.31,,,,,0.07,0.02
+causalpfn_t6,default hyperparameters,acic2016,Forest DR Learner,,,1.68,0.35,,,,,0.08,0.04
+causalpfn_t6,default hyperparameters,acic2016,Forest DML,,,1.47,0.32,,,,,0.05,0.02

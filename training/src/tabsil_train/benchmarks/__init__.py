@@ -6,4 +6,6 @@
   `arena` extra)
 - `uncertainty`: predictive-distribution and uncertainty metrics (regression CRPS, interval
   coverage, PIT; classification ECE, conformal coverage)
+- `fevbench`: time series forecasting on 10 fev-bench tasks (`tabsil.forecast.TabSilForecaster`;
+  requires the `fev` package from the `fev` extra), with the reference results it is compared to
 """

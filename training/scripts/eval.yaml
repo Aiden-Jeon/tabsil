@@ -8,6 +8,15 @@
 # A checkpoint is a file, a runs:/ URI or a Hub repo (hf://owner/name). TABSIL_SUITE picks the
 # suite (all, classification, regression); `--uncertainty` in TABSIL_EXTRA_ARGS adds the
 # predictive distribution metrics.
+#
+# ADBench unsupervised outlier detection (12 tables x 3 seeds, `--suite adbench`): TabSil's
+# chain-rule log density (tabsil.unsupervised) on the contaminated training rows, its `+clean`
+# diagnostic and IsolationForest (the split check). One (table, split, method) job per GPU from a
+# queue (`--shards`); with 8 GPUs set compute to GPU_8xH100 with 8 accelerators:
+#   databricks air run -f training/scripts/eval.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+#     --override "mlflow_run_name=tabsil-v1-eval-adbench" --override "env_variables.TABSIL_SUITE=adbench" \
+#     --override "compute.accelerator_type=GPU_8xH100" --override "compute.num_accelerators=8" \
+#     --override "env_variables.TABSIL_EXTRA_ARGS=--regressor-path hf://aiden-jeon/tabsil@v1 --shards 8"
 experiment_name: tabsil
 mlflow_run_name: tabsil-v1-eval
 environment:
