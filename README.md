@@ -102,6 +102,7 @@ uv sync --all-packages            # tabsil + tabsil-train (training, priors, AML
 uv sync --package tabsil-train    # tabsil-train and its test tools only (tests: uv run --package tabsil-train pytest training/tests)
 uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
 uv sync --package tabsil-train --no-dev --extra fev --group arena-dev     # fev-bench forecasting evaluation
+uv sync --package tabsil-train --extra causal                             # treatment effect evaluation (EconML baselines)
 ```
 
 Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3). The `fev` extra (fev 0.10.0) needs `huggingface-hub<2`, so it is installed without the dev groups too.
@@ -168,6 +169,20 @@ scores = model.outlier_score(X_test)  # = -model.log_density(X_test)
 
 The cost is one fit and prediction per column and order (`n_permutations`, default 10). `model.conditional(X, target, given)` returns the distribution of one column given others, the part imputation and synthetic data can later build on.
 
+### Treatment effects
+
+`TabSilCATE` estimates conditional average treatment effects of a binary treatment on a continuous outcome from observational data, with TabSil as the base learner of a meta-learner (zero-shot, the v1 weights): S-, T-, X- or DR-learner (`learner="s" | "t" | "x" | "dr"`). Outcome models are `TabSilRegressor`, propensity scores `TabSilClassifier`.
+
+```python
+from tabsil import TabSilCATE
+
+est = TabSilCATE(learner="s", device="cuda").fit(X, treatment, y)
+tau = est.effect(X_test)  # CATE per row
+ate = est.ate()           # mean CATE over the training rows
+```
+
+`regressor=` / `classifier=` take any scikit-learn estimator instead of TabSil. See `src/tabsil/causal.py` for the learners and where they differ from EconML's.
+
 ## Model
 
 | Part | Choice | From |
@@ -210,7 +225,7 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 
 ## Evaluation
 
-`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration), forecasting on 10 fev-bench tasks (`--suite fev`, job spec `training/scripts/eval_fev.yaml`), and unsupervised outlier detection on 12 ADBench tables (`--suite adbench`, job spec in `training/scripts/eval.yaml`).
+`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration), forecasting on 10 fev-bench tasks (`--suite fev`, job spec `training/scripts/eval_fev.yaml`), unsupervised outlier detection on 12 ADBench tables (`--suite adbench`, job spec in `training/scripts/eval.yaml`), and treatment effects on IHDP and ACIC 2016 (`--suite causal`, job spec `training/scripts/eval_causal.yaml`).
 Train and inference time are reported as on the TabArena leaderboard: seconds per 1K train rows (fit) and per 1K test rows (predict), averaged over each dataset's splits, then the median over datasets. In the arenas they appear next to the baselines on the same splits (`summary.json`, `comparison.csv`).
 
 The official-protocol TabArena-Lite result in [Results](#results) is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The arena suites of `training/scripts/eval.py` fit each split once without bagging, a quicker check used to compare checkpoints; their Elo is not the official one.
@@ -223,6 +238,7 @@ TabSil puts together ideas from published work:
 - **TabICL / TabICLv2** (Inria SODA): the graph SCM prior (used through the `tabicl` package), the three-stage training curriculum, and the QASSMax query gate of the `gated_logscale` attention temperature (BSD-3-Clause, `LICENSES/TabICL-BSD-3-Clause.txt`; see `NOTICE`).
 - **Kumo-Tabular** (NVIDIA, `NVIDIA/structured-data-models`): interleaved column/row stages, log-scale attention temperatures, and the quantile regression head, re-implemented from the blog post and public source. The per-member numeric transforms and the category count columns of the inference ensemble follow its `numerical_processor` and `AddCategoryCounts` (re-implemented, not copied). The log-scale attention temperature (`LogScale`) follows the Apache-2.0 NVIDIA code (`sdm/nn/scaling.py`); see `NOTICE`.
 - **TabPFN-TS** (Prior Labs): forecasting with a tabular model; `TabSilForecaster`'s time features are adapted from the Apache-2.0 `tabpfn-time-series` package (see `NOTICE`). The forecasting evaluation uses **fev** / **fev-bench** (AutoGluon) and the comparison results of fm-agent-bench.
+- **Treatment effects**: the meta-learners of Künzel et al. (S/T/X) and Kennedy (DR), with EconML as the baseline. The benchmarks are IHDP (Hill 2011, in the 100-realization files of Shalit et al. 2017) and ACIC 2016 (Dorie et al. 2019, from causallib, CDLA-Sharing-1.0), with the ACIC split of CausalPFN (see `NOTICE`). The data is downloaded at run time.
 - **Muon** optimizer, and the **nanoTabPFN speedrun** for the training speed options.
 
 TabSil grew out of [minipfn](https://github.com/Aiden-Jeon/minipfn), a hands-on guide that reimplements PFN and TabPFN from scratch. TabSil is now trained in this repository; minipfn no longer holds code for it.

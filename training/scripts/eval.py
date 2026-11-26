@@ -1,5 +1,5 @@
-"""Evaluate TabSil on the AMLB benchmark, TabArena-Lite, BeyondArena, fev-bench forecasting and
-ADBench outlier detection.
+"""Evaluate TabSil on the AMLB benchmark, TabArena-Lite, BeyondArena, fev-bench forecasting,
+ADBench outlier detection and treatment effect benchmarks (IHDP, ACIC 2016).
 
 The AMLB benchmark is the TabPFN v2 paper's: 29 AMLB classification and 28 AMLB/CTR23 regression
 tasks, each scored as the mean over the OpenML task's 10-fold cross-validation (ROC AUC for
@@ -64,6 +64,19 @@ drops out). A failed series, window or task stops the run (nothing is imputed). 
   $RUN --no-dev --extra fev --group arena-dev python $EVAL --suite fev \
     --regressor-path hf://aiden-jeon/tabsil@v1 --datasets ecdc_ili --fev-windows 2
 
+`--suite causal` is treatment effect estimation on IHDP (100 realizations) and ACIC 2016 (10
+simulations) (`tabsil_train.benchmarks.causal`, needs the `causal` extra for the EconML baselines:
+`uv sync --package tabsil-train --extra causal`): `tabsil.causal.TabSilCATE` with the S-, T-, X-
+and DR-learner on the `--regressor-path` model (it must serve classification too, for the
+propensity), and EconML's causal forest and GBM-based meta-learners on the same splits. √PEHE and
+the ATE error within-sample and out-of-sample. `--datasets` picks the benchmarks (ihdp, acic2016),
+`--causal-realizations` the realizations (`1-5,9`), `--causal-methods` the methods. Results go to
+`<out-dir>/causal/` and resume from its `results.csv`; a failed cell ends the run with an error
+after the others (nothing is imputed).
+
+  $RUN --extra causal python $EVAL --suite causal --regressor-path hf://aiden-jeon/tabsil@v1 \
+    --datasets ihdp --causal-realizations 1-3
+
 `--latency` (arenas) records each fit's one-row prediction time (median of `LATENCY_REPEATS`) in
 `<out-dir>/fits_<suite>.jsonl`, measured in a hook outside TabArena's train and inference timing.
 
@@ -123,6 +136,7 @@ from tabsil_train.utils import mlflow_eval_run
 ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
 FEV_SUITE = "fev"
 ADBENCH_SUITE = "adbench"
+CAUSAL_SUITE = "causal"
 LATENCY_REPEATS = 5
 
 
@@ -130,7 +144,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--suite",
-        choices=["classification", "regression", "all", *ARENA_SUITES, FEV_SUITE, ADBENCH_SUITE],
+        choices=[
+            "classification",
+            "regression",
+            "all",
+            *ARENA_SUITES,
+            FEV_SUITE,
+            ADBENCH_SUITE,
+            CAUSAL_SUITE,
+        ],
         default="all",
     )
     parser.add_argument("--tasks", help="comma-separated OpenML task ids (chosen within the suite)")
@@ -170,7 +192,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--datasets",
         help="TabArena / BeyondArena: comma-separated dataset names (the rest imputed); fev:"
         " comma-separated task names (only those are evaluated and ranked); ADBench: the tables"
-        " to run",
+        " to run; causal: the benchmarks (ihdp, acic2016; default both)",
+    )
+    parser.add_argument(
+        "--causal-realizations",
+        default=None,
+        help="causal: realizations of each benchmark, comma-separated numbers and ranges"
+        " (1-5,9; default all: IHDP 1-100, ACIC 2016 1-10)",
+    )
+    parser.add_argument(
+        "--causal-methods",
+        default=None,
+        help="causal: comma-separated methods (tabsil_s, tabsil_t, tabsil_x, tabsil_dr,"
+        " econml_cf, econml_s, econml_t, econml_x, econml_dr; default all)",
     )
     parser.add_argument(
         "--fev-windows",
@@ -1209,7 +1243,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("--shards must be >= 1.")
     if args.shards > 1 and args.suite not in (*ARENA_SUITES, ADBENCH_SUITE):
         raise SystemExit("--shards is for the TabArena / BeyondArena / ADBench suites only.")
-    if args.uncertainty and args.suite in (*ARENA_SUITES, FEV_SUITE, ADBENCH_SUITE):
+    if args.uncertainty and args.suite in (*ARENA_SUITES, FEV_SUITE, ADBENCH_SUITE, CAUSAL_SUITE):
         # the arenas report only the official package's metrics; stop rather than silently ignore
         raise SystemExit("--uncertainty is for AMLB suites only (classification, regression, all).")
     if args.latency and args.suite not in ARENA_SUITES:
@@ -1229,6 +1263,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.suite == ADBENCH_SUITE:
         with mlflow_run(use_mlflow):
             run_adbench(args, out_dir, use_mlflow)
+    if args.suite == CAUSAL_SUITE:
+        with mlflow_run(use_mlflow):
+            run_causal(args, out_dir, use_mlflow)
         return
     tasks = selected_tasks(args)  # exit on bad task ids before creating a run
     with mlflow_run(use_mlflow):
@@ -1458,6 +1495,76 @@ def run_adbench_shards(
             )
             print(f"adbench shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}", flush=True)
     return failures
+
+
+def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
+    """Treatment effects on IHDP and ACIC 2016 (`tabsil_train.benchmarks.causal`). Ends with an
+    error if any (benchmark, realization, method) failed or has no result, after the others ran
+    and the summary was written."""
+    from tabsil_train.benchmarks import causal
+
+    benchmarks = args.datasets.split(",") if args.datasets else list(causal.BENCHMARKS)
+    if bad := [b for b in benchmarks if b not in causal.BENCHMARKS]:
+        raise SystemExit(f"causal benchmarks are {list(causal.BENCHMARKS)}: {bad}")
+    try:
+        plan = {b: causal.parse_realizations(args.causal_realizations, b) for b in benchmarks}
+        methods = causal.check_methods(
+            args.causal_methods.split(",") if args.causal_methods else list(causal.METHODS)
+        )
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    estimators: dict = {m: causal.econml_estimator(m) for m in methods if m in causal.ECONML}
+    opts = {m: "EconML defaults, GBM base models" for m in estimators}
+    params = {
+        "suite": args.suite,
+        "benchmarks": ",".join(benchmarks),
+        "realizations": args.causal_realizations or "all",
+        "methods": ",".join(methods),
+    }
+    if ours := [m for m in methods if m in causal.TABSIL]:
+        if not args.regressor_path:
+            raise SystemExit("--suite causal needs --regressor-path (a model serving both tasks).")
+        model, borders = load_model(
+            args.regressor_path, "regression", out_dir / "checkpoints" / "regression"
+        )
+        if "classification" not in model.tasks:
+            raise SystemExit(f"{args.regressor_path} does not serve classification (propensity).")
+        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
+        for m in ours:
+            estimators[m] = causal.tabsil_estimator(
+                model, borders, causal.TABSIL[m], n_estimators, args.device, 1000 * args.seed
+            )
+            opts[m] = f"n_estimators={n_estimators}"
+        params |= {"model": args.regressor_path, "n_estimators": n_estimators, "seed": args.seed}
+    print(f"causal: {plan if args.causal_realizations else benchmarks} x {methods}, "
+          f"{args.device}", flush=True)  # fmt: skip
+    if use_mlflow:
+        mlflow.log_params(params)
+    suite_dir = out_dir / CAUSAL_SUITE
+    t0 = time.time()
+    rows, failures = causal.run(
+        estimators, plan, methods, suite_dir, opts, log=lambda s: print(s, flush=True)
+    )
+    summary = causal.report(rows, suite_dir, plan, methods)
+    summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
+    (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+    table = pd.read_csv(suite_dir / "summary.csv")
+    print(f"\n{table.round(3).to_string(index=False)}", flush=True)
+    print(f"missing {summary['missing_pct']:.1f}%, imputed {summary['imputed_pct']:.1f}%, "
+          f"failures {len(failures)}, {summary['seconds']:.0f}s", flush=True)  # fmt: skip
+    if use_mlflow:
+        metrics = {
+            f"causal_{key.replace('/', '_')}_{m}": float(v)
+            for key, by_metric in summary["methods"].items()
+            for m, v in by_metric.items()
+        }
+        metrics |= {"causal_missing_pct": summary["missing_pct"], "causal_failures": len(failures)}
+        mlflow.log_metrics(metrics)
+        mlflow.log_artifacts(str(suite_dir), CAUSAL_SUITE)
+    if failures:
+        raise SystemExit(f"causal: {len(failures)} failed cells: {failures}")
+    if summary["missing_pct"]:
+        raise SystemExit(f"causal: {summary['missing_pct']:.1f}% of the planned cells are missing")
 
 
 def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: bool) -> None:

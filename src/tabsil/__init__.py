@@ -12,6 +12,7 @@ the part they implement (generic nouns); TabSil's numbers and the combination of
 - `forecast`: time series forecasting with the regression model (`TabSilForecaster`)
 - `unsupervised`: per-column conditional distributions, row log densities and outlier scores
   (`TabSilUnsupervised`)
+- `causal`: treatment effects with TabSil base learners (S/T/X/DR meta-learners, `TabSilCATE`)
 - `utils`: device and seed helpers
 
 Training (priors, training loop, curriculum), evaluation (AMLB/CTR23, TabArena, BeyondArena,
@@ -38,6 +39,7 @@ from tabsil.models.bar_distribution import (
 from tabsil.utils import get_device, set_seed
 
 if TYPE_CHECKING:
+    from tabsil.causal import TabSilCATE
     from tabsil.forecast import TabSilForecaster
     from tabsil.hub import from_pretrained
     from tabsil.recipe import TabSilClassifier, TabSilRegressor
@@ -50,6 +52,7 @@ _LAZY = {
     "TabSilRegressor": "tabsil.recipe",
     "TabSilForecaster": "tabsil.forecast",
     "TabSilUnsupervised": "tabsil.unsupervised",
+    "TabSilCATE": "tabsil.causal",
 }
 
 
@@ -78,4 +81,5 @@ __all__ = [
     "TabSilRegressor",
     "TabSilForecaster",
     "TabSilUnsupervised",
+    "TabSilCATE",
 ]
