@@ -1,0 +1,43 @@
+# TabSil missing value imputation (training/scripts/eval.py --suite impute) on Databricks AI
+# Runtime: TabSilUnsupervised.impute (zero-shot, TABSIL_REGRESSOR, default the v1 weights) on 10
+# OpenML tables x MCAR rates 10/30/50% x 3 seeds (tabsil_train.benchmarks.impute), next to the
+# official TabPFN v2 extension (impute, simple_impute), mean / most frequent, KNN, MICE and
+# MissForest on the same rows and masks. With --shards N the GPU methods run as (table, rate,
+# method) jobs on N GPUs and the CPU baselines in one more process. From the repository root:
+#   databricks air run -f training/scripts/eval_impute.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+#     --override "compute.accelerator_type=GPU_8xH100" --override "compute.num_accelerators=8" \
+#     --override "env_variables.TABSIL_EXTRA_ARGS=--shards 8"
+# A quick check: --override "env_variables.TABSIL_EXTRA_ARGS=--datasets airfoil_self_noise --impute-rates 0.3 --impute-seeds 0"
+experiment_name: tabsil
+mlflow_run_name: tabsil-v1-eval-impute
+environment:
+  version: databricks_ai_v6
+  # the impute extra of tabsil-train (TabPFN baselines); openml brings liac-arff (the ARFF parser)
+  dependencies:
+    - openml>=0.15
+    - huggingface-hub>=0.34
+    - tabpfn==10.2.0
+    - tabpfn-extensions==0.6.3
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+code_source:
+  type: snapshot
+  snapshot:
+    # the two packages (tabsil, tabsil-train, imported through PYTHONPATH) and the script, relative
+    # to the repository root
+    root_path: ../..
+    include_paths:
+      - src
+      - training/src
+      - training/scripts/eval.py
+env_variables:
+  TABSIL_REGRESSOR: hf://aiden-jeon/tabsil@v1
+  TABSIL_EXTRA_ARGS: ""
+  TABPFN_DISABLE_TELEMETRY: "1"
+max_retries: 0
+timeout_minutes: 480
+command: >-
+  PYTHONPATH=$CODE_SOURCE_PATH/src:$CODE_SOURCE_PATH/training/src
+  python $CODE_SOURCE_PATH/training/scripts/eval.py --suite impute
+  --regressor-path $TABSIL_REGRESSOR $TABSIL_EXTRA_ARGS

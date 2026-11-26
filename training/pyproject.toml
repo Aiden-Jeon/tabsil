@@ -41,6 +41,13 @@ fev = [
 causal = [
     "econml==0.17.1",
 ]
+# imputation evaluation (tabsil_train.benchmarks.impute): the official TabPFN extension and
+# TabPFN v2 as baselines (tabpfn-extensions 0.6.3 is PriorLabs/tabpfn-extensions a049fd7 for
+# `TabPFNUnsupervisedModel.impute` and `simple_impute`)
+impute = [
+    "tabpfn-extensions==0.6.3",
+    "tabpfn==10.2.0",
+]
 
 [tool.uv.sources]
 tabsil = { workspace = true }

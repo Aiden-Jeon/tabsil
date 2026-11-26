@@ -1,5 +1,6 @@
 """Evaluate TabSil on the AMLB benchmark, TabArena-Lite, BeyondArena, fev-bench forecasting,
-ADBench outlier detection and treatment effect benchmarks (IHDP, ACIC 2016).
+ADBench outlier detection, treatment effect benchmarks (IHDP, ACIC 2016) and missing
+value imputation.
 
 The AMLB benchmark is the TabPFN v2 paper's: 29 AMLB classification and 28 AMLB/CTR23 regression
 tasks, each scored as the mean over the OpenML task's 10-fold cross-validation (ROC AUC for
@@ -99,6 +100,21 @@ diagnostic (context = training rows labeled normal; kept out of the Elo); `--dat
   $RUN python $EVAL --suite adbench --regressor-path hf://aiden-jeon/tabsil@v1 \
     --datasets yeast --adbench-splits s1
 
+`--suite impute` is missing value imputation on 10 OpenML tables x MCAR rates 10/30/50% x 3 seeds
+(`tabsil_train.benchmarks.impute`): `TabSilUnsupervised.impute` (zero-shot, the `--regressor-path`
+model serving both column kinds; mean and median from one evaluation) against the official TabPFN
+v2 extension (`impute` and `simple_impute`, needs the `impute` extra: `uv sync --all-packages
+--extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on the same rows and
+masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
+`--impute-methods`, `--impute-rates`, `--impute-seeds` and `--datasets` pick the grid. A failed
+(table, rate, seed, method) is reported and the run ends with an error (nothing is filled in).
+With `--shards N` the GPU methods run as (table, rate, method) jobs on N GPUs and the CPU
+baselines in one more process at the same time. Results go to `<out-dir>/impute/` and resume from
+its `results.csv`.
+
+  $RUN --extra impute python $EVAL --suite impute --regressor-path hf://aiden-jeon/tabsil@v1 \
+    --datasets airfoil_self_noise --impute-rates 0.3 --impute-seeds 0
+
 On AI Runtime (`training/scripts/eval.yaml`, `training/scripts/eval_arena.yaml`) results are
 logged to the platform's MLflow run (`MLFLOW_RUN_ID`). Locally, `--mlflow` creates a new run in the
 `TABSIL_EXPERIMENT` experiment (default `tabsil`).
@@ -137,6 +153,7 @@ ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
 FEV_SUITE = "fev"
 ADBENCH_SUITE = "adbench"
 CAUSAL_SUITE = "causal"
+IMPUTE_SUITE = "impute"
 LATENCY_REPEATS = 5
 
 
@@ -152,6 +169,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             FEV_SUITE,
             ADBENCH_SUITE,
             CAUSAL_SUITE,
+            IMPUTE_SUITE,
         ],
         default="all",
     )
@@ -192,7 +210,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--datasets",
         help="TabArena / BeyondArena: comma-separated dataset names (the rest imputed); fev:"
         " comma-separated task names (only those are evaluated and ranked); ADBench: the tables"
-        " to run; causal: the benchmarks (ihdp, acic2016; default both)",
+        " to run; causal: the benchmarks (ihdp, acic2016; default both); impute: the tables to"
+        " run",
     )
     parser.add_argument(
         "--causal-realizations",
@@ -230,6 +249,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="ADBench: comma-separated methods (tabsil_unsup, iforest; +clean = context of the"
         " training rows labeled normal, a diagnostic outside the Elo)",
     )
+    parser.add_argument(
+        "--impute-methods",
+        default="tabsil,tabsil_inferred,tabpfn_impute,tabpfn_simple,mean,knn,mice,missforest",
+        help="impute: comma-separated methods (tabsil also writes tabsil_median)",
+    )
+    parser.add_argument(
+        "--impute-rates", default="0.1,0.3,0.5", help="impute: comma-separated MCAR rates"
+    )
+    parser.add_argument("--impute-seeds", default="0,1,2", help="impute: comma-separated seeds")
     parser.add_argument(
         "--n-permutations",
         type=int,
@@ -1241,9 +1269,17 @@ def main(argv: list[str] | None = None) -> None:
     args.argv = list(sys.argv[1:] if argv is None else argv)  # for `--shards` worker commands
     if args.shards < 1:
         raise SystemExit("--shards must be >= 1.")
-    if args.shards > 1 and args.suite not in (*ARENA_SUITES, ADBENCH_SUITE):
-        raise SystemExit("--shards is for the TabArena / BeyondArena / ADBench suites only.")
-    if args.uncertainty and args.suite in (*ARENA_SUITES, FEV_SUITE, ADBENCH_SUITE, CAUSAL_SUITE):
+    if args.shards > 1 and args.suite not in (*ARENA_SUITES, ADBENCH_SUITE, IMPUTE_SUITE):
+        raise SystemExit(
+            "--shards is for the TabArena / BeyondArena / ADBench / impute suites only."
+        )
+    if args.uncertainty and args.suite in (
+        *ARENA_SUITES,
+        FEV_SUITE,
+        ADBENCH_SUITE,
+        CAUSAL_SUITE,
+        IMPUTE_SUITE,
+    ):
         # the arenas report only the official package's metrics; stop rather than silently ignore
         raise SystemExit("--uncertainty is for AMLB suites only (classification, regression, all).")
     if args.latency and args.suite not in ARENA_SUITES:
@@ -1267,6 +1303,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.suite == CAUSAL_SUITE:
         with mlflow_run(use_mlflow):
             run_causal(args, out_dir, use_mlflow)
+        return
+    if args.suite == IMPUTE_SUITE:
+        with mlflow_run(use_mlflow):
+            run_impute(args, out_dir, use_mlflow)
         return
     tasks = selected_tasks(args)  # exit on bad task ids before creating a run
     with mlflow_run(use_mlflow):
@@ -1566,6 +1606,203 @@ def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
         raise SystemExit(f"causal: {len(failures)} failed cells: {failures}")
     if summary["missing_pct"]:
         raise SystemExit(f"causal: {summary['missing_pct']:.1f}% of the planned cells are missing")
+
+
+def impute_grid(args: argparse.Namespace):
+    """(tables, rates, seeds, methods) of `--suite impute`, checked."""
+    from tabsil_train.benchmarks import impute
+
+    datasets = list(impute.TABLES) if args.datasets is None else args.datasets.split(",")
+    if bad := [d for d in datasets if d not in impute.TABLES]:
+        raise SystemExit(f"tables not in the impute suite: {bad} (known: {list(impute.TABLES)})")
+    rates = [float(r) for r in args.impute_rates.split(",")]
+    if bad := [r for r in rates if not 0 < r < 1]:
+        raise SystemExit(f"rates must be in (0, 1): {bad}")
+    seeds = [int(s) for s in args.impute_seeds.split(",")]
+    try:
+        methods = impute.check_methods(args.impute_methods.split(","))
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    return datasets, rates, seeds, methods
+
+
+def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
+    """Missing value imputation (`tabsil_train.benchmarks.impute`). Ends with an error if a
+    (table, rate, seed, method) failed."""
+    from tabsil_train.benchmarks import impute
+
+    datasets, rates, seeds, methods = impute_grid(args)
+    imputers: dict = dict(impute.CPU_IMPUTERS)
+    opts = {
+        "knn": "KNNImputer(n_neighbors=5), z-scored + one-hot",
+        "mice": "IterativeImputer(BayesianRidge, max_iter=10), z-scored + one-hot",
+        "missforest": "100 trees, max_features=sqrt, max_iter=10",
+    }
+    params = {"suite": args.suite, "datasets": ",".join(datasets),
+              "rates": ",".join(map(str, rates)), "seeds": ",".join(map(str, seeds)),
+              "methods": ",".join(methods)}  # fmt: skip
+    for m in ("tabpfn_impute", "tabpfn_simple"):
+        imputers[m] = impute.tabpfn_imputer(args.device, simple=m == "tabpfn_simple")
+        opts[m] = f"tabpfn-extensions {impute.TABPFN_EXTENSIONS_VERSION}, TabPFN v2 defaults"
+    ours = [m for m in methods if m.startswith(impute.OURS)]
+    path = args.regressor_path or args.classifier_path
+    if ours and not path:
+        raise SystemExit("impute needs --regressor-path (a model serving both tasks).")
+    if ours and args.shards == 1:  # with --shards the workers load the model
+        model, borders = load_model(path, "regression", out_dir / "checkpoints" / "regression")
+        if "classification" not in model.tasks:
+            raise SystemExit(f"{path} does not serve classification (categorical columns).")
+        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
+        for m in ours:
+            imputers[m] = impute.tabsil_imputer(
+                model, borders, n_estimators, args.device, 100 * args.seed,
+                extension_kinds=m == "tabsil_inferred",
+            )  # fmt: skip
+            opts[m] = f"n_estimators={n_estimators}"
+        params |= {"model": path, "n_estimators": n_estimators, "seed": args.seed}
+    print(f"impute: {len(datasets)} tables x rates {rates} x seeds {seeds} x {methods}, "
+          f"{args.device}", flush=True)  # fmt: skip
+    if use_mlflow:
+        mlflow.log_params(params)
+    suite_dir = out_dir / IMPUTE_SUITE
+    t0 = time.time()
+    if args.shards > 1:
+        failures = run_impute_shards(args, datasets, rates, methods, suite_dir, out_dir)
+    else:
+        _, failures = impute.run(imputers, datasets, rates, seeds, methods, suite_dir, opts)
+    rows = impute.read_results(suite_dir / "results.csv")
+    summary = impute.report(rows, suite_dir, datasets, rates, seeds)
+    summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
+    (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+    print(json.dumps(summary, indent=1, default=str), flush=True)
+    if (suite_dir / "summary.csv").exists():
+        table = pd.read_csv(suite_dir / "summary.csv").round(4)
+        print(f"\nsummary.csv\n{table.to_string(index=False)}", flush=True)
+    if use_mlflow:
+        metrics = {f"impute_{k}": v for k, v in summary.items() if isinstance(v, int | float)}
+        for metric in ("nrmse", "accuracy"):
+            for rate, by_method in summary.get(metric, {}).items():
+                metrics |= {f"impute_{metric}_{rate}_{m}": v for m, v in by_method.items()}
+        metrics = {k: v for k, v in metrics.items() if np.isfinite(v)}
+        mlflow.log_metrics({re.sub(r"[^\w\-. /]", "_", k): float(v) for k, v in metrics.items()})
+        mlflow.log_artifacts(str(suite_dir), IMPUTE_SUITE)
+    if failures:
+        raise SystemExit(f"impute: {len(failures)} failed (table, rate, seed, method): {failures}")
+
+
+def run_impute_shards(
+    args: argparse.Namespace,
+    datasets: list[str],
+    rates: list[float],
+    methods: list[str],
+    suite_dir: Path,
+    out_dir: Path,
+) -> list[dict]:
+    """`--suite impute --shards N`: the GPU methods as one job per (table, rate, method) not yet
+    complete in `results.csv`, most expensive first, each a worker process (`eval.py --suite
+    impute` on one GPU, without MLflow) started as soon as a GPU is free, and the CPU methods in
+    one worker process (`--device cpu`) running at the same time. A finished job's rows are
+    appended to `results.csv`; a failed job is returned as a failure (log under `shards/`)."""
+    import subprocess
+
+    from tabsil_train.benchmarks import impute
+    from tabsil_train.hub import download_artifact
+
+    seeds = [int(s) for s in args.impute_seeds.split(",")]
+    done = impute.read_results(suite_dir / "results.csv")
+    finished = set(zip(done.dataset, done.rate.round(4), done.seed, done.method, strict=True))
+
+    def complete(d: str, r: float, m: str) -> bool:
+        return all((d, round(r, 4), s, out) in finished for s in seeds for out in impute.METHODS[m])
+
+    gpu = [m for m in methods if m in impute.GPU_METHODS]
+    cpu = [m for m in methods if m not in impute.GPU_METHODS]
+    jobs = [(d, r, m) for d in datasets for r in rates for m in gpu if not complete(d, r, m)]
+    jobs.sort(key=lambda j: -impute.job_cost(j[0], j[2]))
+    n_gpus = torch.cuda.device_count()
+    if n_gpus and args.shards > n_gpus:
+        raise SystemExit(f"--shards {args.shards} exceeds the GPU count {n_gpus}.")
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    devices = visible.split(",") if visible else [str(i) for i in range(args.shards)]
+    path = args.regressor_path or args.classifier_path
+    if path and path.startswith("runs:/"):  # the parent's download, reused by every worker
+        path = str(download_artifact(path, out_dir / "checkpoints" / "regression"))
+    base = _strip_flags(
+        args.argv,
+        {"--shards": 1, "--datasets": 1, "--impute-rates": 1, "--impute-methods": 1,
+         "--out-dir": 1, "--device": 1, "--mlflow": 0, "--regressor-path": 1,
+         "--classifier-path": 1, "--heartbeat-minutes": 1},
+    )  # fmt: skip
+    model_args = ["--regressor-path", path] if path else []
+    device = "cuda" if args.device.startswith("cuda") else args.device
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_RUN")}
+    log_dir = suite_dir / "shards"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    def start(name: str, argv: list[str], visible_devices: str):
+        job_dir = log_dir / name
+        cmd = [sys.executable, __file__, *base, *argv, "--out-dir", str(job_dir)]
+        log = open(log_dir / f"{name}.log", "w")  # noqa: SIM115 (closed when done)
+        proc = subprocess.Popen(
+            cmd, stdout=log, stderr=subprocess.STDOUT,
+            env={**env, "CUDA_VISIBLE_DEVICES": visible_devices},
+        )  # fmt: skip
+        return proc, job_dir, time.time(), log
+
+    def collect(job, proc, job_dir, started, log, failures):
+        log.close()
+        rows = impute.read_results(job_dir / IMPUTE_SUITE / "results.csv")
+        if len(rows):  # rows a failed job finished still count
+            path_out = suite_dir / "results.csv"
+            rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
+        if proc.returncode == 0:
+            print(f"impute shards: {job} done in {_clock(time.time() - started)}", flush=True)
+            return
+        failures.append(dict(job=job, error=f"exit {proc.returncode}"))
+        print(f"impute shards: {job} FAILED (exit {proc.returncode})", flush=True)
+
+    failures: list[dict] = []
+    cpu_job = None
+    if cpu:
+        datasets_arg = [
+            "--datasets",
+            ",".join(datasets),
+            "--impute-rates",
+            ",".join(map(str, rates)),
+        ]
+        cpu_job = ("cpu", ",".join(cpu))
+        cpu_run = start(
+            "cpu", [*datasets_arg, "--impute-methods", ",".join(cpu), "--device", "cpu"], ""
+        )
+    running: dict[str, tuple] = {}
+    t0 = last = time.time()
+    print(
+        f"impute shards: {len(jobs)} GPU jobs -> {len(devices)} GPUs, CPU methods {cpu}", flush=True
+    )
+    while jobs or running or cpu_job:
+        for dev in devices:
+            if dev not in running and jobs:
+                d, r, m = job = jobs.pop(0)
+                argv = [*model_args, "--datasets", d, "--impute-rates", str(r),
+                        "--impute-methods", m, "--device", device]  # fmt: skip
+                running[dev] = (job, *start(f"{d}_{r}_{m}", argv, dev))
+        time.sleep(5)
+        for dev, (job, proc, job_dir, started, log) in list(running.items()):
+            if proc.poll() is not None:
+                del running[dev]
+                collect(job, proc, job_dir, started, log, failures)
+        if cpu_job and cpu_run[0].poll() is not None:
+            collect(cpu_job, *cpu_run, failures)
+            cpu_job = None
+        if time.time() - last >= args.heartbeat_minutes * 60:
+            last = time.time()
+            busy = ", ".join(
+                f"GPU {dev}: {j[0]} {_clock(last - j[3])}" for dev, j in running.items()
+            )
+            cpu_text = "; CPU methods running" if cpu_job else ""
+            print(f"impute shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}{cpu_text}",
+                  flush=True)  # fmt: skip
+    return failures
 
 
 def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: bool) -> None:
