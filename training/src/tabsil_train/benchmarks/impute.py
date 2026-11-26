@@ -271,6 +271,12 @@ def impute_mice(X: np.ndarray, categorical: list[int], seed: int) -> np.ndarray:
     return decode(model.fit_transform(Z))
 
 
+def n_jobs() -> int:
+    """Parallel jobs of MissForest's forests: `$TABSIL_IMPUTE_N_JOBS` (set per worker by
+    `eval.py --suite impute --shards`), else -1 (every core)."""
+    return int(os.environ.get("TABSIL_IMPUTE_N_JOBS", -1))
+
+
 def impute_missforest(
     X: np.ndarray, categorical: list[int], seed: int, n_trees: int = 100, max_iter: int = 10
 ) -> np.ndarray:
@@ -296,7 +302,9 @@ def impute_missforest(
         for j in order:
             others = [k for k in range(X.shape[1]) if k != j]
             kind = RandomForestClassifier if j in categorical else RandomForestRegressor
-            forest = kind(n_estimators=n_trees, max_features="sqrt", random_state=seed, n_jobs=-1)
+            forest = kind(
+                n_estimators=n_trees, max_features="sqrt", random_state=seed, n_jobs=n_jobs()
+            )
             forest.fit(current[~miss[:, j]][:, others], X[~miss[:, j], j])
             current[miss[:, j], j] = forest.predict(current[miss[:, j]][:, others])
         change = []

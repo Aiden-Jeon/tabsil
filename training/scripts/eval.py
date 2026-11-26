@@ -1667,7 +1667,7 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
     suite_dir = out_dir / IMPUTE_SUITE
     t0 = time.time()
     if args.shards > 1:
-        failures = run_impute_shards(args, datasets, rates, methods, suite_dir, out_dir)
+        failures = run_impute_shards(args, datasets, rates, methods, suite_dir, out_dir, use_mlflow)
     else:
         _, failures = impute.run(imputers, datasets, rates, seeds, methods, suite_dir, opts)
     rows = impute.read_results(suite_dir / "results.csv")
@@ -1690,6 +1690,33 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
         raise SystemExit(f"impute: {len(failures)} failed (table, rate, seed, method): {failures}")
 
 
+# thread count variables of the numeric libraries a worker uses (torch reads OMP_NUM_THREADS;
+# TABSIL_IMPUTE_N_JOBS is MissForest's n_jobs, `tabsil_train.benchmarks.impute.n_jobs`)
+WORKER_THREAD_VARIABLES = (
+    "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "TABSIL_IMPUTE_N_JOBS",
+)  # fmt: skip
+
+
+def impute_worker_threads(workers: int, cores: int | None = None) -> int:
+    """CPU threads per worker process: the cores (`os.sched_getaffinity` where available, else
+    `os.cpu_count`) split evenly over `workers`, at least 1."""
+    if cores is None:
+        try:
+            cores = len(os.sched_getaffinity(0))
+        except AttributeError:  # macOS
+            cores = os.cpu_count() or 1
+    return max(1, cores // max(workers, 1))
+
+
+def _result_rows(job_dir: Path) -> int:
+    """Result rows a running impute worker has written so far."""
+    path = job_dir / IMPUTE_SUITE / "results.csv"
+    if not path.exists():
+        return 0
+    with open(path) as f:
+        return max(0, sum(1 for _ in f) - 1)
+
+
 def run_impute_shards(
     args: argparse.Namespace,
     datasets: list[str],
@@ -1697,12 +1724,16 @@ def run_impute_shards(
     methods: list[str],
     suite_dir: Path,
     out_dir: Path,
+    use_mlflow: bool = False,
 ) -> list[dict]:
     """`--suite impute --shards N`: the GPU methods as one job per (table, rate, method) not yet
     complete in `results.csv`, most expensive first, each a worker process (`eval.py --suite
     impute` on one GPU, without MLflow) started as soon as a GPU is free, and the CPU methods in
-    one worker process (`--device cpu`) running at the same time. A finished job's rows are
-    appended to `results.csv`; a failed job is returned as a failure (log under `shards/`)."""
+    one worker process (`--device cpu`) running at the same time. Every worker gets an equal share
+    of the CPU cores (`impute_worker_threads`): TabPFN's preprocessing and torch's CPU work run on
+    the CPU, and N workers each using every core oversubscribe it (the GPUs then sit idle). A
+    finished job's rows are appended to `results.csv` (and logged to MLflow, so a run cut short
+    keeps them); a failed job is returned as a failure (log under `shards/`)."""
     import subprocess
 
     from tabsil_train.benchmarks import impute
@@ -1735,7 +1766,9 @@ def run_impute_shards(
     )  # fmt: skip
     model_args = ["--regressor-path", path] if path else []
     device = "cuda" if args.device.startswith("cuda") else args.device
+    threads = impute_worker_threads(len(devices) + (1 if cpu else 0))
     env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_RUN")}
+    env |= {k: str(threads) for k in WORKER_THREAD_VARIABLES}
     log_dir = suite_dir / "shards"
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1755,6 +1788,8 @@ def run_impute_shards(
         if len(rows):  # rows a failed job finished still count
             path_out = suite_dir / "results.csv"
             rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
+            if use_mlflow:
+                mlflow.log_artifact(str(path_out), IMPUTE_SUITE)
         if proc.returncode == 0:
             print(f"impute shards: {job} done in {_clock(time.time() - started)}", flush=True)
             return
@@ -1777,7 +1812,9 @@ def run_impute_shards(
     running: dict[str, tuple] = {}
     t0 = last = time.time()
     print(
-        f"impute shards: {len(jobs)} GPU jobs -> {len(devices)} GPUs, CPU methods {cpu}", flush=True
+        f"impute shards: {len(jobs)} GPU jobs -> {len(devices)} GPUs, CPU methods {cpu}, "
+        f"{threads} CPU threads per worker",
+        flush=True,
     )
     while jobs or running or cpu_job:
         for dev in devices:
@@ -1797,9 +1834,10 @@ def run_impute_shards(
         if time.time() - last >= args.heartbeat_minutes * 60:
             last = time.time()
             busy = ", ".join(
-                f"GPU {dev}: {j[0]} {_clock(last - j[3])}" for dev, j in running.items()
+                f"GPU {dev}: {j[0]} {_clock(last - j[3])} ({_result_rows(j[2])} rows)"
+                for dev, j in running.items()
             )
-            cpu_text = "; CPU methods running" if cpu_job else ""
+            cpu_text = f"; CPU methods {_result_rows(cpu_run[1])} rows" if cpu_job else ""
             print(f"impute shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}{cpu_text}",
                   flush=True)  # fmt: skip
     return failures

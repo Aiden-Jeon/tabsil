@@ -261,3 +261,15 @@ def test_eval_suite_impute(tmp_path, monkeypatch):
     monkeypatch.setitem(bi.CPU_IMPUTERS, "knn", lambda X, c, s: 1 / 0)  # a method that raises
     with pytest.raises(SystemExit, match="impute: 4 failed"):  # 2 tables x 2 seeds
         script.main([*grid, "--impute-methods", "mean,knn"])
+
+
+def test_worker_threads_split_the_cores(monkeypatch):
+    script = _eval_script()
+    assert script.impute_worker_threads(9, cores=208) == 23
+    assert script.impute_worker_threads(9, cores=4) == 1
+    assert script.impute_worker_threads(0, cores=8) == 8
+    assert "OMP_NUM_THREADS" in script.WORKER_THREAD_VARIABLES
+    monkeypatch.setenv("TABSIL_IMPUTE_N_JOBS", "3")
+    assert bi.n_jobs() == 3
+    monkeypatch.delenv("TABSIL_IMPUTE_N_JOBS")
+    assert bi.n_jobs() == -1
