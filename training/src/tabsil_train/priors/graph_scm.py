@@ -12,7 +12,8 @@ table size rule and missing values. It chains the parts (`tabsil_train.priors.ge
    count on (at most `MAX_ATTEMPTS` times).
 3. Missing values (TabPFN v2 paper, "Post-processing"; `Missing`): in some datasets every cell is
    erased with the same probability (MCAR). The paper gives no rates; `missing_dataset_prob` and
-   `max_missing_rate` are our choice.
+   `max_missing_rate` are our choice (the rate is U(`min_missing_rate`, `max_missing_rate`), with
+   a lower bound of 0 by default).
 
 Options that make the tables more like real ones, all off by default (then no random number is
 drawn for them, so the datasets are exactly those of the v1 prior). They change only x, so the
@@ -32,10 +33,13 @@ They run between DropInvalid and CoverClasses in step 2. Some also change y, so 
 borders are drawn with them (`make_borders(..., **options)`, `TARGET_FIELDS`):
 
 - `correlate_prob` (`transforms.CorrelateColumns`): random column blocks blended toward shared
-  factors (x only)
+  factors (x only). `correlate_discrete_levels` (default 100) is the most distinct values of a
+  column that blending keeps as they are
 - `relabel_prob` (`transforms.Relabel`): the target recomputed from 1-4 columns
 - `corrected_num_converters`, `corrected_cat_sizes` (`generators.graph_scm.GraphSCM`): the two
   TabICL `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 200 categories)
+- `reject_trivial_prob` (`generators.graph_scm.GraphSCM`): with this probability a dataset that an
+  ExtraTrees probe predicts almost perfectly is drawn again
 
 Regression target scaling, off by default: with `target_train_rows`
 (`transforms.TrainRowTargetScale`, a training config field like `filter_unpredictable`), the
@@ -75,6 +79,7 @@ from tabsil_train.priors.transforms import (
     StructuredMissing,
     TrainRowTargetScale,
 )
+from tabsil_train.priors.transforms.dependence import DISCRETE_LEVELS
 
 # Most classes of a classification dataset (TabPFN v2 paper); the classifier's output count
 # (`TrainConfig.n_out`)
@@ -112,6 +117,9 @@ class GraphSCMPrior:
         corrected_num_converters: bool = False,
         corrected_cat_sizes: bool = False,
         target_train_rows: bool = False,
+        min_missing_rate: float = 0.0,
+        correlate_discrete_levels: int = DISCRETE_LEVELS,
+        reject_trivial_prob: float = 0.0,
     ) -> None:
         self._task = task
         self.min_train_rows = MIN_TRAIN_ROWS[task]
@@ -141,13 +149,14 @@ class GraphSCMPrior:
             filter_unpredictable=filter_unpredictable,
             corrected_num_converters=corrected_num_converters,
             corrected_cat_sizes=corrected_cat_sizes,
+            reject_trivial_prob=reject_trivial_prob,
         )
         classification = task == "classification"
         hyperparameters = ClassCount(MAX_CLASSES, binary_prob) if classification else None
         # Column dependence options (they run before CoverClasses, since Relabel changes y)
         dependence = []
         if correlate_prob:
-            dependence.append(CorrelateColumns(correlate_prob))
+            dependence.append(CorrelateColumns(correlate_prob, correlate_discrete_levels))
         if relabel_prob:
             dependence.append(Relabel(relabel_prob, classification=classification))
         self.dependence = tuple(dependence)
@@ -157,7 +166,7 @@ class GraphSCMPrior:
         if target_train_rows and not classification:
             last.append(TrainRowTargetScale())
         self._accept = [DropInvalid(), *dependence, *last]
-        self._missing = Missing(missing_dataset_prob, max_missing_rate)
+        self._missing = Missing(missing_dataset_prob, max_missing_rate, min_missing_rate)
         # The options: a part is only added when on, so the v1 settings draw the same numbers
         realism = []
         if noise_prob:
@@ -195,6 +204,10 @@ class GraphSCMPrior:
     @property
     def max_missing_rate(self) -> float:
         return self._missing.max_rate
+
+    @property
+    def min_missing_rate(self) -> float:
+        return self._missing.min_rate
 
     def sample_shape(self) -> tuple[int, int, int]:
         """(train rows, features, eval rows) of the next table (`table_size.sample_split_size`)."""
@@ -250,10 +263,19 @@ REALISM_FIELDS = (
     "near_empty_missing_prob",
     "latent_missing_prob",
     "correlate_prob",
+    "correlate_discrete_levels",
 )
+# The MCAR missing values (step 3; x only). missing_dataset_prob is a training config field; a prior
+# module may fix it and the rates instead (then the config value is not used)
+MISSING_FIELDS = ("missing_dataset_prob", "max_missing_rate", "min_missing_rate")
 # Options that also change the target, off by default. Like REALISM_FIELDS they are fixed by a
 # prior module, which passes them to `make_borders` too
-TARGET_FIELDS = ("relabel_prob", "corrected_num_converters", "corrected_cat_sizes")
+TARGET_FIELDS = (
+    "relabel_prob",
+    "corrected_num_converters",
+    "corrected_cat_sizes",
+    "reject_trivial_prob",
+)
 # Those that also change the regression target distribution (the regression borders follow the
 # training prior in these; binary_prob only affects classification)
 BORDER_PRIOR_FIELDS = ("filter_unpredictable", "target_train_rows")
@@ -276,17 +298,16 @@ def check_config(config) -> None:
 def make_prior(config, task: str, seed: int, **options) -> GraphSCMPrior:
     """The `task` prior with the dataset sizes of the training config
     (`tabsil_train.training.config.TrainConfig`). `options` are the `GraphSCMPrior` options a
-    prior assembled on this one fixes (`REALISM_FIELDS`, `TARGET_FIELDS`)."""
-    unknown = set(options) - set(REALISM_FIELDS) - set(TARGET_FIELDS)
+    prior assembled on this one fixes (`REALISM_FIELDS`, `MISSING_FIELDS`, `TARGET_FIELDS`)."""
+    unknown = set(options) - set(REALISM_FIELDS) - set(MISSING_FIELDS) - set(TARGET_FIELDS)
     if unknown:
         raise TypeError(f"make_prior got unknown options: {sorted(unknown)}")
     return GraphSCMPrior(
         task,
         seed=seed,
-        missing_dataset_prob=config.missing_dataset_prob,
+        **{"missing_dataset_prob": config.missing_dataset_prob, **options},
         **_sizes(config),
         **{name: getattr(config, name) for name in PRIOR_FIELDS},
-        **options,
     )
 
 

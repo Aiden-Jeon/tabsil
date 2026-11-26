@@ -26,8 +26,11 @@ from tabsil_train.priors.transforms.categorical import log_uniform_int, power_la
 # categorical, so discretized numeric columns with few values are also kept discrete here (sdm
 # knows the column types and blends those linearly). With `use_corrected_cat_sizes` the SCM makes
 # categorical columns with up to 200 categories (`tabicl.prior._graph_scm` passes
-# `max_cat_size=200` to `sample_categorical_sizes`; that function's own default is 100), so a
-# categorical column of 101-200 categories is blended linearly here.
+# `max_cat_size=200` to `sample_categorical_sizes`; that function's own default is 100), so with
+# this default a categorical column of 101-200 categories is blended linearly. The default stays
+# at 100 so that `graph_scm_realism` draws the tables it was introduced with;
+# `graph_scm_base_realism` passes 200 (`CorrelateColumns(discrete_levels=...)`, the prior option
+# `correlate_discrete_levels`).
 DISCRETE_LEVELS = 100
 # TabICL's regression target processing (`tabicl.prior._graph_scm`: `outlier_removing`, then
 # `standard_scaling`)
@@ -57,9 +60,12 @@ def blend_discrete(column: np.ndarray, latent: np.ndarray, rho: float, r: np.ran
     return out
 
 
-def correlate(values: np.ndarray, r: np.random.Generator) -> np.ndarray:
+def correlate(
+    values: np.ndarray, r: np.random.Generator, discrete_levels: int = DISCRETE_LEVELS
+) -> np.ndarray:
     """2 to all columns, split into 1-4 blocks; each block of two or more columns is moved toward
-    its own standard normal factor with strength rho ~ U(0.2, 0.7) (`CorrelateColumns`)."""
+    its own standard normal factor with strength rho ~ U(0.2, 0.7) (`CorrelateColumns`). Columns
+    with at most `discrete_levels` distinct values keep their values (`blend_discrete`)."""
     n, f = values.shape
     out = values.copy()
     if f < 2:
@@ -76,7 +82,7 @@ def correlate(values: np.ndarray, r: np.random.Generator) -> np.ndarray:
         latent = r.standard_normal(n)
         for column in block:
             v = out[:, column]
-            if len(np.unique(v)) <= DISCRETE_LEVELS:
+            if len(np.unique(v)) <= discrete_levels:
                 out[:, column] = blend_discrete(v, latent, rho, r)
             else:
                 # sdm blends without rescaling and standardizes all columns afterwards
@@ -93,13 +99,16 @@ class CorrelateColumns:
 
     Adapted from sdm `CorrelateColumns` (Kumo-Tabular: 30% of tables, in every stage). sdm
     preserves categorical columns by their declared type; here a column with at most
-    `DISCRETE_LEVELS` distinct values is preserved (`DISCRETE_LEVELS`).
+    `discrete_levels` distinct values is preserved (default `DISCRETE_LEVELS`).
     """
 
-    def __init__(self, dataset_prob: float) -> None:
+    def __init__(self, dataset_prob: float, discrete_levels: int = DISCRETE_LEVELS) -> None:
         if not 0.0 <= dataset_prob <= 1.0:
             raise ValueError(f"dataset_prob must be between 0 and 1: {dataset_prob}")
+        if discrete_levels < 1:
+            raise ValueError(f"discrete_levels must be at least 1: {discrete_levels}")
         self.dataset_prob = dataset_prob
+        self.discrete_levels = discrete_levels
 
     def __call__(self, group: Group, rng: Rng) -> Group:
         r = rng.numpy
@@ -107,7 +116,7 @@ class CorrelateColumns:
         for d in range(group.x.shape[1]):
             x = group.x[:, d]
             if r.random() < self.dataset_prob and torch.isfinite(x).all():
-                out = correlate(x.double().cpu().numpy(), r)
+                out = correlate(x.double().cpu().numpy(), r, self.discrete_levels)
                 x = torch.from_numpy(out).to(dtype=x.dtype, device=x.device)
             xs.append(x)
         return group.with_tensors(torch.stack(xs, 1), group.y)

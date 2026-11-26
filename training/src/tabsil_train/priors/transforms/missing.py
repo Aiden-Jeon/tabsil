@@ -20,15 +20,20 @@ from tabsil_train.priors.pipeline import Group, Rng
 
 
 class Missing:
-    """With probability `dataset_prob` per dataset, set a fraction r ~ U(0, max_rate) of x to NaN.
+    """With probability `dataset_prob` per dataset, set a fraction r ~ U(min_rate, max_rate) of x
+    to NaN.
 
-    The v2 paper does not give these two values; they are our choice in the graph SCM prior
-    (`missing_dataset_prob`, `max_missing_rate`).
+    The v2 paper does not give these values; they are our choice in the graph SCM prior
+    (`missing_dataset_prob`, `max_missing_rate`, and `min_missing_rate` 0). Kumo-Tabular masks 1%
+    of its tables at a rate of U(0.01, 0.08) (sdm `MaskRandom`, `mcar_missingness_prob`).
     """
 
-    def __init__(self, dataset_prob: float, max_rate: float) -> None:
+    def __init__(self, dataset_prob: float, max_rate: float, min_rate: float = 0.0) -> None:
+        if not 0.0 <= min_rate <= max_rate <= 1.0:
+            raise ValueError(f"need 0 <= min_rate <= max_rate <= 1: {min_rate}, {max_rate}")
         self.dataset_prob = dataset_prob
         self.max_rate = max_rate
+        self.min_rate = min_rate
 
     def __call__(self, group: Group, rng: Rng) -> Group:
         r = rng.numpy
@@ -36,7 +41,8 @@ class Missing:
         for d in range(group.x.shape[1]):
             x = group.x[:, d]
             if r.random() < self.dataset_prob:
-                rate = r.uniform(0.0, self.max_rate)
+                # U(0, max_rate) draws the same number as before the lower bound existed
+                rate = r.uniform(self.min_rate, self.max_rate)
                 mask = torch.from_numpy(r.random(tuple(x.shape)) < rate).to(x.device)
                 x = x.masked_fill(mask, float("nan"))
             xs.append(x)
