@@ -42,10 +42,11 @@ causal = [
     "econml==0.17.1",
 ]
 # imputation evaluation (tabsil_train.benchmarks.impute): the official TabPFN extension and
-# TabPFN v2 as baselines (tabpfn-extensions 0.6.3 is PriorLabs/tabpfn-extensions a049fd7 for
-# `TabPFNUnsupervisedModel.impute` and `simple_impute`)
+# TabPFN v2 as baselines, at PriorLabs/tabpfn-extensions a049fd7 (the 0.6.3 release on PyPI writes
+# `impute`'s draws to the CPU table without moving them off the GPU and fails on CUDA; a049fd7 has
+# that fix and is otherwise the same for `TabPFNUnsupervisedModel.impute` and `simple_impute`)
 impute = [
-    "tabpfn-extensions==0.6.3",
+    "tabpfn-extensions @ git+https://github.com/PriorLabs/tabpfn-extensions@a049fd76afa0593a616156e1008b5482e9c905da",
     "tabpfn==10.2.0",
 ]
 

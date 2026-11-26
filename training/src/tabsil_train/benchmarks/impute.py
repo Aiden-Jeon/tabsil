@@ -19,10 +19,10 @@ extension and the usual baselines, every method on the same rows and masks.
   Every method's categorical values are set to the nearest class observed in that column
   (integer codes; most methods already give one)
 - methods (`METHODS`): `tabsil` (one evaluation gives `tabsil` = predictive mean and
-  `tabsil_median`), `tabpfn_impute` (tabpfn-extensions 0.6.3 = a049fd7
+  `tabsil_median`), `tabpfn_impute` (tabpfn-extensions at a049fd7
   `TabPFNUnsupervisedModel.impute` defaults: 10 orders, t = 1e-9, with TabPFN v2, and one fix of
   its missing-value handling, `official_model_class`), `tabpfn_simple` (`simple_impute` of the
-  same release, one fit per column), `mean` (mean / most frequent),
+  same commit, one fit per column), `mean` (mean / most frequent),
   `knn` (scikit-learn KNNImputer, 5 neighbors), `mice` (IterativeImputer with BayesianRidge,
   10 rounds) and `missforest` (`missforest`, Stekhoven and Buehlmann 2012). KNN and MICE see
   z-scored numeric columns and one-hot categorical columns (a category is the largest one-hot
@@ -96,7 +96,9 @@ METHODS = {
 GPU_METHODS = ("tabsil", "tabsil_inferred", "tabpfn_impute", "tabpfn_simple")
 OURS = "tabsil"
 OFFICIAL = "tabpfn_impute"
-TABPFN_EXTENSIONS_VERSION = "0.6.3"  # = PriorLabs/tabpfn-extensions a049fd7 for impute
+# PriorLabs/tabpfn-extensions commit of the baselines (the 0.6.3 release fails `impute` on CUDA:
+# its draws are written to the CPU table without `.to(device)`; a049fd7 has that fix)
+TABPFN_EXTENSIONS_VERSION = "a049fd7"
 RESULT_COLUMNS = [
     "dataset", "rate", "seed", "method", "nrmse", "accuracy", "seconds", "n_rows", "n_numeric",
     "n_categorical", "masked_numeric", "masked_categorical", "columns", "opts",
@@ -324,7 +326,7 @@ def tabpfn_models(device: str):
 
 def official_model_class():
     """`TabPFNUnsupervisedModel` with one fix: `use_classifier_` counts a column's classes over
-    its observed values. At a049fd7 (0.6.3) `impute_` and `sample_from_model_prediction_` pass the
+    its observed values. At a049fd7 `impute_` and `sample_from_model_prediction_` pass the
     fit column with its missing values, and `torch.unique` counts every NaN as a value, so a
     categorical column missing in the fit rows is routed to the regression code with the
     classifier and `impute` raises (`predict() got an unexpected keyword argument

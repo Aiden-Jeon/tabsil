@@ -6108,7 +6108,7 @@ wheels = [
 [[package]]
 name = "tabpfn-extensions"
 version = "0.6.3"
-source = { registry = "https://pypi.org/simple/" }
+source = { git = "https://github.com/PriorLabs/tabpfn-extensions?rev=a049fd76afa0593a616156e1008b5482e9c905da#a049fd76afa0593a616156e1008b5482e9c905da" }
 dependencies = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple/" }, marker = "extra == 'extra-12-tabsil-train-arena' or (extra == 'extra-12-tabsil-train-fev' and extra == 'group-12-tabsil-train-dev') or (extra == 'extra-12-tabsil-train-fev' and extra == 'group-6-tabsil-dev')" },
     { name = "pandas", version = "3.0.6", source = { registry = "https://pypi.org/simple/" }, marker = "extra != 'extra-12-tabsil-train-arena' or extra == 'extra-12-tabsil-train-fev' or extra == 'group-12-tabsil-train-dev' or extra == 'group-6-tabsil-dev'" },
@@ -6118,10 +6118,6 @@ dependencies = [
     { name = "tabpfn" },
     { name = "tabpfn-common-utils" },
     { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/76/e6/bf599982b235116a061ef7681433d897a1c4070c7b3c8f0a60130a936c77/tabpfn_extensions-0.6.3.tar.gz", hash = "sha256:ff8756d2ae9146920165c0138b21dbb8e86a2d3e0cc106ce1d76324adb68211d", size = 154444, upload-time = "2026-09-21T14:23:43.905Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/b2/5c15d56b777a96bab66d81a2db959da8c24b3b6d755c8604184527a21b4e/tabpfn_extensions-0.6.3-py3-none-any.whl", hash = "sha256:9305e495cd1c7b572db63b301ccd149e4b0e7769c70a1058f76a1430caacbf63", size = 123160, upload-time = "2026-09-21T14:23:42.118Z" },
 ]
 
 [[package]]
@@ -6225,7 +6221,7 @@ requires-dist = [
     { name = "tabarena", extras = ["data-foundry"], marker = "extra == 'arena'", specifier = ">=0.1.1.dev20261031" },
     { name = "tabicl", specifier = ">=2.2" },
     { name = "tabpfn", marker = "extra == 'impute'", specifier = "==10.2.0" },
-    { name = "tabpfn-extensions", marker = "extra == 'impute'", specifier = "==0.6.3" },
+    { name = "tabpfn-extensions", marker = "extra == 'impute'", git = "https://github.com/PriorLabs/tabpfn-extensions?rev=a049fd76afa0593a616156e1008b5482e9c905da" },
     { name = "tabsil", editable = "." },
     { name = "tqdm", specifier = ">=4.67" },
 ]

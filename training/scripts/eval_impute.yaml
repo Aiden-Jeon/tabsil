@@ -12,12 +12,13 @@ experiment_name: tabsil
 mlflow_run_name: tabsil-v1-eval-impute
 environment:
   version: databricks_ai_v6
-  # the impute extra of tabsil-train (TabPFN baselines); openml brings liac-arff (the ARFF parser)
+  # the impute extra of tabsil-train (TabPFN baselines; tabpfn-extensions at a049fd7, not the
+  # 0.6.3 release, which fails on CUDA); openml brings liac-arff (the ARFF parser)
   dependencies:
     - openml>=0.15
     - huggingface-hub>=0.34
     - tabpfn==10.2.0
-    - tabpfn-extensions==0.6.3
+    - tabpfn-extensions @ git+https://github.com/PriorLabs/tabpfn-extensions@a049fd76afa0593a616156e1008b5482e9c905da
 compute:
   accelerator_type: GPU_1xH100
   num_accelerators: 1
