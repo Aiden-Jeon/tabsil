@@ -36,6 +36,10 @@ The table size and prior settings (`TrainConfig` comments) can be changed with
 PRIOR_TYPES`, e.g. `graph_scm_hicard_missing`); unset, the preset's (`graph_scm`). A resumed run
 keeps the prior it was trained on (a different `--prior-type` is an error); a run that takes only
 the weights (`--init-run-id`) uses the preset's or the given one.
+`--reference-val-tables N` (`TABSIL_REFERENCE_VAL_TABLES`) adds a validation set of N tables per
+task that depends neither on the run's seed nor on its prior (`tabsil_train.training.reference`,
+metrics `ref_*`), so that runs of different seeds and priors can be compared on it; a resumed run
+keeps the original run's value.
 The training diagnostics (`tabsil_train.training.diagnostics`) always log per-group weight and
 gradient norms; `--grad-cosine` (`TABSIL_GRAD_COSINE=1`) adds the per-group cosine between the two
 tasks' gradients, and `--rank-timing` (`TABSIL_RANK_TIMING=1`) adds per-GPU forward/backward time
@@ -199,6 +203,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--" + name.replace("_", "-"), type=int, default=_env("TABSIL_" + name.upper(), int)
         )
     parser.add_argument("--prior-type", default=os.environ.get("TABSIL_PRIOR_TYPE") or None)
+    # The reference validation set (`tabsil_train.training.reference`). A resumed run keeps the
+    # original run's value unless one is given
+    parser.add_argument(
+        "--reference-val-tables", type=int, default=_env("TABSIL_REFERENCE_VAL_TABLES", int)
+    )
     parser.add_argument(
         "--filter-unpredictable",
         action="store_true",
@@ -277,6 +286,14 @@ def inherit_batch_size(args: argparse.Namespace, params: dict[str, str]) -> None
     value."""
     if args.resume_run_id and args.batch_size is None and "batch_size" in params:
         args.batch_size = int(params["batch_size"])
+
+
+def inherit_reference_val(args: argparse.Namespace, params: dict[str, str]) -> None:
+    """On resume without `--reference-val-tables`, keep the original run's reference validation
+    set (so that a chunked run logs the same `ref_*` metrics in every chunk)."""
+    if args.resume_run_id and args.reference_val_tables is None:
+        if "reference_val_tables" in params:
+            args.reference_val_tables = int(params["reference_val_tables"])
 
 
 def inherit_prior_type(args: argparse.Namespace, params: dict[str, str]) -> None:
@@ -383,6 +400,7 @@ def _override_values(args: argparse.Namespace) -> dict:
         "max_train_fraction": args.max_train_fraction,
         "binary_prob": args.binary_prob,
         "prior_type": args.prior_type,
+        "reference_val_tables": args.reference_val_tables,
         "seed": args.seed,
         "warmup_steps": args.warmup_steps,
         **{
@@ -471,6 +489,7 @@ def main(argv: list[str] | None = None) -> None:
             speed_options.pop("phases", None)
         inherit_batch_size(args, params)
         inherit_prior_type(args, params)
+        inherit_reference_val(args, params)
     config = build_config(args, source, speed_options)
     if args.resume_run_id:
         config = resume_phase_lr(config, args, params)  # checked before the checkpoint download

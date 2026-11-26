@@ -64,6 +64,7 @@ from tabsil_train.training.diagnostics import (
 )
 from tabsil_train.training.losses import prior_loss
 from tabsil_train.training.muon import Muon, shard_group
+from tabsil_train.training.reference import reference_digest, reference_jobs, reference_sets
 from tabsil_train.training.stability import CollapseGuard
 from tabsil_train.utils import DistContext, lr_factor, setup_distributed
 
@@ -124,15 +125,18 @@ def _validate(
     return out
 
 
-def _validate_tasks(model, val_sets, device, autocast, config) -> dict[str, float]:
-    """Validation of each task: the metric names end with the task, and `val_loss` is the mean of
-    the two task losses."""
+def _validate_tasks(
+    model, val_sets, device, autocast, config, prefix: str = "val"
+) -> dict[str, float]:
+    """Validation of each task: the metric names end with the task, and `<prefix>_loss` is the mean
+    of the two task losses. `prefix` is "val" for the run's validation batches and "ref" for the
+    reference set (`training.reference`)."""
     rows = config.activation_checkpointing_rows
     out = {}
     for task, batches in val_sets.items():
         val = _validate(model, batches, device, autocast, task, rows)
-        out.update({f"{k}_{task}": v for k, v in val.items()})
-    out["val_loss"] = sum(out[f"val_loss_{t}"] for t in val_sets) / len(val_sets)
+        out.update({f"{prefix}{k[3:]}_{task}": v for k, v in val.items()})
+    out[f"{prefix}_loss"] = sum(out[f"{prefix}_loss_{t}"] for t in val_sets) / len(val_sets)
     return out
 
 
@@ -490,9 +494,18 @@ def _train(
 
     batches = make_batches(start_step, rewinds)
 
-    mlf, val_sets = None, None
+    mlf, val_sets, ref_sets = None, None, None
     if d.is_main:
         val_sets = {task: _make_val_batches(config, task) for task in config.tasks}
+        if config.reference_val_tables:
+            start = time.time()
+            ref_sets = reference_sets(config, config.tasks, n_jobs=reference_jobs())
+            ref_digest = reference_digest(ref_sets)
+            print(
+                f"reference validation set: {config.reference_val_tables} tables per task,"
+                f" digest {ref_digest}, {time.time() - start:.0f}s",
+                flush=True,
+            )
         if mlflow_log:
             import mlflow as mlf
 
@@ -520,6 +533,10 @@ def _train(
             # param
             if config.phases or run_params.get("phases", "()") != "()":
                 mlf.set_tag("phases", str(config.phases))
+            if ref_sets is not None:
+                # the tables also depend on the tabicl version and the hash seed: equal digests
+                # mean equal tables (`training.reference`)
+                mlf.set_tag("reference_val_digest", ref_digest)
 
     guard = None
     if config.collapse_threshold is not None:
@@ -756,10 +773,14 @@ def _train(
             averages.append(_to_cpu(model.state_dict()))
         if d.is_main and (done % config.val_every == 0 or last) and not rewound_at_end:
             val = _validate_tasks(model, val_sets, device, autocast, config)
+            if ref_sets is not None:
+                val.update(_validate_tasks(model, ref_sets, device, autocast, config, "ref"))
             # LAWA only once its window (K) is full; after a resume the window refills
             if averages is not None and len(averages) == config.weight_average:
                 averaged = eval_copy(_average_states(list(averages)))
                 avg = _validate_tasks(averaged, val_sets, device, autocast, config)
+                if ref_sets is not None:
+                    avg.update(_validate_tasks(averaged, ref_sets, device, autocast, config, "ref"))
                 val.update({f"{k}_avg": v for k, v in avg.items()})
             val["train_seconds"] = train_seconds
             history["val_step"].append(done)

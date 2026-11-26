@@ -103,6 +103,10 @@ class TrainConfig:
     log_every: int = 100
     val_every: int = 5_000
     val_batch: int = 8  # datasets per val batch; separate from micro_batch so the val set is fixed
+    # Tables per task of the reference validation set (`training.reference`, metrics `ref_*`): drawn
+    # from one fixed prior and seed, so that runs of different seeds and priors are validated on
+    # the same tables. A multiple of 8 (its batch size). 0 turns it off (default)
+    reference_val_tables: int = 0
     checkpoint_every: int = 5_000
     # latest.pt is overwritten, so every this many steps also keep `step_XXXXXXX.pt` (to go back)
     keep_every: int | None = 25_000
@@ -191,6 +195,11 @@ class TrainConfig:
             )
         if not 0.0 <= self.muon_momentum < 1.0:
             raise ValueError(f"muon_momentum must be in [0, 1): {self.muon_momentum}")
+        if self.reference_val_tables < 0 or self.reference_val_tables % 8:
+            raise ValueError(
+                "reference_val_tables must be a multiple of 8 (0 turns it off):"
+                f" {self.reference_val_tables}"
+            )
         if not 0.0 <= self.binary_prob <= 1.0:
             raise ValueError(f"binary_prob must be in [0, 1]: {self.binary_prob}")
         if self.activation_checkpointing_rows is not None:
