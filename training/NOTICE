@@ -42,3 +42,12 @@ redistributed:
   (https://github.com/BiomedSciAI/causallib, commit 267e0c72df81ea8264ece46496107f99a599b60d,
   causallib/datasets/data/acic_challenge_2016): Community Data License Agreement - Sharing 1.0
   (LICENSES/ACIC2016-CDLA-Sharing-1.0.txt in the repository root)
+
+This product includes software adapted from tabpfn-extensions
+(https://github.com/PriorLabs/tabpfn-extensions, commit a049fd7), Copyright (c) Prior Labs GmbH
+2025, licensed under the Apache License 2.0:
+- src/tabsil_train/benchmarks/impute.py `extension_categorical`: reimplements
+  src/tabpfn_extensions/utils.py `infer_categorical_features` (numpy arrays), and
+  `official_model_class` overrides `TabPFNUnsupervisedModel.use_classifier_` of
+  src/tabpfn_extensions/unsupervised/unsupervised.py to count classes over observed values. The
+  extension itself is a dependency of the `impute` extra, not copied
