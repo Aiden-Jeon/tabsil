@@ -1,4 +1,5 @@
-"""Unsupervised TabSil: per-column conditional distributions, row log densities and outlier scores.
+"""Unsupervised TabSil: per-column conditional distributions, row log densities, outlier scores and
+imputation.
 
 The part everything here stands on is the conditional distribution of one column given other
 columns (`TabSilUnsupervised.conditional`), computed by the regular TabSil inference classes with
@@ -18,10 +19,10 @@ averaged over several random orders as the log of the arithmetic mean of the den
     model = TabSilUnsupervised().fit(x_train)  # the default Hub weights (`tabsil.recipe`)
     scores = model.outlier_score(x_test)       # (n,), higher = more anomalous
     log_p = model.log_density(x_test)          # (n,), = -scores
+    filled = model.impute(x_test)              # NaN filled (see "Imputation" below)
 
-Imputation and synthetic data can later be built on the same part (`conditional`: the distribution
-of a missing column given the observed ones, or sampled column by column along an order); they
-are not implemented here.
+Synthetic data can later be built on the same part (`conditional`, sampled column by column along
+an order); it is not implemented here.
 
 The method follows the official TabPFN extension (`TabPFNUnsupervisedModel.outliers` of
 PriorLabs/tabpfn-extensions a049fd7, `src/tabpfn_extensions/unsupervised/unsupervised.py`,
@@ -50,6 +51,36 @@ rows per value on average). Where this module differs:
 - missing values: a missing target value is integrated out (contributes 0 to the log density) and
   context rows missing the target are left out of that column's context; missing conditioning
   values go to the model as NaN. (The official drops context rows missing the target too.)
+
+Imputation (`impute`, `missing_conditionals`): each column with a missing value is one
+`conditional` of that column for the rows missing it, given all other columns; the row's other
+missing cells go to the model as missing (NaN; TabSil's prior trains with MCAR missing features),
+so a cell is predicted from the observed cells of its row, and the context is the fit rows that
+observe the column. A numeric cell gets the predictive mean (`TabSilRegressor.predict`, the
+default) or median, a categorical cell its most probable class; `n_samples` draws from the same
+distributions instead (multiple imputation). Fit on the table to impute (transductive) or on
+other rows. This is the way of the official `simple_impute` (`unsupervised/simple_impute.py` at the
+same commit, default `use_imputed=False`). Where it differs from the official
+`TabPFNUnsupervisedModel.impute`:
+
+- conditioning: for a column, the official first fills the other missing columns of the rows
+  missing it, column by column along `n_permutations` (10) random orders (each given all other
+  columns, earlier fills used as observed), then predicts the column from the filled rows and
+  averages the distributions over the orders: about `n_permutations` x columns x missing columns
+  fits. Here one evaluation per column with a missing value, nothing filled is fed back, and the
+  result does not depend on a column order
+- numeric value: the official draws at temperature t = 1e-9 from the averaged bar distribution,
+  i.e. a uniform value within the most probable bucket; here the mean or the median, clipped to
+  the column's range in the fit rows
+- categorical value: the official draws a class from the averaged probabilities (t does not
+  apply) and writes the class index, which is the value only for classes coded 0..C-1; here the
+  most probable class, written as the class value. A categorical column predicted by the
+  regressor (more classes than the classifier takes) gets the nearest class value here
+- multiple imputation: the official gives one draw per call (t > 0); here `n_samples` draws per
+  cell from one evaluation per column, independent across the missing cells of a row (their
+  joint dependence is not modeled)
+- a column without an observed value in the fit rows raises a ValueError here; the official fits
+  on its fabricated zero labels in that case
 
 Cost: every (column, conditioning set) is one fit and one prediction of the test rows with the
 whole context, so up to `n_permutations` x columns predictions of `n_estimators` members each
@@ -81,6 +112,8 @@ PROBABILITY_FLOOR = 1e-12
 MAX_CATEGORIES = 40
 MIN_ROWS_PER_CATEGORY = 10
 N_PERMUTATIONS = 10
+# point values of a numeric missing cell (`TabSilUnsupervised.impute`)
+IMPUTE_STRATEGIES = ("mean", "median")
 
 
 def infer_categorical(
@@ -114,13 +147,43 @@ def column_orders(n_columns: int, n_permutations: int, random_state: int) -> lis
     return out
 
 
+def _inverse_cdf(probs: np.ndarray, borders: np.ndarray, u: np.ndarray) -> np.ndarray:
+    """Values at the CDF levels `u` (n, m) of bucket distributions `probs` (n, K) on `borders`
+    (K + 1,), with the density uniform within each bucket (the CDF is linear between borders; the
+    same rule as `tabsil.forecast.bucket_quantiles`). A level falls in the bucket k with
+    cdf_k < u <= cdf_{k+1}, so a bucket without probability is never chosen."""
+    probs = probs / probs.sum(-1, keepdims=True)
+    cdf = np.concatenate([np.zeros((len(probs), 1)), np.cumsum(probs, -1)], axis=-1)
+    cdf[:, -1] = 1.0
+    rows = np.arange(len(probs))[:, None]
+    k = np.clip((cdf[:, None, :] < u[:, :, None]).sum(-1) - 1, 0, len(borders) - 2)
+    p = probs[rows, k]
+    share = np.where(p > 0, (u - cdf[rows, k]) / np.where(p > 0, p, 1.0), 0.0)
+    return borders[k] + np.clip(share, 0.0, 1.0) * (borders[k + 1] - borders[k])
+
+
 @dataclass
 class NumericConditional:
     """The predictive distribution of a numeric column for each row: bucket log probabilities
-    `log_probs` (n, K) on `borders` (K + 1,), in the column's original units (float64)."""
+    `log_probs` (n, K) on `borders` (K + 1,), in the column's original units (float64), and its
+    mean `mean` (n,) as `TabSilRegressor.predict` computes it (from the same forward pass; the
+    two tail buckets valued at the ends of the context's range, so it differs from the mean of
+    `log_probs`). `mean` is None for a distribution built without it."""
 
     log_probs: np.ndarray
     borders: np.ndarray
+    mean: np.ndarray | None = None
+
+    def quantile(self, q: float) -> np.ndarray:
+        """The `q` quantile (n,) of each row's distribution (uniform within each bucket)."""
+        u = np.full((len(self.log_probs), 1), float(q))
+        return _inverse_cdf(np.exp(self.log_probs), self.borders, u)[:, 0]
+
+    def sample(self, rng: np.random.Generator, n_samples: int) -> np.ndarray:
+        """`n_samples` draws per row (n, n_samples): a bucket by its probability, then a uniform
+        value within it (inverse CDF at uniform levels)."""
+        u = rng.random((len(self.log_probs), n_samples))
+        return _inverse_cdf(np.exp(self.log_probs), self.borders, u)
 
     def log_prob(self, values: np.ndarray) -> np.ndarray:
         """Log density at `values` (n,): the log probability of the bucket holding the value
@@ -158,6 +221,17 @@ class CategoricalConditional:
         p = np.where(known, self.proba[np.arange(len(values)), idx], 0.0)
         out = np.log(np.maximum(p, PROBABILITY_FLOOR))
         return np.where(np.isnan(values), 0.0, out)
+
+    def mode(self) -> np.ndarray:
+        """The most probable class of each row (n,); a tie goes to the smaller class value."""
+        return self.classes[self.proba.argmax(1)]
+
+    def sample(self, rng: np.random.Generator, n_samples: int) -> np.ndarray:
+        """`n_samples` classes per row (n, n_samples), drawn with the probabilities `proba`."""
+        cdf = np.cumsum(self.proba / self.proba.sum(1, keepdims=True), 1)
+        u = rng.random((len(self.proba), n_samples))
+        idx = (cdf[:, None, :] < u[:, :, None]).sum(-1).clip(0, len(self.classes) - 1)
+        return self.classes[idx]
 
 
 Conditional = NumericConditional | CategoricalConditional
@@ -303,8 +377,11 @@ class TabSilUnsupervised:
             proba[:, est.classes_.astype(int)] = est.predict_proba(x_pred)
             return CategoricalConditional(proba, self.classes_[target])
         est.fit(x_fit, y)
-        log_probs, borders = est.predict_distribution(x_pred)
-        return NumericConditional(log_probs.double().numpy(), borders.double().numpy())
+        # predict_full: predict_distribution's log probabilities and borders, and the mean
+        mean, log_probs, borders = est.predict_full(x_pred)
+        return NumericConditional(
+            log_probs.double().numpy(), borders.double().numpy(), np.asarray(mean, np.float64)
+        )
 
     # --- densities -------------------------------------------------------------------------
 
@@ -339,3 +416,79 @@ class TabSilUnsupervised:
         """Outlier score of each row of `X` (n,): the negative log density, higher = more
         anomalous."""
         return -self.log_density(X)
+
+    # --- imputation ------------------------------------------------------------------------
+
+    def missing_conditionals(self, X: Any) -> dict[int, tuple[np.ndarray, Conditional]]:
+        """For each column of `X` with a missing value: (the rows missing it, the column's
+        distribution for those rows given all other columns). The row's other missing cells go to
+        the model as missing (NaN), so a value is predicted from the observed cells of its row in
+        one evaluation per column (module docstring, "Imputation")."""
+        X = self._check_fitted(X)
+        out: dict[int, tuple[np.ndarray, Conditional]] = {}
+        for j in range(X.shape[1]):
+            rows = np.flatnonzero(np.isnan(X[:, j]))
+            if len(rows):
+                given = [k for k in range(X.shape[1]) if k != j]
+                out[j] = (rows, self.conditional(X[rows], j, given))
+        return out
+
+    def impute(self, X: Any, strategy: str = "mean", n_samples: int | None = None) -> np.ndarray:
+        """`X` (n, d) with its missing values (NaN) filled, float64; observed cells are returned
+        unchanged. A numeric cell gets the mean (`strategy="mean"`, the default: the value with
+        the least expected squared error) or the median (`"median"`) of its predictive
+        distribution, a categorical cell its most probable class.
+
+        With `n_samples`, multiple imputation: (n_samples, n, d) with every missing cell drawn
+        from the same distributions (numeric: a bucket by its probability and a uniform value in
+        it; categorical: a class by its probability), independently across cells and draws
+        (`random_state`). Numeric values are clipped to the column's range in the fit rows, and a
+        categorical column predicted by the regressor (more classes than the classifier takes)
+        gets the nearest class value. A column missing in `X` that has no observed value in the
+        fit rows raises a ValueError."""
+        X = self._check_fitted(X)
+        return self.impute_from(X, self.missing_conditionals(X), strategy, n_samples)
+
+    def impute_from(
+        self,
+        X: Any,
+        conditionals: dict[int, tuple[np.ndarray, Conditional]],
+        strategy: str = "mean",
+        n_samples: int | None = None,
+    ) -> np.ndarray:
+        """`impute` with the distributions of `missing_conditionals(X)` already computed (to fill
+        the same distributions several ways)."""
+        if strategy not in IMPUTE_STRATEGIES:
+            raise ValueError(f"strategy must be one of {IMPUTE_STRATEGIES}: {strategy!r}")
+        if n_samples is not None and n_samples < 1:
+            raise ValueError(f"n_samples must be >= 1: {n_samples}")
+        X = self._check_fitted(X)
+        missing = {j for j in range(X.shape[1]) if np.isnan(X[:, j]).any()}
+        if missing != set(conditionals):
+            raise ValueError("conditionals are not those of X's missing columns")
+        out = np.repeat(X[None], 1 if n_samples is None else n_samples, axis=0)
+        for j, (rows, cond) in conditionals.items():
+            if n_samples is None:
+                if isinstance(cond, CategoricalConditional):
+                    values = cond.mode()[None]
+                elif strategy == "mean" and cond.mean is not None:
+                    values = cond.mean[None]
+                else:
+                    values = cond.quantile(0.5)[None]
+            else:
+                rng = np.random.default_rng([self.random_state, j])
+                values = cond.sample(rng, n_samples).T
+            out[:, rows, j] = self._valid(j, values)
+        return out[0] if n_samples is None else out
+
+    def _valid(self, column: int, values: np.ndarray) -> np.ndarray:
+        # numeric: clip to the fit rows' range; categorical: the nearest class value (a no-op for
+        # the classifier's classes)
+        if column in self.classes_:
+            classes = self.classes_[column]
+            idx = np.searchsorted(classes, values).clip(1, max(len(classes) - 1, 1))
+            lower = classes[idx - 1]
+            upper = classes[idx.clip(0, len(classes) - 1)]
+            return np.where(np.abs(values - lower) <= np.abs(upper - values), lower, upper)
+        col = self.X_[:, column]
+        return np.clip(values, np.nanmin(col), np.nanmax(col))
