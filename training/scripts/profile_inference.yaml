@@ -1,0 +1,34 @@
+# Inference time profile (training/scripts/profile_inference.py) on Databricks AI Runtime: the
+# inference tests on the GPU (the CUDA-only ones run there), then fit/predict time of the joint and
+# train-context paths on synthetic tables the size of TabArena-Lite datasets, with the default Hub
+# weights (`tabsil.recipe.HUB_DEFAULT`). The tables are printed and logged to the platform's MLflow
+# run (`profile/profile.md`, `profile/profile.json`). From the repository root:
+#   databricks air run -f training/scripts/profile_inference.yaml --watch \
+#     --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR
+experiment_name: tabsil
+mlflow_run_name: tabsil-v2-inference-profile
+environment:
+  version: databricks_ai_v6
+  dependencies:
+    - huggingface-hub>=0.34
+    - pytest>=8
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - src
+      - tests
+      - training/scripts/profile_inference.py
+env_variables:
+  TABSIL_PROFILE_ARGS: ""
+max_retries: 0
+timeout_minutes: 90
+command: >-
+  cd $CODE_SOURCE_PATH &&
+  PYTHONPATH=$CODE_SOURCE_PATH/src python -m pytest tests -q -rs -s -p no:cacheprovider &&
+  PYTHONPATH=$CODE_SOURCE_PATH/src python training/scripts/profile_inference.py --device cuda
+  --out-dir /tmp/tabsil_profile $TABSIL_PROFILE_ARGS
