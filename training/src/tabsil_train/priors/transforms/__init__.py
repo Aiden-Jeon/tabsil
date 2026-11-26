@@ -8,25 +8,30 @@ group`. Returning None makes the `Pipeline` drop the group and draw again.
 - `missing.StructuredMissing`: value-dependent (MAR/MNAR) missing values in column groups
 - `categorical.HighCardinality`: recode columns as categorical columns with many categories
 - `features.Coarsen`, `features.MeasurementNoise`: coarse values, noisy measurements
+- `dependence.CorrelateColumns`, `dependence.Relabel`: correlated column blocks, a target
+  recomputed from a few columns
 - `filters.DropInvalid`: drop a group with a dataset whose targets are all marked ignored
 
-The graph SCM prior uses DropInvalid -> CoverClasses (classification) -> [MeasurementNoise ->
-Coarsen -> HighCardinality -> StructuredMissing, each only when its option is on] -> Missing, in
-that order.
+The graph SCM prior uses DropInvalid -> [CorrelateColumns -> Relabel] -> CoverClasses
+(classification) -> [MeasurementNoise -> Coarsen -> HighCardinality -> StructuredMissing] ->
+Missing, in that order. A bracketed part is only there when its option is on.
 """
 
 from tabsil_train.priors.transforms.categorical import HighCardinality
 from tabsil_train.priors.transforms.classes import CoverClasses
+from tabsil_train.priors.transforms.dependence import CorrelateColumns, Relabel
 from tabsil_train.priors.transforms.features import Coarsen, MeasurementNoise
 from tabsil_train.priors.transforms.filters import DropInvalid
 from tabsil_train.priors.transforms.missing import Missing, StructuredMissing
 
 __all__ = [
     "Coarsen",
+    "CorrelateColumns",
     "CoverClasses",
     "DropInvalid",
     "HighCardinality",
     "MeasurementNoise",
     "Missing",
+    "Relabel",
     "StructuredMissing",
 ]

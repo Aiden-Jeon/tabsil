@@ -27,6 +27,16 @@ regression borders do not depend on them. In the order applied, between steps 2 
   (`transforms.StructuredMissing`): value-dependent (MAR/MNAR) missing values in column groups,
   before the MCAR step 3
 
+Options that change how the columns depend on each other and on the target, also off by default.
+They run between DropInvalid and CoverClasses in step 2. Some also change y, so the regression
+borders are drawn with them (`make_borders(..., **options)`, `TARGET_FIELDS`):
+
+- `correlate_prob` (`transforms.CorrelateColumns`): random column blocks blended toward shared
+  factors (x only)
+- `relabel_prob` (`transforms.Relabel`): the target recomputed from 1-4 columns
+- `corrected_num_converters`, `corrected_cat_sizes` (`generators.graph_scm.GraphSCM`): the two
+  TabICL `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 100 categories)
+
     prior = GraphSCMPrior(task="classification", seed=0)
     batch = prior.sample_batch(8)  # x (8, rows, features), y (8, rows), n_train
 
@@ -48,11 +58,13 @@ from tabsil_train.priors.pipeline import Pipeline, Rng
 from tabsil_train.priors.table_size import check_split_sizes, sample_split_size
 from tabsil_train.priors.transforms import (
     Coarsen,
+    CorrelateColumns,
     CoverClasses,
     DropInvalid,
     HighCardinality,
     MeasurementNoise,
     Missing,
+    Relabel,
     StructuredMissing,
 )
 
@@ -87,6 +99,10 @@ class GraphSCMPrior:
         structured_missing_prob: float = 0.0,
         near_empty_missing_prob: float = 0.0,
         latent_missing_prob: float = 0.0,
+        correlate_prob: float = 0.0,
+        relabel_prob: float = 0.0,
+        corrected_num_converters: bool = False,
+        corrected_cat_sizes: bool = False,
     ) -> None:
         self._task = task
         self.min_train_rows = MIN_TRAIN_ROWS[task]
@@ -110,11 +126,24 @@ class GraphSCMPrior:
         self.max_train_fraction = max_train_fraction
         self.rng = Rng.from_seed(seed)
         # This also seeds TabICL's global random state
-        generator = GraphSCM(task, seed=seed, filter_unpredictable=filter_unpredictable)
+        generator = GraphSCM(
+            task,
+            seed=seed,
+            filter_unpredictable=filter_unpredictable,
+            corrected_num_converters=corrected_num_converters,
+            corrected_cat_sizes=corrected_cat_sizes,
+        )
         classification = task == "classification"
         hyperparameters = ClassCount(MAX_CLASSES, binary_prob) if classification else None
+        # Column dependence options (they run before CoverClasses, since Relabel changes y)
+        dependence = []
+        if correlate_prob:
+            dependence.append(CorrelateColumns(correlate_prob))
+        if relabel_prob:
+            dependence.append(Relabel(relabel_prob, classification=classification))
+        self.dependence = tuple(dependence)
         # Everything before the missing values (regression borders and `_one_dataset` stop here)
-        self._accept = [DropInvalid(), CoverClasses()] if classification else [DropInvalid()]
+        self._accept = [DropInvalid(), *dependence, *([CoverClasses()] if classification else [])]
         self._missing = Missing(missing_dataset_prob, max_missing_rate)
         # The options: a part is only added when on, so the v1 settings draw the same numbers
         realism = []
@@ -207,7 +236,11 @@ REALISM_FIELDS = (
     "structured_missing_prob",
     "near_empty_missing_prob",
     "latent_missing_prob",
+    "correlate_prob",
 )
+# Options that also change the target, off by default. Like REALISM_FIELDS they are fixed by a
+# prior module, which passes them to `make_borders` too
+TARGET_FIELDS = ("relabel_prob", "corrected_num_converters", "corrected_cat_sizes")
 # Those that also change the regression target distribution (the regression borders follow the
 # training prior in these; binary_prob only affects classification)
 BORDER_PRIOR_FIELDS = ("filter_unpredictable",)
@@ -230,8 +263,8 @@ def check_config(config) -> None:
 def make_prior(config, task: str, seed: int, **options) -> GraphSCMPrior:
     """The `task` prior with the dataset sizes of the training config
     (`tabsil_train.training.config.TrainConfig`). `options` are the `GraphSCMPrior` options a
-    prior assembled on this one fixes (`REALISM_FIELDS`)."""
-    unknown = set(options) - set(REALISM_FIELDS)
+    prior assembled on this one fixes (`REALISM_FIELDS`, `TARGET_FIELDS`)."""
+    unknown = set(options) - set(REALISM_FIELDS) - set(TARGET_FIELDS)
     if unknown:
         raise TypeError(f"make_prior got unknown options: {sorted(unknown)}")
     return GraphSCMPrior(
@@ -244,15 +277,20 @@ def make_prior(config, task: str, seed: int, **options) -> GraphSCMPrior:
     )
 
 
-def make_borders(config, n_buckets: int, seed: int, n_jobs: int = 1) -> torch.Tensor:
+def make_borders(config, n_buckets: int, seed: int, n_jobs: int = 1, **options) -> torch.Tensor:
     """Regression borders (`regression_borders`) drawn with the dataset sizes of the training
-    config."""
+    config. `options` are the `TARGET_FIELDS` a prior assembled on this one fixes (the options
+    that change y)."""
+    unknown = set(options) - set(TARGET_FIELDS)
+    if unknown:
+        raise TypeError(f"make_borders got unknown options: {sorted(unknown)}")
     return regression_borders(
         n_buckets,
         config.border_datasets,
         seed,
         n_jobs=n_jobs,
         **{name: getattr(config, name) for name in BORDER_PRIOR_FIELDS},
+        **options,
         **_sizes(config),
     )
 
@@ -293,10 +331,11 @@ def regression_borders(
     missing ones; they mean the same as in `GraphSCMPrior`, and in training `make_borders` passes
     the training prior's values. `filter_unpredictable` (`BORDER_PRIOR_FIELDS`, default from
     `GraphSCMPrior`) should also match the training prior (filtered datasets' targets never
-    appear in training).
+    appear in training), and so should the `TARGET_FIELDS` options.
     """
-    options = {k: v for k, v in sizes_and_options.items() if k in BORDER_PRIOR_FIELDS}
-    sizes = {k: v for k, v in sizes_and_options.items() if k not in BORDER_PRIOR_FIELDS}
+    prior_fields = (*BORDER_PRIOR_FIELDS, *TARGET_FIELDS)
+    options = {k: v for k, v in sizes_and_options.items() if k in prior_fields}
+    sizes = {k: v for k, v in sizes_and_options.items() if k not in prior_fields}
     unknown = set(sizes) - set(SIZE_DEFAULTS)
     if unknown:
         raise TypeError(f"regression_borders got unknown size/prior arguments: {sorted(unknown)}")
