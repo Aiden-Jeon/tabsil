@@ -94,7 +94,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if any(b.name == branch for b in refs.branches):
         raise SystemExit(f"the branch {branch} exists already")
-    api.create_branch(args.repo_id, branch=branch, revision=args.source)
+    # create_branch takes a branch or a commit, not a tag: start from the source's commit
+    source_commit = api.model_info(args.repo_id, revision=args.source).sha
+    api.create_branch(args.repo_id, branch=branch, revision=source_commit)
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / CONFIG_NAME
         path.write_text(json.dumps(new, indent=2) + "\n")
