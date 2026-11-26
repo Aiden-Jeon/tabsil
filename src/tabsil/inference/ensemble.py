@@ -318,20 +318,33 @@ def _probs_on_borders(probs: torch.Tensor, frm: torch.Tensor, to: torch.Tensor) 
     return (at_to[:, 1:] - at_to[:, :-1]).clamp_min(0)
 
 
-def _clipped_inverse(transform: PowerTransformer, u_train: np.ndarray):
+def _clipped_inverse(
+    transform: PowerTransformer, u_train: np.ndarray, z_train: np.ndarray | None = None
+):
     """Inverse of the power transform, with values outside the training target range [lo, hi]
     set to its end values.
 
     The inverse is undefined beyond the right end for λ < 0 and beyond the left end for λ > 2, and
     arbitrarily steep near it, so extending it past the range (even linearly with the end slope)
     sends z into the thousands.
+
+    With a λ far below 0 (about -14 on a target that is 95% zeros, about -19 on one with most
+    values just above 0 and a long right tail) the training end itself lies at the edge of the
+    domain up to rounding, and its inverse is NaN or inf. With the training targets `z_train` a
+    non-finite value is set to the end of `z_train` on that side (the exact inverse of the end),
+    and the rest is kept within [min z_train, max z_train]. Without them it behaves as before.
     """
     lo, hi = float(u_train.min()), float(u_train.max())
 
     def g(u: np.ndarray) -> np.ndarray:
         u = np.clip(np.asarray(u, dtype=np.float64).reshape(-1, 1), lo, hi)
         with np.errstate(all="ignore"):
-            return transform.inverse_transform(u).ravel()
+            z = transform.inverse_transform(u).ravel()
+        if z_train is None:
+            return z
+        z_lo, z_hi = float(np.min(z_train)), float(np.max(z_train))
+        end = np.where(u.ravel() > (lo + hi) / 2, z_hi, z_lo)
+        return np.clip(np.where(np.isfinite(z), z, end), z_lo, z_hi)
 
     return g
 
@@ -387,7 +400,7 @@ class EnsembleRegressor(_Base):
             if m.target_power:
                 transform = PowerTransformer(method="yeo-johnson", standardize=True)
                 u = np.asarray(transform.fit_transform(z.reshape(-1, 1))).ravel()
-                inverse = _clipped_inverse(transform, u)
+                inverse = _clipped_inverse(transform, u, z)
                 # bucket values and borders from member space to z space (the borders are used
                 # by predict_distribution)
                 values = np.clip(inverse(_bucket_values(self.borders, u)), b[0], b[-1])

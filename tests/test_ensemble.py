@@ -148,6 +148,68 @@ def test_clipped_inverse_stays_in_training_range_on_both_sides():
         assert np.allclose(g(u), z, atol=1e-6)  # the exact inverse within the training range
 
 
+def test_clipped_inverse_sets_a_non_finite_end_to_the_training_end():
+    from tabsil.inference.ensemble import _clipped_inverse
+
+    u_train = np.linspace(-1.0, 2.0, 7)
+    z_train = 3 * u_train
+
+    class EdgeNonFinite:  # inverse undefined at the training ends (Yeo-Johnson λ far from 1)
+        def inverse_transform(self, u):
+            return np.where(u >= 2.0, np.nan, np.where(u <= -1.0, -np.inf, 3.1 * u))
+
+    g = _clipped_inverse(EdgeNonFinite(), u_train, z_train)
+    # non-finite -> the training end on that side; finite values kept within [z_min, z_max]
+    np.testing.assert_array_equal(g(np.array([-5.0, 0.0, 1.0, 1.99, 9.0])), [-3, 0, 3.1, 6, 6])
+    assert np.isnan(_clipped_inverse(EdgeNonFinite(), u_train)(np.array([9.0]))).all()  # without z
+
+
+def _power_member_end_is_nan(reg: TabSilRegressor, y: np.ndarray) -> bool:
+    """Whether the plain Yeo-Johnson inverse of the power members is NaN at the training maximum
+    (the case the tests below are about; it depends on the library versions)."""
+    from sklearn.preprocessing import PowerTransformer
+
+    power = [i for i, m in enumerate(reg.border_maps_) if m is not None]
+    z = (y - reg.y_mean_) / reg.y_std_
+    transform = PowerTransformer(method="yeo-johnson", standardize=True).fit(z.reshape(-1, 1))
+    with np.errstate(all="ignore"):
+        return bool(np.isnan(transform.inverse_transform([[max(reg.y_trains_[power[0]])]])).all())
+
+
+def _check_finite_distribution(y: np.ndarray, seed: int) -> None:
+    x = np.random.default_rng(seed).normal(size=(len(y), 2))
+    # TabSil's borders end at about ±22.6, beyond the power members' training range
+    borders = torch.cat(
+        [torch.tensor([-22.6]), torch.linspace(-4.3, 4.2, 31), torch.tensor([22.6])]
+    )
+    reg = TabSilRegressor(_tiny_model(), borders, n_estimators=4).fit(x, y)
+    assert _power_member_end_is_nan(reg, y)
+    assert all(torch.isfinite(m).all() for m in reg.border_maps_ if m is not None)
+    log_probs, out_borders = reg.predict_distribution(x[:10])
+    assert torch.isfinite(log_probs).all() and torch.isfinite(out_borders).all()
+    assert np.isfinite(reg.predict(x[:10])).all()
+
+
+def test_zero_inflated_target_gives_a_finite_distribution():
+    # 95% zeros and a few spikes (a redset_1H series): Yeo-Johnson λ ≈ -20, whose inverse at the
+    # training maximum is NaN up to rounding. It made the power members' border maps, and so the
+    # whole predict_distribution mixture, NaN
+    rng = np.random.default_rng(4)
+    y = np.zeros(1440)
+    spikes = rng.choice(1440, 75, replace=False)
+    y[spikes] = np.round(rng.lognormal(1.5, 1.0, 75))
+    y[spikes[0]] = 143
+    _check_finite_distribution(y, 4)
+
+
+def test_right_tailed_target_near_zero_gives_a_finite_distribution():
+    # most values just above 0 and a few far right (ADBench PageBlocks column 6): λ ≈ -25, the
+    # same NaN at the training maximum
+    rng = np.random.default_rng(1)
+    y = np.concatenate([rng.exponential(0.0002, 1500), rng.uniform(0.05, 1, 5)])
+    _check_finite_distribution(y, 1)
+
+
 def test_regressor_bucket_values_stay_in_training_target_range():
     rng = np.random.default_rng(0)
     x = rng.normal(size=(300, 3))
