@@ -3,7 +3,7 @@
 extension and the usual baselines, every method on the same rows and masks.
 
 - tables (`TABLES`): OpenML datasets used in imputation benchmarks (HyperImpute, GAIN, MissForest
-  evaluations), 4 numeric only and 6 with categorical columns, at most 21 columns. The whole table
+  evaluations), 3 numeric only and 7 with categorical columns, at most 21 columns. The whole table
   is imputed (the OpenML target is a column like the others). The ARFF file is downloaded once from
   OpenML and checked against `SHA256` (cache: `$TABSIL_IMPUTE_DIR`, default
   `~/.cache/tabsil/impute`). Column kinds are the ARFF's: a nominal attribute is categorical (codes
