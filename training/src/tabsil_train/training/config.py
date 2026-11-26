@@ -22,6 +22,7 @@ from tabsil.models import (
     model_class,
 )
 from tabsil_train.priors import DEFAULT_PRIOR_TYPE, canonical_prior_type, prior_module
+from tabsil_train.training.reference import REFERENCE_BATCH
 
 N_BUCKETS = 5000
 # The tasks one training run learns (one model, the training loop alternates them per step)
@@ -210,9 +211,9 @@ class TrainConfig:
             raise ValueError(f"optimizer must be one of {tuple(OPTIMIZER_NAMES)}: {self.optimizer}")
         if not 0.0 <= self.muon_momentum < 1.0:
             raise ValueError(f"muon_momentum must be in [0, 1): {self.muon_momentum}")
-        if self.reference_val_tables < 0 or self.reference_val_tables % 8:
+        if self.reference_val_tables < 0 or self.reference_val_tables % REFERENCE_BATCH:
             raise ValueError(
-                "reference_val_tables must be a multiple of 8 (0 turns it off):"
+                f"reference_val_tables must be a multiple of {REFERENCE_BATCH} (0 turns it off):"
                 f" {self.reference_val_tables}"
             )
         if not 0.0 <= self.binary_prob <= 1.0:

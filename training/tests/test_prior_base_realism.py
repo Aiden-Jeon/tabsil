@@ -191,3 +191,14 @@ def test_correlated_blocks_keep_columns_up_to_the_discrete_levels():
     assert not kept(D.DISCRETE_LEVELS)  # 100: blended linearly
     with pytest.raises(ValueError):
         CorrelateColumns(0.3, discrete_levels=0)
+
+
+def test_the_run_param_names_the_values_the_prior_fixes():
+    import json
+
+    from tabsil_train.training.loop import prior_options
+
+    assert prior_options("graph_scm") == "{}"
+    fixed = json.loads(prior_options("graph_scm_base_realism"))
+    assert fixed == B.OPTIONS
+    assert (fixed["missing_dataset_prob"], fixed["max_missing_rate"]) == (0.01, 0.08)

@@ -25,7 +25,8 @@
 #   v2 recipe options (training/README.md "v2 recipe options"; all off by default, a resumed run keeps
 #   its own values):
 #     reference validation set: --override env_variables.TABSIL_REFERENCE_VAL_TABLES=512 (tables per task,
-#                 a multiple of 8; metrics ref_*, independent of the run's seed and prior)
+#                 a multiple of 8; metrics ref_*, independent of the run's seed and prior;
+#                 ref_loss_regression_train_rows gives every run the targets as inference does)
 #     YCTX:       --override env_variables.TABSIL_TARGET_TRAIN_ROWS=1 (regression target standardized with
 #                 the train rows, as at inference)
 #     OPTK:       --override env_variables.TABSIL_OPTIMIZER=muon_adamw --override env_variables.TABSIL_LR=3e-4
@@ -44,8 +45,10 @@ environment:
   version: databricks_ai_v6
   # Not in the base environment: the TabICL prior that generates the training data, and the Hub
   # client for TABSIL_INIT_HUB
+  # tabicl is pinned: the prior's tables and the reference validation set depend on its version, so
+  # runs submitted on different days stay comparable (the run tag `tabicl_version` records it)
   dependencies:
-    - tabicl>=2.2
+    - tabicl==2.2.0
     - huggingface-hub>=0.34
 compute:
   accelerator_type: GPU_8xH100

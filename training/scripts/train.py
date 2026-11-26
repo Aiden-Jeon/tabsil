@@ -233,8 +233,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=_env_flag("TABSIL_TARGET_TRAIN_ROWS"),
     )
     # For short comparison runs: the seed changes the initial weights, training data and validation
-    # set, and the warmup replaces the preset's length. On resume, pass the original run's values
-    # again
+    # set, and the warmup replaces the preset's length. A resumed run keeps the original run's
+    # seed, steps and warmup (`inherit_schedule`)
     parser.add_argument("--seed", type=int, default=_env("TABSIL_SEED", int))
     parser.add_argument("--warmup-steps", type=int, default=_env("TABSIL_WARMUP_STEPS", int))
     parser.add_argument("--resume-run-id", default=os.environ.get("TABSIL_RESUME_RUN_ID"))
@@ -305,6 +305,28 @@ def inherit_batch_size(args: argparse.Namespace, params: dict[str, str]) -> None
     value."""
     if args.resume_run_id and args.batch_size is None and "batch_size" in params:
         args.batch_size = int(params["batch_size"])
+
+
+# What a resumed run keeps of its schedule and data stream (TrainConfig field -> MLflow param).
+# Without these a resumed run fell back to seed 0 and the preset's step count: other tables, another
+# validation set and another cosine. The curriculum's warmup follows the inherited step count
+SCHEDULE_OPTIONS = ("seed", "steps", "warmup_steps")
+
+
+def inherit_schedule(args: argparse.Namespace, params: dict[str, str]) -> None:
+    """On resume, the original run's seed, step count and warmup (`SCHEDULE_OPTIONS`) where none is
+    given. A different `--seed` stops the script: the resumed steps would draw another run's
+    tables."""
+    if not args.resume_run_id:
+        return
+    for name in SCHEDULE_OPTIONS:
+        if name not in params:
+            continue
+        saved = int(params[name])
+        if getattr(args, name) is None:
+            setattr(args, name, saved)
+        elif name == "seed" and args.seed != saved:
+            raise SystemExit(f"--seed {args.seed} differs from the resumed run's {saved}")
 
 
 def inherit_reference_val(args: argparse.Namespace, params: dict[str, str]) -> None:
@@ -538,6 +560,7 @@ def main(argv: list[str] | None = None) -> None:
             # (absolute steps) are not inherited
             speed_options.pop("phases", None)
         inherit_batch_size(args, params)
+        inherit_schedule(args, params)
         inherit_prior_type(args, params)
         inherit_reference_val(args, params)
         inherit_recipe_options(args, params)

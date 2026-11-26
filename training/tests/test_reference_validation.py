@@ -105,7 +105,28 @@ def test_reference_validation_does_not_change_training(tmp_path, monkeypatch):
         "ref_loss_classification",
         "ref_acc_classification",
         "ref_loss_regression",
+        "ref_loss_regression_train_rows",
     }
+    # without the train-row scaling, the inference-form loss is a second computation
+    assert ref[0]["ref_loss_regression_train_rows"] != ref[0]["ref_loss_regression"]
+    assert all("val_loss_regression_train_rows" not in m for m in logged)
+
+
+def test_a_scaled_run_reports_its_reference_loss_as_the_train_row_loss(tmp_path, monkeypatch):
+    logged = []
+    monkeypatch.setattr("tabsil_train.training.loop._validate_tasks", _recording(logged))
+    run = dict(steps=2, warmup_steps=1, log_every=2, val_every=2, checkpoint_every=2)
+    train(_config(target_train_rows=True, **run), tmp_path / "yctx", mlflow_log=False)
+    (ref,) = [m for m in logged if "ref_loss" in m]
+    assert ref["ref_loss_regression_train_rows"] == ref["ref_loss_regression"]
+    assert ref["ref_loss"] == pytest.approx(
+        (ref["ref_loss_classification"] + ref["ref_loss_regression"]) / 2
+    )
+
+
+def test_reference_tables_are_copied_out_of_shared_memory():
+    sets = R.reference_sets(_config(), TASKS, n_jobs=2)
+    assert not any(t.is_shared() for task in TASKS for b in sets[task] for t in (b.x, b.y))
 
 
 def _recording(logged):

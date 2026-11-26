@@ -111,7 +111,9 @@ def reference_sets(config, tasks, n_jobs: int = 1) -> dict[str, list[PriorBatch]
             os.environ["PYTHONHASHSEED"] = saved
     out: dict[str, list[PriorBatch]] = {task: [] for task in tasks}
     for (_, task, _, _), chunk in zip(jobs, chunks, strict=True):
-        out[task].extend(chunk)
+        # A tensor received from another process lives in shared memory, and on Linux each one
+        # keeps a file descriptor open. The set is kept for the whole run, so copy it out
+        out[task].extend(replace(batch, x=batch.x.clone(), y=batch.y.clone()) for batch in chunk)
     return out
 
 

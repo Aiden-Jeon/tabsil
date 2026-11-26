@@ -27,6 +27,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import copy
+import importlib.metadata
 import json
 import math
 import os
@@ -60,6 +61,8 @@ from tabsil_train.training.diagnostics import (
     RankTiming,
     TaskGradientCosine,
     group_norms,
+    head_scale_groups,
+    head_scale_metrics,
     parameter_groups,
     rank_timing_metrics,
     weight_norm_metrics,
@@ -98,6 +101,19 @@ def _make_val_batches(config: TrainConfig, task: str, n_batches: int = 8):
     """Fixed validation prior batches from a seed disjoint from training (val_batch x n_batches)."""
     prior = config.make_prior(task, 10_000_000 + config.seed)
     return [prior.sample_batch(config.val_batch) for _ in range(n_batches)]
+
+
+def prior_options(prior_type: str) -> str:
+    """The options the prior module of `prior_type` fixes (its `OPTIONS`; `{}` for `graph_scm`), as
+    JSON with sorted keys: the `prior_options` run param."""
+    return json.dumps(getattr(prior_module(prior_type), "OPTIONS", {}), sort_keys=True)
+
+
+def _package_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 @torch.no_grad()
@@ -152,15 +168,30 @@ def _validate_tasks(
 ) -> dict[str, float]:
     """Validation of each task: the metric names end with the task, and `<prefix>_loss` is the mean
     of the two task losses. `prefix` is "val" for the run's validation batches and "ref" for the
-    reference set (`training.reference`)."""
+    reference set (`training.reference`). The reference set also gets
+    `ref_loss_regression_train_rows`: the regression loss with each target standardized with its
+    train rows, as inference gives it to the model, in the set's units (`_validate`). It is the
+    same computation for every run, so it compares a run trained with `target_train_rows` with
+    one trained without."""
     rows = config.activation_checkpointing_rows
+    reference = prefix == "ref"
     # the reference set is drawn without the train-row target scaling (`training.reference`)
-    rescale = prefix == "ref" and config.target_train_rows
+    rescale = reference and config.target_train_rows
     out = {}
     for task, batches in val_sets.items():
         val = _validate(model, batches, device, autocast, task, rows, rescale)
         out.update({f"{prefix}{k[3:]}_{task}": v for k, v in val.items()})
     out[f"{prefix}_loss"] = sum(out[f"{prefix}_loss_{t}"] for t in val_sets) / len(val_sets)
+    if reference and "regression" in val_sets:
+        # The regression loss with the targets as inference gives them (standardized with the
+        # train rows), for every run. A run trained with the scaling already has it above
+        key = f"{prefix}_loss_regression"
+        if rescale:
+            out[f"{key}_train_rows"] = out[key]
+        else:
+            batches = val_sets["regression"]
+            val = _validate(model, batches, device, autocast, "regression", rows, True)
+            out[f"{key}_train_rows"] = val["val_loss"]
     return out
 
 
@@ -445,11 +476,12 @@ def _train(
     # Training diagnostics (`training.diagnostics`): per-group norms and the task gradient cosine
     # are computed on rank 0 only (after DDP averaging every GPU has the same gradient). Every GPU
     # measures its own timing
-    norm_groups, grad_window, cosine = None, None, None
+    norm_groups, scale_groups, grad_window, cosine = None, None, None, None
     if d.is_main:
         # the group names end in `/muon` or, with `muon_adamw`, `/adam`
         muon_ids = {id(p) for g in opt.param_groups if not g.get("adamw") for p in g["params"]}
         norm_groups = parameter_groups(model, muon_ids)
+        scale_groups = head_scale_groups(model)
         grad_window = GroupNormWindow(norm_groups)
         if config.grad_cosine:
             cosine = TaskGradientCosine(norm_groups, config.tasks, config.log_every)
@@ -542,8 +574,12 @@ def _train(
             if mlf.active_run() is None:
                 mlf.start_run()
             run_params = mlf.get_run(mlf.active_run().info.run_id).data.params
+            # `prior_options`: the values the prior module fixes. They replace config fields of
+            # the same name (`graph_scm_base_realism` its `missing_dataset_prob`), so the config
+            # params alone would misstate the prior
+            settings = {**asdict(config), "prior_options": prior_options(config.prior_type)}
             if "steps" not in run_params:
-                mlf.log_params(asdict(config))
+                mlf.log_params(settings)
                 mlf.log_params(
                     {
                         "world_size": d.world_size,
@@ -555,9 +591,11 @@ def _train(
                 )
             else:
                 # params of a continued run cannot change, so only add settings added since
-                new = {k: v for k, v in asdict(config).items() if k not in run_params}
+                new = {k: v for k, v in settings.items() if k not in run_params}
                 if new:
                     mlf.log_params(new)
+            # the prior's tables depend on the tabicl version
+            mlf.set_tag("tabicl_version", _package_version("tabicl"))
             # phases can change on resume (adding a preset's phases to a run without them), so
             # also store them in a mutable tag. The training script reads the tag before the
             # param
@@ -772,6 +810,7 @@ def _train(
             # gradient cosine, per-rank timing and table sizes
             metrics.update(grad_window.metrics())
             metrics.update(weight_norm_metrics(norm_groups))
+            metrics.update(head_scale_metrics(scale_groups))
             metrics.update(cosine_metrics)
             cosine_metrics = {}
             if timing_rows is not None:

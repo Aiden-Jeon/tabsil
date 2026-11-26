@@ -536,3 +536,31 @@ def test_train_script_sets_the_tabicl_prior_options_from_env(monkeypatch):
         )
         == base
     )
+
+
+def test_a_resumed_run_keeps_its_seed_steps_and_warmup(monkeypatch):
+    _clear_env(monkeypatch)
+    for name in ("TABSIL_SEED", "TABSIL_WARMUP_STEPS"):
+        monkeypatch.delenv(name, raising=False)
+    script = _train_script()
+    params = {"seed": "1", "steps": "30000", "warmup_steps": "300"}
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc"])
+    script.inherit_schedule(args, params)
+    config = script.build_config(args)
+    assert (config.seed, config.steps, config.warmup_steps) == (1, 30000, 300)
+    # values given on resume are used, but another seed is an error
+    args = script.parse_args(
+        ["--config-name", "stage1", "--resume-run-id", "abc", "--steps", "40000", "--seed", "1"]
+    )
+    script.inherit_schedule(args, params)
+    assert (args.steps, args.seed, args.warmup_steps) == (40000, 1, 300)
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc", "--seed", "2"])
+    with pytest.raises(SystemExit, match="seed"):
+        script.inherit_schedule(args, params)
+    # runs without the params, and runs that only give their weights, keep the preset
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc"])
+    script.inherit_schedule(args, {})
+    assert script.build_config(args) == recipe.curriculum(1)
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    script.inherit_schedule(args, params)
+    assert script.build_config(args) == recipe.curriculum(2)
