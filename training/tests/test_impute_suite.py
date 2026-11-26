@@ -130,6 +130,13 @@ def test_extension_categorical_rule():
     assert bi.extension_categorical(X[:50], []) == [2, 3]  # 50 / 6 < 10 rows per value for 4
 
 
+def test_finished_keys_of_an_empty_results_file(tmp_path):
+    # no results.csv yet: the empty frame has object columns (pandas 2 does not round those)
+    empty = bi.read_results(tmp_path / "results.csv")
+    assert bi.finished_keys(empty) == set()
+    assert bi.coverage(empty, ["cmc"], [0.1], [0]) == {}
+
+
 def _fake_load(name, root=None):
     return _table()
 

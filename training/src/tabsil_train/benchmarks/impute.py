@@ -439,6 +439,13 @@ def n_columns(name: str) -> int:
 # --- run ------------------------------------------------------------------------------------
 
 
+def finished_keys(rows: pd.DataFrame) -> set[tuple]:
+    """(table, rate rounded to 4 digits, seed, method) of the result rows. The rate is cast first:
+    the frame of a missing results file has object columns, which pandas 2 does not round."""
+    rates = rows.rate.astype(float).round(4)
+    return set(zip(rows.dataset, rates, rows.seed.astype(int), rows.method, strict=True))
+
+
 def read_results(path: Path) -> pd.DataFrame:
     if path.exists() and path.stat().st_size:
         return pd.read_csv(path)
@@ -462,7 +469,7 @@ def run(
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "results.csv"
     done = read_results(path)
-    finished = set(zip(done.dataset, done.rate.round(4), done.seed, done.method, strict=True))
+    finished = finished_keys(done)
     failures = []
     for dataset in datasets:
         X_all, categorical, _ = load(dataset)
@@ -529,7 +536,7 @@ def coverage(rows: pd.DataFrame, datasets: list[str], rates: list[float], seeds:
     units = len(datasets) * len(rates) * len(seeds)
     out = {}
     for m, g in rows.groupby("method"):
-        have = set(zip(g.dataset, g.rate.round(4), g.seed, strict=True))
+        have = set(zip(g.dataset, g.rate.astype(float).round(4), g.seed, strict=True))
         want = {(d, round(r, 4), s) for d in datasets for r in rates for s in seeds}
         out[m] = 1 - len(have & want) / units
     return out

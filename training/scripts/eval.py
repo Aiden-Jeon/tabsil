@@ -1710,7 +1710,7 @@ def run_impute_shards(
 
     seeds = [int(s) for s in args.impute_seeds.split(",")]
     done = impute.read_results(suite_dir / "results.csv")
-    finished = set(zip(done.dataset, done.rate.round(4), done.seed, done.method, strict=True))
+    finished = impute.finished_keys(done)
 
     def complete(d: str, r: float, m: str) -> bool:
         return all((d, round(r, 4), s, out) in finished for s in seeds for out in impute.METHODS[m])
