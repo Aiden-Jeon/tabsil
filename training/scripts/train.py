@@ -11,11 +11,14 @@ locally.
   `TABSIL_BATCH_SIZE` (resuming keeps the original run's batch).
 - Local: `uv run --package tabsil-train python training/scripts/train.py --config-name smoke`
 
-The model is always the TabSil structure (`tabsil.recipe.STRUCTURE`) trained as one model for
+The model is the TabSil structure (`tabsil.recipe.STRUCTURE`) trained as one model for
 classification and regression (alternating per step). `--config-name stage1|stage2|stage3` is the
 TabSil curriculum (`tabsil_train.recipe.curriculum`); `smoke` (local CPU, reduced size) and `medium`
-(stage 1 with 20k steps) are `TrainConfig.smoke()` and `TrainConfig.medium()`. When resuming or
-taking weights from a run, that run must have the same structure.
+(stage 1 with 20k steps) are `TrainConfig.smoke()` and `TrainConfig.medium()`. For size
+experiments, `--emsize` and `--n-cls` (`TABSIL_EMSIZE`, `TABSIL_N_CLS`) change the cell width and
+the CLS token count (the row ICL width is their product); unset, the preset's values are kept.
+When resuming or taking weights from a run, that run must have the same structure: a run of another
+size needs the same `--emsize` and `--n-cls` again.
 The scale is set with arguments or environment variables (`TABSIL_CONFIG_NAME`, `TABSIL_STEPS`,
 `TABSIL_BATCH_SIZE`, `TABSIL_MICRO_BATCH`, `TABSIL_NUM_WORKERS`, `TABSIL_LR`,
 `TABSIL_CHECKPOINT_EVERY`, `TABSIL_VAL_EVERY`, `TABSIL_LOG_EVERY`). The training speed options
@@ -109,6 +112,9 @@ PRESETS = {
 }
 CONFIG_NAMES = tuple(PRESETS)
 CURRICULUM_NAMES = {f"stage{n}": n for n in recipe.CURRICULUM}
+# Model size settings that can be changed (TrainConfig fields of the model structure). Unset values
+# keep the preset's; a run that resumes or takes weights from another run is checked against them
+STRUCTURE_ARGS = ("emsize", "n_cls")
 
 
 TRUE_VALUES, FALSE_VALUES = ("1", "true", "yes", "on"), ("", "0", "false", "no", "off")
@@ -187,6 +193,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     for name in ("min-train-fraction", "max-train-fraction", "binary-prob"):
         env = "TABSIL_" + name.upper().replace("-", "_")
         parser.add_argument(f"--{name}", type=float, default=_env(env, float))
+    # Model size (STRUCTURE_ARGS). On resume or with --init-run-id, pass the source run's values
+    for name in STRUCTURE_ARGS:
+        parser.add_argument(
+            "--" + name.replace("_", "-"), type=int, default=_env("TABSIL_" + name.upper(), int)
+        )
     parser.add_argument("--prior-type", default=os.environ.get("TABSIL_PRIOR_TYPE") or None)
     parser.add_argument(
         "--filter-unpredictable",
@@ -298,13 +309,18 @@ def build_config(
             base = PRESETS[args.config_name]()
     except ValueError as e:
         raise SystemExit(str(e)) from None
+    # The size arguments change the preset's structure first, so a source run is checked against
+    # the structure actually asked for
+    base = _replace(base, _structure_values(args))
+    _check_structure(base)
     if source is None:
         return _overrides(base, args)
     differ = {k: (getattr(base, k), v) for k, v in source.items() if getattr(base, k) != v}
     if differ:
         raise SystemExit(
             f"the source run is not the {recipe.NAME} structure of --config-name"
-            f" {args.config_name} (preset value, run value): {differ}"
+            f" {args.config_name} with the given size arguments (expected value, run value):"
+            f" {differ}. A run of another size needs the same --emsize and --n-cls again"
         )
     source_phases = (speed_options or {}).get("phases")
     if source_phases and base.phases and source_phases != base.phases:
@@ -321,6 +337,20 @@ def build_config(
 def _overrides(config: TrainConfig, args: argparse.Namespace) -> TrainConfig:
     """Overwrite the config with the values given as arguments or environment variables."""
     return _replace(config, _override_values(args))
+
+
+def _structure_values(args: argparse.Namespace) -> dict:
+    """The model size values given as arguments or environment variables (STRUCTURE_ARGS)."""
+    return {n: getattr(args, n) for n in STRUCTURE_ARGS if getattr(args, n) is not None}
+
+
+def _check_structure(config: TrainConfig) -> None:
+    """Stop before the run starts if the model config rejects the structure (heads that do not
+    divide a width, an odd RoPE head dim; `ColumnRowTransformerConfig.__post_init__`)."""
+    try:
+        config.model_config()
+    except ValueError as e:
+        raise SystemExit(f"model structure: {e}") from None
 
 
 def _replace(config: TrainConfig, changes: dict) -> TrainConfig:
