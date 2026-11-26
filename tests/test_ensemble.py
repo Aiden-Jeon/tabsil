@@ -757,3 +757,9 @@ def test_cudnn_attention_only_for_large_attention():
     enabled = torch.backends.cuda.cudnn_sdp_enabled()
     with clf._forward_mode(clf.cudnn_attention_pairs):
         assert torch.backends.cuda.cudnn_sdp_enabled() == enabled
+
+
+def test_an_unknown_member_kind_is_rejected_without_numeric_columns():
+    X = np.random.default_rng(0).integers(0, 5, size=(30, 2)).astype(float)  # all categorical
+    with pytest.raises(ValueError, match="member kind"):
+        MemberPreprocessor(Member(None, False, seed=0, kind="rank"), [0, 1], 100).fit(X)

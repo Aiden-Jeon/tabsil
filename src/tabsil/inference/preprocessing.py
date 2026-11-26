@@ -43,7 +43,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import OrdinalEncoder
+from sklearn.preprocessing import OrdinalEncoder, PowerTransformer, QuantileTransformer
 
 OUTLIER_SIGMA = 12.0
 MAX_ONE_HOT_CATEGORIES = 20  # benchmark socmob (17) is expanded; colleges (thousands) stays codes
@@ -194,6 +194,11 @@ def one_hot_sizes(n_categories: dict[int, int], n_features: int, max_width: int)
     return sizes
 
 
+def _known_codes(codes: np.ndarray, n: int) -> np.ndarray:
+    """Which codes are categories 0..n-1 (missing and other codes are not)."""
+    return np.isfinite(codes) & (codes >= 0) & (codes < n)
+
+
 @dataclass
 class Member:
     class_permutation: np.ndarray | None
@@ -211,10 +216,6 @@ class _NumericTransform:
     rows. Missing values stay missing."""
 
     def __init__(self, kind: str, X: np.ndarray, seed: int) -> None:
-        from sklearn.preprocessing import PowerTransformer, QuantileTransformer
-
-        if kind not in MEMBER_KINDS:
-            raise ValueError(f"the member kind is one of {MEMBER_KINDS}: {kind}")
         self.kind = kind
         self.mean = np.nan_to_num(np.nanmean(X, axis=0)) if X.shape[0] else np.zeros(X.shape[1])
         std = np.nan_to_num(np.nanstd(X, axis=0)) if X.shape[0] else np.ones(X.shape[1])
@@ -268,6 +269,8 @@ class MemberPreprocessor:
         member = self.member
         if member.categories not in CATEGORY_ENCODINGS:
             raise ValueError(f"categories is one of {CATEGORY_ENCODINGS}: {member.categories}")
+        if member.kind not in MEMBER_KINDS:
+            raise ValueError(f"the member kind is one of {MEMBER_KINDS}: {member.kind}")
         sigma = self.member.outlier_sigma
         mean, std = np.nanmean(X, axis=0), np.nanstd(X, axis=0)
         self.lower, self.upper = mean - sigma * std, mean + sigma * std
@@ -288,8 +291,10 @@ class MemberPreprocessor:
             i for i in range(X.shape[1]) if i not in self.cat_ix and not np.isfinite(X[:, i]).any()
         ]
         self._fit_options(X, n_categories)
-        # column order: shuffle the transformed columns and the one sample identifier together
-        self.order = rng.permutation(self._features(X).shape[1] + 1)
+        # column order: shuffle the transformed columns and the one sample identifier together. The
+        # numeric transforms and sign flips keep the width, so `_base` and the count columns give it
+        width = self._base(X).shape[1] + len(self.count_maps)
+        self.order = rng.permutation(width + 1)
         return self
 
     def _fit_options(self, X: np.ndarray, n_categories: dict[int, int]) -> None:
@@ -321,7 +326,7 @@ class MemberPreprocessor:
     @staticmethod
     def _lookup(codes: np.ndarray, table: np.ndarray) -> np.ndarray:
         # table[code] for codes 0..len(table)-1; missing and other codes are missing
-        known = np.isfinite(codes) & (codes >= 0) & (codes < len(table))
+        known = _known_codes(codes, len(table))
         out = np.full(len(codes), np.nan)
         out[known] = table[codes[known].astype(int)]
         return out
@@ -356,7 +361,7 @@ class MemberPreprocessor:
     @staticmethod
     def _one_hot(codes: np.ndarray, n: int) -> np.ndarray:
         # missing and out-of-range codes become NaN: treated as missing, as in the code column
-        known = np.isfinite(codes) & (codes >= 0) & (codes < n)
+        known = _known_codes(codes, n)
         block = np.full((len(codes), n), np.nan)
         block[known] = 0.0
         block[np.flatnonzero(known), codes[known].astype(int)] = 1.0

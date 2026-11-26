@@ -295,6 +295,8 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
         return estimator
 
     make.max_one_hot_width = max_features_of(model)  # the host memory estimate uses the same cap
+    # `--categories counts` adds up to one column per categorical column (host memory estimate)
+    make.count_columns = getattr(args, "categories", "codes") == "counts"
     make.n_estimators = n_estimators
     # this task's columns-per-member cap and subsampling method (`model_feature_cap`, TabSil
     # 768 / balanced)
@@ -887,6 +889,9 @@ def host_state_estimator(factories: dict, caps: dict):
             # expanded columns never exceed the larger of the original count and the cap
             # (`one_hot_sizes`)
             columns = max(columns, width)
+        if categorical and getattr(factory, "count_columns", False):
+            # plus at most one count column per original column (`--categories counts`)
+            columns += n_features if cap is None else min(n_features, cap)
         if train_rows is None:
             return int(fn(rows, columns + 1))
         return int(fn(rows, columns + 1, train_rows=min(train_rows, rows)))
