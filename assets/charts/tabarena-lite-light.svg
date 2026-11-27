@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="353" viewBox="0 0 840 353" role="img" aria-labelledby="title desc" font-family='system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'>
+<title id="title">TabArena-Lite Elo</title>
+<desc id="desc">Elo with 95% confidence intervals on TabArena-Lite (51 datasets, official pipeline, 8-fold bagged), RandomForest (default) = 1000. Kumo-Tabular (default) 2090 (place 1); TabPFN-3.5 (default) 1882 (place 7); TabPFN-3.5-Fast (default) 1806 (place 16); Mitra-v2 (default) 1774 (place 17); TabSil 1755 (place 18); TabPFN-3 (default) 1626 (place 25); TabICLv2 (default) 1567 (place 29); RandomForest (default) 1000 (place 112). TabSil places 18th of 121 methods.</desc>
+<text x="24" y="32" font-size="17" fill="#1F2937" font-weight="600">TabArena-Lite Elo</text>
+<text x="24" y="54" font-size="12" fill="#4B5563">51 datasets · 121 methods in the pool · dots are Elo, whiskers the 95% CI · higher is better</text>
+<rect x="12" y="184" width="816" height="24" rx="6" fill="#E4572E" fill-opacity="0.09"/>
+<line x1="335.4" y1="79" x2="335.4" y2="295" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="335.4" y="315" font-size="11" fill="#6B7280" text-anchor="middle" font-variant-numeric="tabular-nums">1000</text>
+<line x1="424" y1="79" x2="424" y2="295" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="424" y="315" font-size="11" fill="#6B7280" text-anchor="middle" font-variant-numeric="tabular-nums">1250</text>
+<line x1="512.6" y1="79" x2="512.6" y2="295" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="512.6" y="315" font-size="11" fill="#6B7280" text-anchor="middle" font-variant-numeric="tabular-nums">1500</text>
+<line x1="601.1" y1="79" x2="601.1" y2="295" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="601.1" y="315" font-size="11" fill="#6B7280" text-anchor="middle" font-variant-numeric="tabular-nums">1750</text>
+<line x1="689.7" y1="79" x2="689.7" y2="295" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="689.7" y="315" font-size="11" fill="#6B7280" text-anchor="middle" font-variant-numeric="tabular-nums">2000</text>
+<line x1="778.3" y1="79" x2="778.3" y2="295" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="778.3" y="315" font-size="11" fill="#6B7280" text-anchor="middle" font-variant-numeric="tabular-nums">2250</text>
+<line x1="300" y1="295" x2="796" y2="295" stroke="#D1D5DB" stroke-width="1" stroke-linecap="butt"/>
+<text x="548" y="337" font-size="12" fill="#4B5563" text-anchor="middle">Elo (RandomForest (default) = 1000)</text>
+<text x="46" y="73" font-size="11" fill="#6B7280" text-anchor="end">place</text>
+<line x1="276" y1="92" x2="796" y2="92" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="46" y="96" font-size="11" fill="#6B7280" text-anchor="end" font-variant-numeric="tabular-nums">1</text>
+<text x="60" y="96.5" font-size="12.5" fill="#1F2937">Kumo-Tabular (default)</text>
+<line x1="682.6" y1="92" x2="777.9" y2="92" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+<circle cx="721.6" cy="92" r="6.5" fill="#FFFFFF"/>
+<circle cx="721.6" cy="92" r="4.5" fill="#6B7280"/>
+<line x1="276" y1="118" x2="796" y2="118" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="46" y="122" font-size="11" fill="#6B7280" text-anchor="end" font-variant-numeric="tabular-nums">7</text>
+<text x="60" y="122.5" font-size="12.5" fill="#1F2937">TabPFN-3.5 (default)</text>
+<line x1="615.7" y1="118" x2="697.2" y2="118" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+<circle cx="647.9" cy="118" r="6.5" fill="#FFFFFF"/>
+<circle cx="647.9" cy="118" r="4.5" fill="#6B7280"/>
+<line x1="276" y1="144" x2="796" y2="144" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="46" y="148" font-size="11" fill="#6B7280" text-anchor="end" font-variant-numeric="tabular-nums">16</text>
+<text x="60" y="148.5" font-size="12.5" fill="#1F2937">TabPFN-3.5-Fast (default)</text>
+<line x1="600.1" y1="144" x2="653.2" y2="144" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+<circle cx="621" cy="144" r="6.5" fill="#FFFFFF"/>
+<circle cx="621" cy="144" r="4.5" fill="#6B7280"/>
+<line x1="276" y1="170" x2="796" y2="170" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="46" y="174" font-size="11" fill="#6B7280" text-anchor="end" font-variant-numeric="tabular-nums">17</text>
+<text x="60" y="174.5" font-size="12.5" fill="#1F2937">Mitra-v2 (default)</text>
+<line x1="585.6" y1="170" x2="645.4" y2="170" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+<circle cx="609.6" cy="170" r="6.5" fill="#FFFFFF"/>
+<circle cx="609.6" cy="170" r="4.5" fill="#6B7280"/>
+<line x1="276" y1="196" x2="796" y2="196" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="46" y="200" font-size="11" fill="#6B7280" text-anchor="end" font-variant-numeric="tabular-nums">18</text>
+<text x="60" y="200.5" font-size="12.5" fill="#1F2937" font-weight="700">TabSil</text>
+<line x1="577.1" y1="196" x2="634.1" y2="196" stroke="#E4572E" stroke-width="2" stroke-linecap="round"/>
+<circle cx="602.9" cy="196" r="8" fill="#FFFFFF"/>
+<circle cx="602.9" cy="196" r="6" fill="#E4572E"/>
+<line x1="276" y1="222" x2="796" y2="222" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="46" y="226" font-size="11" fill="#6B7280" text-anchor="end" font-variant-numeric="tabular-nums">25</text>
+<text x="60" y="226.5" font-size="12.5" fill="#1F2937">TabPFN-3 (default)</text>
+<line x1="540.2" y1="222" x2="583.1" y2="222" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+<circle cx="557.2" cy="222" r="6.5" fill="#FFFFFF"/>
+<circle cx="557.2" cy="222" r="4.5" fill="#6B7280"/>
+<line x1="276" y1="248" x2="796" y2="248" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="46" y="252" font-size="11" fill="#6B7280" text-anchor="end" font-variant-numeric="tabular-nums">29</text>
+<text x="60" y="252.5" font-size="12.5" fill="#1F2937">TabICLv2 (default)</text>
+<line x1="516.1" y1="248" x2="557.9" y2="248" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+<circle cx="536.3" cy="248" r="6.5" fill="#FFFFFF"/>
+<circle cx="536.3" cy="248" r="4.5" fill="#6B7280"/>
+<line x1="276" y1="274" x2="796" y2="274" stroke="#E5E7EB" stroke-width="1" stroke-linecap="butt"/>
+<text x="46" y="278" font-size="11" fill="#6B7280" text-anchor="end" font-variant-numeric="tabular-nums">112</text>
+<text x="60" y="278.5" font-size="12.5" fill="#1F2937">RandomForest (default)</text>
+<line x1="308.9" y1="274" x2="361.6" y2="274" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+<circle cx="335.4" cy="274" r="6.5" fill="#FFFFFF"/>
+<circle cx="335.4" cy="274" r="4.5" fill="#6B7280"/>
+<text x="644.1" y="200" font-size="12" fill="#1F2937" font-weight="700" font-variant-numeric="tabular-nums">1755 · 18th of 121</text>
+<text x="787.9" y="96" font-size="12" fill="#1F2937" font-variant-numeric="tabular-nums">2090</text>
+<text x="371.6" y="278" font-size="12" fill="#1F2937" font-variant-numeric="tabular-nums">1000</text>
+</svg>
