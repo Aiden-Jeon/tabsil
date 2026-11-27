@@ -99,8 +99,8 @@ def bucket_quantiles(
     """Quantiles (n, m) of bucket distributions: log probabilities (n, K) on `borders`
     (K + 1,), with the density uniform within each bucket (the CDF is linear between borders).
     `levels` is m levels shared by every row, or an (n, m) array of levels per row (uniform
-    levels give draws: `tabsil.unsupervised.NumericConditional.sample`). A level q falls in the
-    bucket k with cdf[k] < q <= cdf[k + 1], so a bucket without probability is never chosen."""
+    levels give draws: `tabsil.tasks.unsupervised.NumericConditional.sample`). A level q falls in
+    the bucket k with cdf[k] < q <= cdf[k + 1], so a bucket without probability is never chosen."""
     probs = np.exp(np.asarray(log_probs, dtype=np.float64))
     probs = probs / probs.sum(-1, keepdims=True)
     b = np.asarray(borders, dtype=np.float64)

@@ -1,4 +1,5 @@
-"""Forecasting with TabSil regression (`tabsil.forecast`), run on a tiny randomized model."""
+"""Forecasting with TabSil regression (`tabsil.tasks.forecast`), run on a tiny randomized
+model."""
 
 import numpy as np
 import pandas as pd

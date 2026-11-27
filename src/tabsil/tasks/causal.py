@@ -7,7 +7,7 @@ models are the regular inference classes: `TabSilRegressor.predict` (the predict
 outcome and `TabSilClassifier.predict_proba` for the propensity score e(x) = P(T = 1 | X = x). No
 weights are trained; each base model is one in-context fit.
 
-    from tabsil.causal import TabSilCATE
+    from tabsil import TabSilCATE
 
     est = TabSilCATE(device="cuda").fit(X, treatment, y)  # the S-learner
     tau = est.effect(X_test)    # (n,) CATE per row
@@ -132,7 +132,7 @@ class TabSilCATE:
     """Conditional average treatment effects with TabSil base learners (module docstring for the
     learners and where they differ from EconML).
 
-    `model` and `borders` are given as for `tabsil.recipe.TabSilRegressor` (None: the default Hub
+    `model` and `borders` are given as for `TabSilRegressor` (None: the default Hub
     repo at its default tag, `tabsil.recipe.HUB_DEFAULT`; a Hub repo id or a local folder; or a
     model with its `borders`). The model must serve regression (outcomes) and, for the X- and
     DR-learners, classification (propensity scores); the weights are loaded once and shared by

@@ -1,5 +1,5 @@
 """Treatment effect benchmarks: IHDP (100 realizations) and ACIC 2016 (10 simulations), TabSil
-meta-learners (`tabsil.causal.TabSilCATE`) against EconML baselines run on the same splits.
+meta-learners (`tabsil.TabSilCATE`) against EconML baselines run on the same splits.
 
 Benchmarks (`BENCHMARKS`):
 

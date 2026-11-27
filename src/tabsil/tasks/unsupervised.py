@@ -14,7 +14,7 @@ A row's log density is the chain rule over a column order, log p(x) = Σ_i log p
 averaged over several random orders as the log of the arithmetic mean of the densities
 (log-sum-exp). The outlier score is the negative log density (higher = more anomalous).
 
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil import TabSilUnsupervised
 
     model = TabSilUnsupervised().fit(x_train)  # the default Hub weights (`tabsil.recipe`)
     scores = model.outlier_score(x_test)       # (n,), higher = more anomalous
@@ -175,7 +175,7 @@ class NumericConditional:
 
     def quantile(self, q: float) -> np.ndarray:
         """The `q` quantile (n,) of each row's distribution (uniform within each bucket,
-        `tabsil.forecast.bucket_quantiles`)."""
+        `bucket_quantiles`)."""
         return bucket_quantiles(self.log_probs, self.borders, [float(q)])[:, 0]
 
     def class_mode(self, classes: np.ndarray) -> np.ndarray:

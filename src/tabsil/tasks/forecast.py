@@ -33,8 +33,9 @@ Context handling (our choices, following the TabPFN-TS fev wrapper where it has 
   forecast (the model is not run: z-normalizing a constant target is undefined)
 
 Prediction: the quantiles come from the mixture distribution of
-`tabsil.recipe.TabSilRegressor.predict_distribution` (bucket probabilities on the common borders),
-inverting its CDF with the density taken as uniform within a bucket. The point forecast is the
+`TabSilRegressor.predict_distribution` (bucket probabilities on the common borders), inverting its
+CDF with the density taken as uniform within a bucket
+(`tabsil.models.quantile_distribution.bucket_quantiles`). The point forecast is the
 median of that distribution (`point_forecast="median"`, the forecast MASE and fev's median metrics
 assume) or the regressor's mean (`"mean"`, `TabSilRegressor.predict`). The two outermost buckets
 of TabSil's borders are wide (z beyond about ±4.3, up to ±22.6 of the context target), so a
@@ -181,7 +182,7 @@ class TabSilForecaster:
     """Zero-shot forecasting with TabSil regression (module docstring for the features, context
     handling and quantiles).
 
-    `model` and `borders` are given as for `tabsil.recipe.TabSilRegressor` (None: the default Hub
+    `model` and `borders` are given as for `TabSilRegressor` (None: the default Hub
     repo at the tag `tabsil.recipe.HUB_REVISION`; a Hub repo id or a local folder; or a model
     with its `borders`); the weights are loaded once and shared by every series. `n_estimators`
     and the other keyword arguments go to each series' `TabSilRegressor` (default: the model's

@@ -1,5 +1,5 @@
 """ADBench unsupervised outlier detection: 12 classical tables x 3 seeds, TabSil's chain-rule log
-density (`tabsil.unsupervised`) against the official TabPFN v2 extension and pyod baselines.
+density (`tabsil.tasks.unsupervised`) against the official TabPFN v2 extension and pyod baselines.
 
 The protocol, the 12 tables, the comparison numbers and the Elo are those of the fm-agent-bench
 anomaly track (`docs/anomaly.md`, `fab/bench/anomaly/`, results at commit

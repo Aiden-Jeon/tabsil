@@ -21,10 +21,10 @@ from tabsil.recipe import HUB_REPOS, inference_kwargs
 
 class TabSilClassifier(EnsembleClassifier):
     """TabSil classification: `EnsembleClassifier` with TabSil's inference defaults. Without `model`
-    it downloads the default Hub repo (`HUB_REPO`) at the tag `HUB_REVISION`. Other weights can
-    be given as a Hub repo id (`owner/name` is `main`, `owner/name@branch` a branch, tag or
-    commit), a local folder, or a model. The member count and
-    kinds default to the model's settings (`default_inference`); arguments override them.
+    it downloads the default Hub repo (`tabsil.recipe.HUB_REPO`) at the tag `HUB_REVISION`. Other
+    weights can be given as a Hub repo id (`owner/name` is `main`, `owner/name@branch` a branch,
+    tag or commit), a local folder, or a model. The member count and kinds default to the model's
+    settings (`tabsil.recipe.default_inference`); arguments override them.
 
         clf = TabSilClassifier().fit(x_train, y_train)
     """

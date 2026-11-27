@@ -39,9 +39,9 @@ def check_borders(
 
 class TabSilRegressor(EnsembleRegressor):
     """TabSil regression: `EnsembleRegressor` with TabSil's inference defaults. Without `model` it
-    downloads the weights and their regression borders from the default Hub repo (`HUB_REPO`) at
-    the tag `HUB_REVISION`. Other weights can be given as a Hub repo id, a local folder (borders
-    from there too), or a model with `borders`.
+    downloads the weights and their regression borders from the default Hub repo
+    (`tabsil.recipe.HUB_REPO`) at the tag `HUB_REVISION`. Other weights can be given as a Hub repo
+    id, a local folder (borders from there too), or a model with `borders` (`check_borders`).
 
         reg = TabSilRegressor().fit(x_train, y_train)
     """

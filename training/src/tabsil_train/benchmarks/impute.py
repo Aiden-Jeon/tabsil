@@ -1,5 +1,5 @@
 """Missing value imputation: 10 OpenML tables x MCAR rates 10/30/50% x 3 seeds, TabSil
-(`tabsil.unsupervised.TabSilUnsupervised.impute`, zero-shot) against the official TabPFN v2
+(`tabsil.TabSilUnsupervised.impute`, zero-shot) against the official TabPFN v2
 extension and the usual baselines, every method on the same rows and masks.
 
 - tables (`TABLES`): OpenML datasets used in imputation benchmarks (HyperImpute, GAIN, MissForest

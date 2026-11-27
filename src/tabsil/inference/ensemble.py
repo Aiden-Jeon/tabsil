@@ -4,8 +4,8 @@ model with `forward(x, y_train, task)` (the `tabsil.models` model).
     clf = EnsembleClassifier(model, n_estimators=8).fit(x_train, y_train)
     proba = clf.predict_proba(x_test)
 
-`tabsil.recipe.TabSilClassifier` and `TabSilRegressor` set TabSil's defaults (8 `standard` members,
-at most 768 columns per member chosen `balanced`).
+`TabSilClassifier` and `TabSilRegressor` (`tabsil.tasks`) set TabSil's defaults (8 `standard`
+members, at most 768 columns per member chosen `balanced`).
 
 `fit` trains no weights. Each member fits its preprocessing to the training rows
 (`tabsil.inference.preprocessing`). With a model that has a train context

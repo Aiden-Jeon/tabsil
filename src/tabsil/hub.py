@@ -11,8 +11,8 @@ The regression borders (the buckets the quantile outputs are turned into) go int
     model, borders = from_pretrained("aiden-jeon/tabsil@stage2-10k")
 
 For inference alone this function is not needed: `TabSilClassifier()`·`TabSilRegressor()`
-(`tabsil.recipe`) download from the default Hub repo (`HUB_REPO` at the tag `HUB_REVISION`)
-(`model_or_pretrained`).
+(`tabsil.tasks`) download from the default Hub repo (`tabsil.recipe.HUB_REPO` at the tag
+`HUB_REVISION`) (`model_or_pretrained`).
 
 The evaluation and upload scripts read a Hub repo (`hf://owner/name`), a local `save_pretrained`
 folder, a checkpoint file or an MLflow run artifact (`runs:/...`) the same way with
@@ -89,7 +89,8 @@ def from_pretrained(
     model.load_state_dict(tensors)
     if "inference" in config:
         # inference settings for these weights (number of members, member preprocessing kinds);
-        # the recipe's inference classes read them as defaults (`tabsil.recipe.default_inference`)
+        # the estimators of `tabsil.tasks` read them as defaults
+        # (`tabsil.recipe.default_inference`)
         model.inference_config = config["inference"]
     return model.eval(), borders
 

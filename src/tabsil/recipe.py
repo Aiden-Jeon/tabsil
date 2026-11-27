@@ -25,7 +25,9 @@ used `standard` members only, no count columns and temperature 0.9).
 The non-size parts listed above (Fourier + ECDF encoder, gain-free q/k RMSNorm and the
 temperatures, target LayerNorm, pre-head MLP, interleaved stages, retrieval decoder, quantile
 head, one multitask model) are fixed in the code (`tabsil.models.column_row_transformer`); this
-module holds the numbers.
+module holds the numbers. The estimators that use them are in `tabsil.tasks`.
+
+    from tabsil import TabSilClassifier, TabSilRegressor
 
     clf = TabSilClassifier().fit(x_train, y_train)  # `HUB_REPO` at the tag `HUB_REVISION`
     reg = TabSilRegressor(model, borders).fit(x_train, y_train)
