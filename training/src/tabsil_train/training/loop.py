@@ -14,12 +14,15 @@ is Muon on every parameter, or Muon on the weight matrices and AdamW on the rest
 (`TrainConfig.optimizer`, `training.muon`); the learning rate follows a linear warmup and a cosine
 decay.
 
-Three fixes from training on GPUs are kept:
+Four fixes from training on GPUs are kept:
 - bf16 has no GradScaler, so a step with an inf/nan gradient is skipped
 - the number of train rows changes per forward, so cuDNN attention is off (it builds a new graph
   per shape and is slow)
 - there is at least 1 train row (with 0, only that GPU leaves attention weights unused and DDP
   synchronization breaks)
+- a full pass of Python's garbage collector stops one GPU's process while the others wait for it
+  in the all-reduce, so every process freezes its live objects out of the collector's reach at
+  each log step (`TrainConfig.gc_freeze`)
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import copy
+import gc
 import importlib.metadata
 import json
 import math
@@ -390,6 +394,11 @@ def train(
         raise
     finally:
         torch.set_float32_matmul_precision(matmul_precision)
+        if config.gc_freeze:
+            # `gc.freeze()` is process-wide too. Give the collector back what the run froze, so
+            # that it collects the run's objects once they are no longer used. There is no
+            # unfreeze of a part: objects that the caller froze before are handed back as well
+            gc.unfreeze()
 
 
 def _train(
@@ -707,9 +716,16 @@ def _train(
             window_finite += 1
             window_tasks[task][0] += step_loss.item()
             window_tasks[task][1] += 1
+        done = step + 1
+        if config.gc_freeze and done % config.log_every == 0:
+            # Every GPU is here at the same time (they met in the all-reduce above), so their
+            # passes run side by side instead of each one stopping the others. The collection
+            # first: what is frozen is never collected, so garbage must not be frozen
+            # (`TrainConfig.gc_freeze`). Its time counts as training time
+            gc.collect()
+            gc.freeze()
         train_seconds += time.time() - t_step  # the .item() above waited for the GPU
 
-        done = step + 1
         # check the deadline every log_every steps, agreeing across GPUs to stop at the same step
         if config.deadline is not None and done % config.log_every == 0:
             late = torch.tensor(float(time.time() > config.deadline), device=device)
