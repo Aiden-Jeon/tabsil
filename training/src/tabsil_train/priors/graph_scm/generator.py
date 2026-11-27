@@ -89,7 +89,8 @@ def _graph_scm_classes():
 
 
 class GraphSCM:
-    """Graph SCM generator (`Generator`). Classification uses the `num_classes` hyperparameter.
+    """Graph SCM generator (`Generator`). Classification uses the `num_classes` hyperparameter
+    (`tabsil_train.priors.graph_scm.ClassCount`).
 
     Datasets are built one at a time. When TabICL discards a dataset that produced NaN, y is all
     -100 (`tabsil_train.priors.transforms.filters.DropInvalid` then has the group redrawn).

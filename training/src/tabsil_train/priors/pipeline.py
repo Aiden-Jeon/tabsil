@@ -2,14 +2,16 @@
 
 Tabular priors go through the same stages: fix the table size, draw hyperparameters for each group
 (datasets sharing their hyperparameters), build a continuous table with a generator, and refine it
-with transforms. A new prior usually adds one generator (`tabsil_train.priors.generators`) or a few
-transforms (`tabsil_train.priors.transforms`) and reuses the existing parts for the other stages.
+with transforms. A new prior usually adds one generator (the graph SCM prior's is
+`tabsil_train.priors.graph_scm.generator`) or a few transforms (`tabsil_train.priors.transforms`)
+and reuses the existing parts for the other stages.
 
 - Table size (train rows, total rows, features) is chosen by the assembled prior and passed in
   (`tabsil_train.priors.table_size` and others).
-- Hyperparameters: `(rng, n_train, n_features) -> dict`, drawn once per group. If they set the
-  used feature count `num_features_used`, the generator builds that many and a transform
-  (`PadFeatures`) fills the rest.
+- Hyperparameters: `(rng, n_train, n_features) -> dict`, drawn once per group (the class count,
+  `tabsil_train.priors.graph_scm.ClassCount`). If they set the used feature count
+  `num_features_used`, the generator builds that many and a transform (`PadFeatures`) fills the
+  rest.
 - Generator (`Generator`): the (x, y) of one group.
 - Transform (`Transform`): takes a group and returns a new one. None drops the group, and sampling
   restarts from the hyperparameters (at most `max_attempts` times).

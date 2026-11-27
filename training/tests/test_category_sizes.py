@@ -1,10 +1,10 @@
-"""The category sizes the graph SCM gives (the docstrings of `generators.graph_scm`,
-`transforms.dependence`, `graph_scm` and `graph_scm_realism` state them): at most 9 categories by
-default, up to 200 with `corrected_cat_sizes`."""
+"""The category sizes the graph SCM gives (the docstrings of `graph_scm.generator`,
+`transforms.dependence` and `graph_scm`, and the comments of `graph_scm.variants`, state them): at
+most 9 categories by default, up to 200 with `corrected_cat_sizes`."""
 
 import pytest
 
-from tabsil_train.priors.generators.graph_scm import GraphSCM, _graph_scm_classes
+from tabsil_train.priors.graph_scm.generator import GraphSCM, _graph_scm_classes
 from tabsil_train.priors.pipeline import Rng
 
 
