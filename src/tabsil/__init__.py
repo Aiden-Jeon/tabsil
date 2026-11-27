@@ -35,6 +35,9 @@ The five estimators and `from_pretrained` are importable from here and loaded on
 
 from typing import TYPE_CHECKING
 
+# `import tabsil` binds `tabsil.models`, as tabsil 0.1.x did (`tabsil.models.load_checkpoint`).
+# The other submodules are imported by name (`import tabsil.hub`)
+from tabsil import models as models
 from tabsil.utils import get_device, set_seed
 
 if TYPE_CHECKING:
