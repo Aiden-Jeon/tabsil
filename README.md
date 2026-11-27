@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/tabsil-logo-dark.svg">
-    <img alt="TabSil" src="assets/tabsil-logo.svg" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/logo/tabsil-logo-dark.svg">
+    <img alt="TabSil" src="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/logo/tabsil-logo.svg" width="320">
   </picture>
 </p>
 
@@ -20,7 +20,17 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 
 ## Results
 
-[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard) with TabArena's official pipeline: every method, TabSil included, is 8-fold bagged, and the leaderboard is computed as on the public one. TabSil places 18th of 121 methods. The table lists TabSil, the foundation models near it, the strongest tuned baselines and the RandomForest anchor; the [full table](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite/blob/1c4beda3ed9683fa5bd15f4cc9569a8180b04ec4/leaderboard_website.md) has all 121.
+[TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard) with TabArena's official pipeline: every method, TabSil included, is 8-fold bagged, and the leaderboard is computed as on the public one. TabSil places 18th of 121 methods. The chart and the table below it are a hand-picked subset: TabSil, 4 of the 17 methods above it, TabPFN-3 and TabICLv2 (which it takes ideas from) below it, and RandomForest, the Elo anchor; the [full table](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite/blob/1c4beda3ed9683fa5bd15f4cc9569a8180b04ec4/leaderboard_website.md) has all 121.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/charts/tabarena-lite-dark.svg">
+    <img alt="Dot plot of TabArena-Lite Elo with 95% confidence intervals for TabSil and the compared methods; the table below it has the numbers." src="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/charts/tabarena-lite-light.svg" width="840">
+  </picture>
+</p>
+
+<details>
+<summary>Table: Elo, improvability, fit and infer time</summary>
 
 | Method | Place | Elo (+CI) | Improvability (%) | Fit (s/1K) | Infer (s/1K) |
 | --- | --- | --- | --- | --- | --- |
@@ -29,103 +39,31 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 | TabPFN-3.5-Fast (default) | 16 | 1806 (+91/−59) | 9.1 | 0.73 | 0.153 |
 | Mitra-v2 (default) | 17 | 1774 (+101/−68) | 8.5 | 59.03 | 0.886 |
 | **TabSil** | **18** | **1755** (+88/−73) | 9.0 | 2.53 | 0.812 |
-| EXAONE-Tabular (default) | 20 | 1753 (+66/−52) | 9.9 | 1.98 | 0.582 |
 | TabPFN-3 (default) | 25 | 1626 (+73/−48) | 11.6 | 1.29 | 0.383 |
 | TabICLv2 (default) | 29 | 1567 (+61/−57) | 13.1 | 0.73 | 0.137 |
-| RealTabPFN-2.5 (default) | 33 | 1519 (+59/−44) | 13.8 | 5.72 | 0.611 |
-| RealMLP (tuned + ensembled) | 36 | 1489 (+45/−44) | 15.2 | 2791.97 | 13.886 |
-| CatBoost (tuned) | 45 | 1394 (+46/−39) | 16.6 | 1347.32 | 0.037 |
-| LightGBM (tuned + ensembled) | 46 | 1387 (+36/−37) | 17.6 | 416.63 | 2.236 |
-| XGBoost (tuned + ensembled) | 55 | 1349 (+39/−42) | 18.3 | 700.96 | 1.438 |
 | RandomForest (default) | 112 | 1000 (+74/−75) | 28.4 | 0.43 | 0.053 |
+
+</details>
 
 - TabArena-Lite has 51 datasets, one split each. TabSil ran as the `TabSil` model of TabArena ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)) at its default configuration: tabsil 0.1.0 from PyPI, the weights at the tag `v1`, 8×H100 with one process per GPU. No split is imputed. Elo puts RandomForest (default) at 1000, with a 95% CI. Lower is better for improvability, fit and infer.
 - All methods use the same protocol, so the Fit and Infer columns are like-for-like; the other methods' times were measured by TabArena on its own hardware.
 - The pool is the TabArena results available when the run was made (2026-11-25, TabArena at the submission commit `1360e0e8`): 120 methods plus TabSil, 121 methods. It is not a released leaderboard version, so the live leaderboard's numbers differ. These are the results submitted with the pull request; the maintainers' own run of the full TabArena may change them. The raw results (`results.pkl` of all 51 splits), the hardware and the logs are in [aiden-jeon/tabsil-tabarena-lite](https://huggingface.co/datasets/aiden-jeon/tabsil-tabarena-lite).
-- tabsil 0.1.1 changed the inference defaults (see [Use](#use)); the table above is tabsil 0.1.0's, and the official-protocol run of 0.1.1 follows its release.
+- tabsil 0.1.1 changed the inference defaults (see [Use](#use)); these results are tabsil 0.1.0's, and the official-protocol run of 0.1.1 follows its release.
   - In the repository's harness (each split fit once, no bagging; see [Evaluation](#evaluation)) the same weights score 1768 with 0.1.1's inference against 1726 with 0.1.0's.
   - Median fit time is 0.23 s per 1K training rows, against 0.014; 0.1.1's fit runs the training rows through the model.
   - Median predict time is 0.16 s per 1K test rows, against 0.81.
 - Fit and infer time are defined in [Evaluation](#evaluation). More results (AMLB, per-problem-type and per-stage Elo) are on the [model card](https://huggingface.co/aiden-jeon/tabsil).
 
-### Forecasting (fev-bench)
+### Other tasks
 
-Zero-shot forecasting with the v1 weights (`TabSilForecaster`, no retraining) on 10 univariate [fev-bench](https://github.com/autogluon/fev) tasks, every rolling window (129), scored with fev's SQL (scaled quantile loss, the main metric) and MASE. The tasks, windows and comparison results are those of [fm-agent-bench](https://github.com/Aiden-Jeon/fm-agent-bench) P7 (commit `b1b0101`), which ran the other methods with the same protocol. Elo is computed over the task means with Seasonal Naive at 1000, with a 95% CI from 200 bootstrap rounds over the tasks.
+The same weights also run four more tasks zero-shot (tabsil ≥ 0.1.2); TabSil is measured at the Hub tag `v1.1`. The protocols, comparison methods, caveats and the tables behind this figure are in [docs/task-results.md](https://github.com/Aiden-Jeon/tabsil/blob/main/docs/task-results.md).
 
-| Method | SQL Elo | MASE Elo |
-| --- | --- | --- |
-| Chronos-2 | 1842 (+192/−85) | 1689 (+217/−100) |
-| TabPFN-TS-3 (public result) | 1764 (+310/−173) | 1652 (+297/−145) |
-| TimesFM-2.5 | 1707 (+234/−133) | 1628 (+262/−145) |
-| TabPFN-TS (TabPFN v2) | 1584 (+216/−133) | 1490 (+178/−117) |
-| **TabSil** | **1535** (+220/−129) | **1460** (+181/−110) |
-| Chronos-Bolt | 1438 (+124/−148) | 1332 (+144/−172) |
-| TabICL-TS | 1438 (+126/−80) | 1200 (+124/−152) |
-| AutoARIMA (public result) | 1335 (+125/−263) | 1178 (+159/−202) |
-| AutoETS | 1230 (+244/−478) | 1167 (+244/−284) |
-| Seasonal Naive | 1000 (+77/−270) | 1000 (+123/−341) |
-
-- Snapshot 2026-11-26: fev 0.10.0, data `autogluon/fev_datasets` at `d3e7e72`, 1×H100 (32 min for TabSil), at the Hub tag `v1.1`, i.e. tabsil 0.1.1's inference settings, which `TabSilForecaster()` loads without a model. `TabSilForecaster` ships in tabsil 0.1.2. Our Seasonal Naive reproduces fm-agent-bench's on every window. No window is imputed. Reproduce with `training/scripts/eval.py --suite fev --regressor-path hf://aiden-jeon/tabsil@v1.1` (job spec `training/scripts/eval_fev.yaml` with `TABSIL_REGRESSOR` set to that tag).
-- At the tag `v1` (tabsil 0.1.0's settings) TabSil had SQL Elo 1526 (+202/−132) and MASE Elo 1460 (+192/−130), the same place. The settings do not change the task means overall (geometric mean of the ratio `v1.1` / `v1` over the tasks: 1.001 for SQL, 0.999 for MASE). Three tasks move by more than two standard errors over their windows: ecdc_ili is better (SQL −2.1%, on 10 of 10 windows), us_consumption_1M worse (SQL +4.4%, on 9 of 10) and rohlik_orders_1D better in MASE (−2.3%, on 5 of 5). The SQL Elo is higher only because TabSil now passes TabPFN-TS (TabPFN v2) on hospital, a near tie (SQL 0.6939 against 0.6959; 0.6963 at `v1`). The per-task comparison is in [#30](https://github.com/Aiden-Jeon/tabsil/pull/30).
-- The tasks are redset_1H, solar_with_weather_1H, ercot_1D, epf_be, rohlik_orders_1D, solar_1D, ecdc_ili, hospital, us_consumption_1M and hospital_admissions_1D. Only known covariates are used, and only by TabSil and TabPFN-TS. The pool differs from the fev-bench leaderboard's, so the numbers are not comparable to it.
-
-### Outlier detection (ADBench)
-
-Unsupervised outlier detection on 12 [ADBench](https://github.com/Minqi824/ADBench) tables × 3 seeds, zero-shot with the v1 weights (`TabSilUnsupervised`, 10 column orders). Each model is fitted on the unlabeled training split, which keeps its anomalies (a contaminated context), and scores the test split. The split, the tables and the comparison numbers come from the fm-agent-bench anomaly track: the official TabPFN extension (`TabPFNUnsupervisedModel.outliers`, TabPFN v2 weights) and pyod's default methods. Our IsolationForest equals ADBench Table D4 on 12/12 tables.
-
-| Method | Mean AUROC | Mean AUPRC | Elo (IsolationForest = 1000) |
-| --- | --- | --- | --- |
-| IsolationForest | 0.722 | 0.358 | 1000 (+89/−82) |
-| TabPFN v2 extension | 0.704 | 0.308 | 992 (+197/−154) |
-| ECOD | 0.695 | 0.358 | 971 (+192/−128) |
-| **TabSil** | **0.663** | **0.265** | **893** (+149/−156) |
-
-- Elo pool: TabSil, the TabPFN extension and pyod's 10 default methods; TabSil places 9th of 12. TabSil is above the TabPFN extension on 2 of 12 tables (on Waveform by 0.002), above IsolationForest on 5.
-- With a clean context (only the training rows labeled normal, a diagnostic that uses labels and stays out of the Elo) TabSil's mean AUROC is 0.820 (TabPFN extension 0.847, IsolationForest 0.767), and it is within 0.01 of the best pyod method or above it on 8 of 12 tables. Like the TabPFN extension, the density model is much stronger than the unsupervised score suggests; the anomalies in the context hurt it most (cover +0.45, cardio +0.31).
-- Measured at the Hub tag `v1.1`, i.e. tabsil 0.1.1's inference settings, which `TabSilUnsupervised()` loads without a model. At the tag `v1` (tabsil 0.1.0's settings) TabSil had mean AUROC 0.662, AUPRC 0.264 and Elo 896 (+149/−143), above the TabPFN extension on 1 table: the settings do not change the result, and no table moves by more than its standard deviation over the three seeds. `TabSilUnsupervised` ships in tabsil 0.1.2. Run with `training/scripts/eval.py --suite adbench --regressor-path hf://aiden-jeon/tabsil@v1.1` (8×H100, 13 min). Per-table numbers at `v1`, the differences from the official extension and what is not verified are in [#19](https://github.com/Aiden-Jeon/tabsil/pull/19); the comparison of the two tags is in [#30](https://github.com/Aiden-Jeon/tabsil/pull/30).
-
-### Treatment effects (IHDP, ACIC 2016)
-
-CATE estimation zero-shot with the v1 weights at the Hub tag `v1.1`, i.e. tabsil 0.1.1's inference settings, which `TabSilCATE()` loads without a model. TabSil is the base learner of S/T/X/DR meta-learners, on IHDP (100 realizations: the files of Shalit et al. 2017, 672 training and 75 test rows each) and ACIC 2016 (the 10 simulations shipped with causallib, 4,802 rows × 58 covariates, CausalPFN's 90/10 split). √PEHE is against the noiseless effect mu1 − mu0, within-sample (training rows) and out-of-sample (test rows); ε_ATE is the absolute ATE error. Mean ± standard error over realizations, lower is better. The EconML baselines (0.17.1, default settings, scikit-learn gradient boosting as every base model) ran on the same splits.
-
-| Method | IHDP √PEHE in | IHDP √PEHE out | IHDP ε_ATE out | ACIC √PEHE in | ACIC √PEHE out | ACIC ε_ATE out |
-| --- | --- | --- | --- | --- | --- | --- |
-| **TabSil S-learner** (default) | **0.52 ± 0.07** | **0.55 ± 0.09** | **0.12 ± 0.01** | 1.09 ± 0.38 | 0.54 ± 0.11 | 0.05 ± 0.02 |
-| TabSil T-learner | 0.60 ± 0.05 | 0.62 ± 0.09 | 0.13 ± 0.01 | 1.05 ± 0.23 | 0.72 ± 0.13 | 0.05 ± 0.01 |
-| TabSil X-learner | 0.90 ± 0.09 | 0.99 ± 0.16 | 0.18 ± 0.02 | **0.85 ± 0.28** | **0.37 ± 0.05** | **0.05 ± 0.01** |
-| TabSil DR-learner | 0.71 ± 0.05 | 0.70 ± 0.06 | 0.19 ± 0.02 | 1.20 ± 0.29 | 0.65 ± 0.18 | 0.06 ± 0.02 |
-| EconML T-learner (GBM) | 1.43 ± 0.17 | 2.08 ± 0.33 | 0.25 ± 0.04 | 1.22 ± 0.19 | 0.86 ± 0.03 | 0.13 ± 0.03 |
-| EconML X-learner (GBM) | 2.58 ± 0.36 | 2.91 ± 0.48 | 0.32 ± 0.04 | 1.04 ± 0.24 | 0.69 ± 0.09 | 0.08 ± 0.02 |
-| EconML S-learner (GBM) | 2.99 ± 0.48 | 3.24 ± 0.58 | 0.49 ± 0.11 | 1.54 ± 0.30 | 1.16 ± 0.15 | 0.21 ± 0.05 |
-| EconML DR-learner (GBM) | 19.49 ± 2.75 | 11.38 ± 1.20 | 1.84 ± 0.26 | 2.06 ± 0.44 | 1.32 ± 0.24 | 0.16 ± 0.04 |
-| EconML CausalForestDML | 3.60 ± 0.53 | 3.85 ± 0.61 | 0.60 ± 0.07 | 1.65 ± 0.37 | 1.23 ± 0.24 | 0.15 ± 0.04 |
-
-- On IHDP, every TabSil learner has a lower mean √PEHE, within- and out-of-sample, than every EconML baseline (the ATE errors are closer: EconML's T-learner has the lowest within-sample ε_ATE after TabSil's S and T). The means are pulled up by a few realizations with large effects (realization 9: 7.4 for TabSil S vs 17.6 for EconML T). On ACIC 2016 the X-learner is best out-of-sample, TabSil's T-learner is behind EconML's X-learner, and within-sample only TabSil's X-learner is ahead of EconML's X-learner. The default is the S-learner: the best average rank of the four and one fit.
-- Against the tag `v1` (tabsil 0.1.0's settings: `standard` members, temperature 0.9; the table in [#22](https://github.com/Aiden-Jeon/tabsil/pull/22)), the DR-learner is better on IHDP (√PEHE 0.82 → 0.71 within-sample and 0.75 → 0.70 out-of-sample, ε_ATE 0.24 → 0.19) and the S-learner slightly worse (0.50 → 0.52 and 0.53 → 0.55); both are beyond the standard error of the paired difference over the 100 realizations. Every other cell of the table moves by 0.04 or less, within the standard errors shown, and the order of the learners does not change. At `v1` the S-learner's out-of-sample √PEHE was below the best EconML method's on 100 of 100 realizations; that count was not redone at `v1.1`, because the EconML results per realization were not kept. The comparison per learner is in [#30](https://github.com/Aiden-Jeon/tabsil/pull/30).
-- Published numbers on the same files, with protocol differences (`training/src/tabsil_train/benchmarks/causal_reference.csv`): CausalPFN (Balazadeh et al. 2025) reports out-of-sample √PEHE 0.58 ± 0.07 on IHDP and 0.92 ± 0.11 on ACIC 2016, TabPFN as the outcome model 0.95 ± 0.20 and 0.54 ± 0.08, with baselines tuned per dataset (their Table 1, IHDP T-learner 1.73, BART 2.50). Shalit et al. 2017 report CFR-Wass 0.71 / 0.76 (in / out) on IHDP, averaged over 1,000 realizations instead of these 100.
-- `TabSilCATE` ships in tabsil 0.1.2.
-- Snapshot 2026-11-26: TabSil on 1×H100 (17 min job, 440 fits of a learner on a realization, 0 failed, nothing imputed); EconML on a laptop CPU. Reproduce with `training/scripts/eval.py --suite causal --regressor-path hf://aiden-jeon/tabsil@v1.1` (job spec `training/scripts/eval_causal.yaml` with `TABSIL_REGRESSOR` set to that tag; the EconML methods need the `causal` extra).
-
-### Imputation (OpenML, MCAR)
-
-Zero-shot missing value imputation with the v1 weights (`TabSilUnsupervised.impute`: the predictive mean for numeric cells, the most probable class for categorical cells) on 10 OpenML tables: 3 numeric only and 7 with categorical columns, at most 2,000 rows and 21 columns. Cells are masked completely at random (MCAR) at 10, 30 and 50%, with 3 seeds each. Every method fills the same masked table (it is fitted on the rows it imputes) and is scored on the masked cells. NRMSE is the RMSE divided by the column's standard deviation (mean imputation is about 1; lower is better), averaged over numeric columns. Accuracy is averaged over categorical columns. Both are then averaged over tables. No published results exist for this protocol, so every method was run here on the same rows and masks.
-
-| Method | NRMSE 10% | NRMSE 30% | NRMSE 50% | Accuracy 10% | Accuracy 30% | Accuracy 50% |
-| --- | --- | --- | --- | --- | --- | --- |
-| **TabSil** | **0.546** | **0.646** | **0.745** | **0.652** | **0.632** | **0.590** |
-| MissForest | 0.616 | 0.744 | 0.863 | 0.632 | 0.602 | 0.556 |
-| MICE | 0.670 | 0.807 | 0.960 | 0.617 | 0.589 | 0.552 |
-| TabPFN v2 extension, `simple_impute` | 0.745 | 0.855 | 0.937 | 0.624 | 0.602 | 0.565 |
-| KNN | 0.724 | 0.912 | 1.005 | 0.576 | 0.519 | 0.483 |
-| Mean / most frequent | 0.974 | 0.995 | 0.994 | 0.496 | 0.487 | 0.489 |
-| TabPFN v2 extension, `impute` | 1.467 | 2.167 | 2.651 | 0.564 | 0.533 | 0.490 |
-
-- TabSil has a lower NRMSE than every baseline on 25 of the 30 (table, rate) cells. The other 5 are bank-marketing at all three rates and adult at 10% and 50%, where TabPFN's `simple_impute` is lower (at adult 10% MICE too, at bank-marketing 10% MICE and MissForest too). TabSil's accuracy is higher than every baseline's on 19 of 21 cells. At cmc 10% it is a tie in effect (0.666 against `simple_impute`'s 0.667), and at yeast 10% MissForest is higher (0.595 against 0.577).
-- The median instead of the mean gives NRMSE 0.560 / 0.669 / 0.767, slightly worse, as expected for RMSE. TabSil with the TabPFN extension's column kinds (below) gives 0.583 / 0.693 / 0.802.
-- Both TabPFN extension methods also treat numeric columns with few distinct values (at most 40, more than 10 rows per value) as categorical and cast their values to `int`. This gives large errors on such columns: yeast `erl`, with values 0.5 and 1, has NRMSE 10.4 under both methods. `impute` also has large errors on numeric-only tables (california_housing `totalBedrooms` 5.6), so the column kinds do not explain all of it; the cause was not investigated. To run at all, `impute` needed tabpfn-extensions at commit a049fd7, because the 0.6.3 release fails on CUDA, and a fix of its class count for categorical columns with missing values.
-- Time per (table, rate, seed) on H100: TabSil 3.4 s (8 members), `simple_impute` 6.7 s, `impute` 328 s. MissForest takes 11.6 s on the CPU.
-- TabSil is measured at the Hub tag `v1.1`, i.e. tabsil 0.1.1's inference settings, which `TabSilUnsupervised()` loads without a model. At the tag `v1` (tabsil 0.1.0's settings) it had NRMSE 0.547 / 0.647 / 0.746 and accuracy 0.653 / 0.632 / 0.590, ahead at cmc 10% by 0.001 (20 of 21 cells): the differences are smaller than the spread over the three seeds ([#30](https://github.com/Aiden-Jeon/tabsil/pull/30)). `TabSilUnsupervised.impute` ships in tabsil 0.1.2.
-- Run with `training/scripts/eval.py --suite impute` (job spec `training/scripts/eval_impute.yaml`, 8×H100 `--shards 8`, 68 min). MICE comes from a second run (14 min) after a fix of its categorical encoding, and TabSil at `v1.1` from a third (`--regressor-path hf://aiden-jeon/tabsil@v1.1 --impute-methods tabsil,tabsil_inferred`, 1×H100, 12 min); the baselines were not run again. The per-table numbers, the differences from the official `impute` and what is not verified are in [#24](https://github.com/Aiden-Jeon/tabsil/pull/24).
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/charts/other-tasks-dark.svg">
+    <img alt="Four small charts comparing TabSil with the baselines of each benchmark: forecasting (fev-bench), outlier detection (ADBench), treatment effects (IHDP, ACIC 2016) and imputation (OpenML, MCAR). The tables in docs/task-results.md have the numbers." src="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/charts/other-tasks-light.svg" width="840">
+  </picture>
+</p>
 
 ## Install
 
@@ -141,18 +79,12 @@ Training and evaluation, from a clone:
 ```bash
 git clone https://github.com/Aiden-Jeon/tabsil
 cd tabsil
-uv sync                           # tabsil + dev tools, Jupyter (inference tests: uv run pytest tests)
 uv sync --all-packages            # tabsil + tabsil-train (training, priors, AMLB evaluation) + dev tools, Jupyter
-uv sync --package tabsil-train    # tabsil-train and its test tools only (tests: uv run --package tabsil-train pytest training/tests)
-uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
-uv sync --package tabsil-train --no-dev --extra fev --group arena-dev     # fev-bench forecasting evaluation
-uv sync --package tabsil-train --extra causal                             # treatment effect evaluation (EconML baselines)
-uv sync --all-packages --extra impute                                     # + the TabPFN baselines of the imputation evaluation
 ```
 
-Each `uv sync` makes the environment match that command exactly (it removes what the command does not install): `--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3). The `fev` extra (fev 0.10.0) needs `huggingface-hub<2`, so it is installed without the dev groups too.
+The other environments (inference tests only, `tabsil-train` only, and the `arena`, `fev`, `causal` and `impute` extras of the evaluation suites) are listed in [`training/README.md`](https://github.com/Aiden-Jeon/tabsil/blob/main/training/README.md#environments).
 
-Python ≥ 3.11, PyTorch ≥ 2.11 (the benchmark results below were measured with PyTorch 2.11).
+Python ≥ 3.11, PyTorch ≥ 2.11 (the benchmark results above were measured with PyTorch 2.11).
 
 ## Use
 
@@ -186,59 +118,41 @@ Both are scikit-learn style estimators over an ensemble of 8 preprocessing membe
 
 `fit` runs each member's training rows through the model once and keeps what the test rows read from them, so `predict` runs only the test rows (`tabsil.inference.ensemble`). The settings come with the weights (`config.json` `inference`, `tabsil.recipe.INFERENCE`); tabsil 0.1.0 used standard members only, no count columns and temperature 0.9.
 
-### Forecasting
+### Forecasting, outlier detection, imputation and treatment effects
 
-(tabsil ≥ 0.1.2) `TabSilForecaster` forecasts time series zero-shot with the regression model, as TabPFN-TS does: each time step becomes a table row of time features (running index, calendar sin/cos, FFT-detected seasonal sin/cos; no lags), and the horizon is predicted in one pass from the series' own past. The quantiles come from the regressor's predictive distribution; the point forecast is its median.
+(tabsil ≥ 0.1.2) Zero-shot with the same weights ([results](https://github.com/Aiden-Jeon/tabsil/blob/main/docs/task-results.md)). Defaults, missing value handling and the differences from TabPFN-TS, the official TabPFN extension and EconML are in the module docstrings: `src/tabsil/forecast.py`, `unsupervised.py` and `causal.py`.
 
 ```python
-from tabsil import TabSilForecaster
+from tabsil import TabSilCATE, TabSilForecaster, TabSilUnsupervised
 
+# Forecasting, as TabPFN-TS: time features in (index, calendar, FFT-detected seasonality; no lags),
+# quantiles out. Each series is fit on its last 4,096 rows (`max_context_length`).
 # context: one row per (item_id, timestamp) with a target column; other columns are covariates
 fc = TabSilForecaster(device="cuda").fit(context)
 pred = fc.predict(24)  # item_id, timestamp, predictions, "0.1" ... "0.9"
 pred = fc.predict(future=future, quantile_levels=[0.05, 0.5, 0.95])  # known covariates in `future`
-```
 
-Each series is fit on its last 4,096 rows (`max_context_length`; `None` allows up to the supported 1,000,000 rows). See `src/tabsil/forecast.py` for the missing-value and constant-series handling.
-
-### Outlier detection
-
-(tabsil ≥ 0.1.2) Without labels, `TabSilUnsupervised` gives each row a log density and an outlier score (higher = more anomalous). It predicts each column from the columns before it with the same model (regression buckets for numeric columns, class probabilities for categorical ones), chains the conditionals along 10 random column orders, and averages them, as the official TabPFN extension does ([results](#outlier-detection-adbench)):
-
-```python
-from tabsil import TabSilUnsupervised
-
+# Outlier detection without labels: a log density per row from column conditionals chained along
+# 10 random column orders (`n_permutations`; one fit and prediction per column and order), as the
+# official TabPFN extension does.
 model = TabSilUnsupervised(device="cuda").fit(X_train)  # unlabeled rows: the context
-scores = model.outlier_score(X_test)  # = -model.log_density(X_test)
-```
+scores = model.outlier_score(X_test)  # = -model.log_density(X_test); higher = more anomalous
 
-The cost is one fit and prediction per column and order (`n_permutations`, default 10). `model.conditional(X, target, given)` returns the distribution of one column given others, the part imputation builds on (and synthetic data can later).
-
-### Imputation
-
-(tabsil ≥ 0.1.2) `TabSilUnsupervised.impute` fills missing values (NaN) from the same conditionals: each column with a missing value is predicted for the rows missing it from all other columns, the row's other missing cells left missing, so there is one fit per column with a missing value ([results](#imputation-openml-mcar)). Numeric cells get the predictive mean (`strategy="median"` for the median), categorical cells the most probable class; `n_samples` draws from the distributions instead (multiple imputation):
-
-```python
+# Imputation from the same conditionals, one fit per column with a missing value: the predictive
+# mean (`strategy="median"` for the median) for numeric cells, the most probable class for
+# categorical ones. Without `categorical_features`, columns with at most 40 distinct values and
+# more than 10 rows per value are treated as categorical.
 model = TabSilUnsupervised(categorical_features=[3, 5], device="cuda").fit(X)  # X with NaN
 X_filled = model.impute(X)  # observed cells unchanged
-draws = model.impute(X, n_samples=5)  # (5, n, d)
-```
+draws = model.impute(X, n_samples=5)  # multiple imputation: (5, n, d)
 
-Fit on the table to impute itself or on other rows. Without `categorical_features`, columns with at most 40 distinct values and more than 10 rows per value are treated as categorical. The differences from the official TabPFN extension's `impute` are in the docstring of `src/tabsil/unsupervised.py`.
-
-### Treatment effects
-
-(tabsil ≥ 0.1.2) `TabSilCATE` estimates conditional average treatment effects of a binary treatment on a continuous outcome from observational data, with TabSil as the base learner of a meta-learner (zero-shot, the v1 weights): S-, T-, X- or DR-learner (`learner="s" | "t" | "x" | "dr"`). Outcome models are `TabSilRegressor`, propensity scores `TabSilClassifier`.
-
-```python
-from tabsil import TabSilCATE
-
+# Treatment effects of a binary treatment on a continuous outcome: a meta-learner with TabSil as
+# the base learner (`learner="s" | "t" | "x" | "dr"`; `regressor=` and `classifier=` take any
+# scikit-learn estimator instead of TabSil).
 est = TabSilCATE(device="cuda").fit(X, treatment, y)  # the S-learner
 tau = est.effect(X_test)  # CATE per row
 ate = est.ate()  # mean CATE over the training rows
 ```
-
-`regressor=` / `classifier=` take any scikit-learn estimator instead of TabSil. See `src/tabsil/causal.py` for the learners and where they differ from EconML's.
 
 ## Model
 
@@ -256,33 +170,12 @@ Code: `src/tabsil/models/column_row_transformer.py`; the structure and inference
 
 ## Training
 
-Synthetic tables come from the TabICLv2 graph SCM prior (`tabicl` package) with at most 100 features. Training follows the TabICLv2 three-stage curriculum, with Muon on every parameter, batch 256 on 32 GPUs, and 1% warmup then cosine decay in each stage:
-
-| Stage | Rows per table (train share) | Steps | Peak lr | Starts from |
-|---|---|---|---|---|
-| 1 | 1,024 (30–90%) | 250K | 8e-4 | scratch |
-| 2 | 400–10,240 (80%) | 20K | 1e-4 | stage 1 weights |
-| 3 | 400–60,000 (80%) | 5K | 2e-5 | stage 2 weights |
-
-The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps (`--steps`; warmup and cosine follow the stage length): a separate 250K stage-1 run, measured up to 225K, did no better than 150K on TabArena-Lite (measured with `training/scripts/eval.py`, without bagging). Their intermediate stages are branches of the Hub repo (`stage1-150k`, `stage2-10k`); see the [model card](https://huggingface.co/aiden-jeon/tabsil).
-
-```bash
-# local check (CPU, about a minute)
-uv run --package tabsil-train python training/scripts/train.py --config-name smoke
-
-# full training: Databricks AI Runtime job specs in training/scripts/train.yaml
-uv run --package tabsil-train python training/scripts/train.py --config-name stage1
-uv run --package tabsil-train python training/scripts/train.py --config-name stage2 --init-run-id <stage 1 run>
-uv run --package tabsil-train python training/scripts/train.py --config-name stage3 --init-run-id <stage 2 run>
-
-# the v1 weights: the same stages with --steps 150000 / 10000 / 2000
-```
-
-Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a set of strings, so its tables depend on the hash seed.
+TabSil is trained on synthetic tables from the TabICLv2 graph SCM prior, in the TabICLv2 three-stage curriculum. The stage table, the commands to train it and to reproduce the published v1 weights, and the Hub branches of the intermediate stages are in [`training/README.md`](https://github.com/Aiden-Jeon/tabsil/blob/main/training/README.md#training).
 
 ## Evaluation
 
-`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite), and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration), forecasting on 10 fev-bench tasks (`--suite fev`, job spec `training/scripts/eval_fev.yaml`), unsupervised outlier detection on 12 ADBench tables (`--suite adbench`, job spec in `training/scripts/eval.yaml`), treatment effects on IHDP and ACIC 2016 (`--suite causal`, job spec `training/scripts/eval_causal.yaml`), and missing value imputation on 10 OpenML tables (`--suite impute`, job spec `training/scripts/eval_impute.yaml`, needs the `impute` extra).
+`training/scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model on AMLB (classification / CTR23 regression), TabArena(-Lite) and BeyondArena, plus uncertainty metrics (CRPS, coverage, PIT, calibration) and the task suites `--suite fev | adbench | causal | impute`. The suites, their job specs and environments are in [`training/README.md`](https://github.com/Aiden-Jeon/tabsil/blob/main/training/README.md#evaluation).
+
 Train and inference time are reported as on the TabArena leaderboard: seconds per 1K train rows (fit) and per 1K test rows (predict), averaged over each dataset's splits, then the median over datasets. In the arenas they appear next to the baselines on the same splits (`summary.json`, `comparison.csv`).
 
 The official-protocol TabArena-Lite result in [Results](#results) is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The arena suites of `training/scripts/eval.py` fit each split once without bagging, a quicker check used to compare checkpoints; their Elo is not the official one.

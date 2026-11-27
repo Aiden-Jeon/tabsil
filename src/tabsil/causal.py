@@ -65,7 +65,7 @@ from torch import nn
 
 LEARNERS = ("s", "t", "x", "dr")
 # The S-learner: the best of the four on IHDP and second on ACIC 2016 (best average rank,
-# README "Treatment effects"), and the cheapest (one outcome fit)
+# docs/task-results.md "Treatment effects"), and the cheapest (one outcome fit)
 DEFAULT_LEARNER = "s"
 DEFAULT_N_FOLDS = 5
 DEFAULT_PROPENSITY_CLIP = 0.01

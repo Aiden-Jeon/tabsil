@@ -15,7 +15,7 @@ Usage (needs ``rsvg-convert`` on PATH, e.g. ``brew install librsvg``):
 
     curl -L -o /tmp/DMSans.ttf \
       "https://github.com/google/fonts/raw/main/ofl/dmsans/DMSans%5Bopsz,wght%5D.ttf"
-    uv run assets/make_assets.py --font /tmp/DMSans.ttf
+    uv run assets/logo/make_assets.py --font /tmp/DMSans.ttf
 """
 
 import argparse
@@ -163,7 +163,7 @@ def main():
     parser.add_argument(
         "--card-images",
         type=pathlib.Path,
-        default=here.parent / "training" / "hub" / "tabsil" / "images",
+        default=here.resolve().parents[1] / "training" / "hub" / "tabsil" / "images",
         help="model card images folder that receives tabsil-banner.png",
     )
     args = parser.parse_args()

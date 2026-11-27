@@ -19,9 +19,61 @@ From the repository root:
 uv sync --package tabsil-train
 uv run --package tabsil-train pytest training/tests
 PYTHONHASHSEED=0 uv run --package tabsil-train python training/scripts/train.py --config-name smoke
-
-# TabArena / BeyondArena (pandas 2.3, without the dev group)
-uv sync --package tabsil-train --no-dev --extra arena --group arena-dev
 ```
 
 The Databricks job specs upload `src/` and `training/src/` and put them on `PYTHONPATH`; their `environment.dependencies` add what the AI v6 base environment does not have (`tabicl` for training, `openml` for AMLB, `tabarena` for the arenas).
+
+## Environments
+
+Each `uv sync` makes the environment match that command exactly (it removes what the command does not install). From the repository root:
+
+```bash
+uv sync                           # tabsil + dev tools, Jupyter (inference tests: uv run pytest tests)
+uv sync --all-packages            # tabsil + tabsil-train (training, priors, AMLB evaluation) + dev tools, Jupyter
+uv sync --package tabsil-train    # tabsil-train and its test tools only (tests: uv run --package tabsil-train pytest training/tests)
+uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
+uv sync --package tabsil-train --no-dev --extra fev --group arena-dev     # fev-bench forecasting evaluation
+uv sync --package tabsil-train --extra causal                             # treatment effect evaluation (EconML baselines)
+uv sync --all-packages --extra impute                                     # + the TabPFN baselines of the imputation evaluation
+```
+
+`--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3). The `fev` extra (fev 0.10.0) needs `huggingface-hub<2`, so it is installed without the dev groups too.
+
+## Training
+
+Synthetic tables come from the TabICLv2 graph SCM prior (`tabicl` package) with at most 100 features. Training follows the TabICLv2 three-stage curriculum, with Muon on every parameter, batch 256 on 32 GPUs, and 1% warmup then cosine decay in each stage:
+
+| Stage | Rows per table (train share) | Steps | Peak lr | Starts from |
+|---|---|---|---|---|
+| 1 | 1,024 (30–90%) | 250K | 8e-4 | scratch |
+| 2 | 400–10,240 (80%) | 20K | 1e-4 | stage 1 weights |
+| 3 | 400–60,000 (80%) | 5K | 2e-5 | stage 2 weights |
+
+The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps (`--steps`; warmup and cosine follow the stage length): a separate 250K stage-1 run, measured up to 225K, did no better than 150K on TabArena-Lite (measured with `training/scripts/eval.py`, without bagging). Their intermediate stages are branches of the Hub repo (`stage1-150k`, `stage2-10k`); see the [model card](https://huggingface.co/aiden-jeon/tabsil).
+
+```bash
+# local check (CPU, about a minute)
+uv run --package tabsil-train python training/scripts/train.py --config-name smoke
+
+# full training: Databricks AI Runtime job specs in training/scripts/train.yaml
+uv run --package tabsil-train python training/scripts/train.py --config-name stage1
+uv run --package tabsil-train python training/scripts/train.py --config-name stage2 --init-run-id <stage 1 run>
+uv run --package tabsil-train python training/scripts/train.py --config-name stage3 --init-run-id <stage 2 run>
+
+# the v1 weights: the same stages with --steps 150000 / 10000 / 2000
+```
+
+Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a set of strings, so its tables depend on the hash seed.
+
+## Evaluation
+
+`scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model; its module docstring describes every suite, its options and what it needs. The suites and their Databricks AI Runtime job specs (in `scripts/`):
+
+| Suite (`--suite`) | Benchmark | Job spec |
+|---|---|---|
+| `all`, `classification`, `regression` | AMLB (classification / CTR23 regression); `--uncertainty` adds CRPS, coverage, PIT and calibration metrics | `eval.yaml` |
+| `tabarena-lite`, `beyondarena`, `beyondarena-lite` | TabArena-Lite and BeyondArena (the `arena` extra) | `eval_arena.yaml` |
+| `fev` | forecasting on 10 fev-bench tasks (the `fev` extra) | `eval_fev.yaml` |
+| `adbench` | unsupervised outlier detection on 12 ADBench tables | `eval.yaml` |
+| `causal` | treatment effects on IHDP and ACIC 2016 (the `causal` extra, for the EconML baselines) | `eval_causal.yaml` |
+| `impute` | missing value imputation on 10 OpenML tables (the `impute` extra) | `eval_impute.yaml` |
