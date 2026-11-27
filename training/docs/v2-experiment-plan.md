@@ -1,6 +1,6 @@
 # v2 experiment plan
 
-Status: plan, in progress. Results are in [v2-experiment-results.md](v2-experiment-results.md) (phase 0 done 2026-11-26; N10 and R10 of phase 1A done 2026-11-27, L20 proposed and not launched). Nothing was trained or evaluated for this document itself. It re-checks [v2-task-priors.md](v2-task-priors.md) and [v2-scaling.md](v2-scaling.md) against MLflow, the code and the primary sources (2026-11-26), and replaces their experiment plans. Every run below needs approval before it starts.
+Status: plan, in progress. Results are in [v2-experiment-results.md](v2-experiment-results.md) (phase 0 done 2026-11-26; N10 and R10 of phase 1A done 2026-11-27, L20 running since 2026-11-27; GPU cost measured 2026-11-27). Nothing was trained or evaluated for this document itself. It re-checks [v2-task-priors.md](v2-task-priors.md) and [v2-scaling.md](v2-scaling.md) against MLflow, the code and the primary sources (2026-11-26), and replaces their experiment plans. Every run below needs approval before it starts.
 
 ## Summary
 
@@ -22,7 +22,7 @@ The plan therefore:
 
 The recommended budget is about 4,350 H100-h. A lean version is about 2,690 (§5).
 
-**Update 2026-11-27.** Phases 2 to 5 were redesigned from measured GPU costs (§4, "Cost basis for phases 2 to 5"; [v2-experiment-results.md](v2-experiment-results.md), "GPU cost"). A smaller model saves little compute, a run costs less per step on fewer GPUs, and stage 3 has shown no effect that the suites can measure. The recommended options are no size experiment, v2's stage 1 on 16 H100, its stage 2 on one node at micro batch 2, and no stage 3. They cost about 930-1,110 H100-h where the plan had 2,115-2,422. The whole plan then comes to about 3,190-3,370, against about 4,380-4,680 with phases 2 to 5 as planned (§5). They are proposals until the user decides (§7).
+**Update 2026-11-27.** Phases 2 to 5 were redesigned from measured GPU costs (§4, "Cost basis for phases 2 to 5"; [v2-experiment-results.md](v2-experiment-results.md), "GPU cost"). A smaller model saves little compute, a run costs less per step on fewer GPUs, and stage 3 has shown no effect that the suites can measure. The user decided on 2026-11-27: no size experiment (v2 keeps v1's size), v2's stage 1 on one node (8 H100), and the garbage-collector change to the training loop before it (§7). Still open, with the recommended option: stage 2 on one node at micro batch 2, no stage 3, and stage-2 branches for later screens. With these, phases 2 to 5 cost about 800-985 H100-h where the plan had 2,115-2,422 (760-930 once the collector change is in). The whole plan then comes to about 3,060-3,245, against about 4,380-4,680 with phases 2 to 5 as planned (§5).
 
 ## 1. What was checked
 
@@ -208,6 +208,7 @@ Stage 2 from `aiden-jeon/tabsil@stage1-150k`, as #14's experiment A. It needs no
 - N10 against `stage2-10k`: #14's gain repeats if G is at most 0.995 and the four named datasets have a mean ratio of at most 0.97, the criterion #14 used.
 - R10 against the mean of #14's run and N10, and L20 against the 10K run of its prior, use the branch rule of §3.
 - The result fixes the stage-2 prior and length of phase 4. The best run is also a release candidate that does not depend on phases 1B to 3.
+- **Update 2026-11-27: L20 runs on 8 H100 at micro batch 2**, not on 32 H100 at micro batch 1 as the table and the command below have it (`tabsil-v2-s2-l20`, MLflow `893293ed7d8d419780be2d178b8cc713`, started 12:28 UTC). The user chose this from the GPU cost measurements: about 360 H100-h in 44 to 46 h instead of 614 in 19 h. Its controls ran at micro batch 1 on 32 H100 (§7).
 
 ```bash
 # N10 (R10: TABSIL_PRIOR_TYPE=graph_scm_realism, TABSIL_SEED=0; L20: TABSIL_STEPS=20000, about 19 h, so timeout 1440 or two chunks)
@@ -244,7 +245,7 @@ From scratch, stage 1 only, 30K steps, batch 256, `--emsize 128` (XS, 56M). Each
 
 ### Cost basis for phases 2 to 5 (2026-11-27)
 
-Phases 2 to 5 below were redesigned on 2026-11-27, after a phase-1B run turned out to cost 124 H100-h where the plan had 56. The costs were measured with short timing jobs ([v2-experiment-results.md](v2-experiment-results.md), "GPU cost"). The option marked "recommended" in each phase is a proposal. The user decides (§7), and each phase is still approved on the results of the one before it.
+Phases 2 to 5 below were redesigned on 2026-11-27, after a phase-1B run turned out to cost 124 H100-h where the plan had 56. The costs were measured with short timing jobs ([v2-experiment-results.md](v2-experiment-results.md), "GPU cost"). The option marked "recommended" in each phase is a proposal, and a phase says so where the user has decided (§7). Each phase is still approved on the results of the one before it.
 
 Cost per 1K steps at batch 256, with the code as it is. A whole run costs 3-4% more for its start, validation and checkpoints.
 
@@ -268,15 +269,15 @@ What the measurements change:
 - **A smaller model saves little.** XS costs 0.66 of M per step in stage 1 at its cheapest setting, and S 0.97. The plan's FLOPs ratios were 0.29 and 0.60. The forward, the optimizer step and the waiting take the same time at every size, and only the backward shrinks.
 - **A run costs less per step on fewer GPUs.** Every GPU waits for the slowest one at each step, and on more GPUs each has fewer tables to even its work out. Stage 2 costs 21.5 H100-h per 1K steps on 8 H100 and 29.3 on 32. Stage 1 costs 3.98 and 6.31. Fewer GPUs take longer, so each phase below states both.
 - **The micro batch is at its limit for M and S in stage 1** (4: 8 runs out of memory). XS takes 8. Stage 2 takes 2, which saves 18%.
-- **Two changes to the training code would lower every cost** (§8): freezing the garbage collector's long-lived objects (4.6% in stage 1 and 9-10% in stage 2 on 8 H100, measured; more on more GPUs) and giving every GPU of a step the same work (estimated). The costs below are without them, unless a row says so.
+- **Two changes to the training code would lower every cost** (§8): freezing the garbage collector's long-lived objects (4.6% in stage 1 and 9-10% in stage 2 on 8 H100, measured; more on more GPUs) and giving every GPU of a step the same work (estimated). The first was decided on 2026-11-27 and is made before phase 3. The second is open. The costs below are without them, unless a row says so.
 
 How runs are set up from here on:
 
-- One node (8 H100) per run where the wall time allows it, and 16 H100 where a run is on the critical path. 32 H100 costs 50-70% more than one node for the same steps (phases 3 and 4), so it is for runs whose wall time matters more than that.
+- One node (8 H100) per run. L20 and phase 3 run on one node by the user's decisions of 2026-11-27. 16 or 32 H100 are for a run whose wall time matters more than its cost: 32 H100 costs 50-70% more than one node for the same steps (phases 3 and 4).
 - Stage 1 at micro batch 4 (M) or 8 with `TABSIL_PREFETCH_FACTOR=16` (XS). Stage 2 on one node at micro batch 2 with `TABSIL_PREFETCH_FACTOR=16`.
 - A control and its arm use the same GPU count and micro batch: both change which tables a run sees, and the micro batch also the number of table sizes per step (results, "What a larger micro batch changes").
 
-### Phase 2: model size at equal compute (redesigned 2026-11-27: skip recommended; was 570 H100-h)
+### Phase 2: model size at equal compute (redesigned 2026-11-27: skipped, decided; was 570 H100-h)
 
 The original design (2026-11-26) gave each size about 190 H100-h of stage 1 with its own cosine schedule and priced the sizes by FLOPs, so that XS would get 3.3 times M's steps. Measured, equal compute is M 48K, S 49K and XS 72K steps: XS gets 1.5 times M's steps and S the same as M.
 
@@ -288,13 +289,15 @@ The original design (2026-11-26) gave each size about 190 H100-h of stage 1 with
 
 **Recommended: C.** B if a smaller v2 is wanted for its inference cost.
 
+**Decided 2026-11-27: C.** The user chose to skip phase 2, and v2 keeps v1's size. B stays possible later as a question about the inference cost, with its own approval.
+
 - **The reason for the phase is mostly gone.** A smaller model was to buy more training at the same compute (§1.3). It buys 1.5 times the steps in stage 1, not 3.3, and in stage 2 XS costs 0.79-0.87 of M.
 - **The rule can hardly be met.** A smaller size is chosen only at G ≤ 0.98 against M (kept from the original design). 3.3 times the steps were worth 5% on small tables (§1.2), so 1.5 times is worth 1-2%. Against that stands what the size itself costs: LimiX-2 loses 45.7 Elo per halving at a fixed recipe (§1, row 3), about 2% for XS.
 - **A tie keeps M**, so only an unlikely outcome would change the plan.
 - **What B answers is a product question**: how much accuracy a model with a quarter of the parameters gives up for its speed at inference. It can run at any time after 1B and does not block phase 3.
 - **Condition for B.** Two XS seeds can show 2% only if 1B's seeds of the chosen recipe lie within about 1% of each other (G between two seeds). If they do not, B is not run.
 
-### Phase 3: v2 stage 1 (redesigned 2026-11-27: 620-745 H100-h; was 950)
+### Phase 3: v2 stage 1 (redesigned 2026-11-27: 620 H100-h on one node, decided; was 950)
 
 From scratch with the recipe and stage-1 prior that 1B adopts, at v1's size, for 150K steps. The H100-h below hold the 3-4% for the start, validation and checkpoints.
 
@@ -308,14 +311,15 @@ With the collector change of §8: A 592 H100-h in 74 h (measured), B about 680 i
 
 **Recommended: B, if a 300-step timing run on 16 H100 (5 H100-h) gives at most 1.15 s per step. Otherwise A.**
 
-- **Phase 4 needs L20's verdict as well as these weights.** L20 runs on one node until about 2026-11-29 09:00 UTC and is evaluated after that. If phase 3 starts on 1B's verdict (2026-11-28 00:10 UTC), C ends about 11-29 06:00 and then waits for L20, B ends about 11-30 00:00 and A about 12-01 05:00.
-- **B buys 30 h for 125 H100-h against A.** C's further 205 H100-h buy 12 h at most.
-- **A is the choice if the cost comes first**, as it did for L20 (one node instead of four, decided 2026-11-27).
+**Decided 2026-11-27: A, not the recommended B.** The user chose one node: about 620 H100-h in 77 h as the code is, and about 590 in 74 h with the collector change, which is made first (§7, §8). The cost came first, as it did for L20. The timing run on 16 H100 is not made.
+
+- **What A gives up is 30 h against B and 47 h against C.** If phase 3 starts on 1B's verdict (2026-11-28 00:10 UTC), A ends about 12-01 05:00 UTC. B would end about 11-30 00:00 and C about 11-29 06:00.
+- **Phase 4 needs L20's verdict as well as these weights.** L20 runs on one node until about 2026-11-29 09:00 UTC and is evaluated after that, so with A phase 4 starts about two days after L20's verdict.
+- **Phase 3 also waits for the collector change**, which is implemented, measured and reviewed in the worktree `v2-gc-freeze` before it is merged.
 - **Chunks.** `TABSIL_STOP_STEP` and `TABSIL_RESUME_RUN_ID`, each chunk within the job timeout used so far (22-24 h).
 - **A first check after 5K steps (about 25 H100-h).** The reference validation loss is set against 1B's runs of the same recipe at 5K steps, where both schedules are still near their peak lr. A loss outside 1B's range by more than a few percent stops the run before the rest is spent.
 - **Gate, unchanged.** On the capped evaluation, G against `stage1-150k` is at most 1.00. A v2 stage 1 that is worse than v1's stops here, and the best run of 1A stays the candidate.
 - **Not proposed: a longer stage 1.** The 950 H100-h of the original estimate would now pay for 230K steps on one node. The evidence for more stage-1 steps is weak (§2), so the saving is kept.
-- **If phase 2 runs and picks XS**, 150K steps cost about 410 H100-h on one node (49 h), and equal compute to A is 228K steps.
 
 ### Phase 4: v2 stage 2 (redesigned 2026-11-27: 182 H100-h for 10K steps, 364 for 20K; was 307-614)
 
@@ -332,12 +336,12 @@ Per 10K steps (twice for 20K), with the 3-4% for the start, validation and check
 
 With the collector change of §8, A is 169 H100-h in 21 h (measured).
 
-**Recommended: A.** C if 20K steps are chosen and 46 h are too long.
+**Recommended: A.** C if 20K steps are chosen and 46 h are too long. Not decided yet.
 
 - **A costs 60% of D.** On one node a GPU has 32 tables per step instead of 8, so the GPUs' work evens out, and micro batch 2 spreads the fixed cost of a forward over two tables.
 - **Micro batch 2 is a change to the recipe.** A step has 128 table sizes instead of 256. The tables' distribution and every table's weight are the same (results, "What a larger micro batch changes"). 1A's runs and the noise ν were measured at micro batch 1 on 32 H100. Option B keeps micro batch 1 for 22% more.
 - **Memory.** Micro batch 2 peaks at 58.7 GB on the largest stage-2 table, of 85 GB. Micro batch 4 does not fit.
-- **L20 runs option A's setup for 20K steps** (8 H100 at micro batch 2, decided 2026-11-27 from these measurements, about 350 H100-h in 44 h). Its step time and memory over a whole run are the check of this cost.
+- **L20 runs option A's setup for 20K steps**, without the prefetch setting (8 H100 at micro batch 2, decided 2026-11-27 from these measurements, MLflow `893293ed7d8d419780be2d178b8cc713`, started 2026-11-27 12:28 UTC, about 360 H100-h in 44 to 46 h). Its step time and memory over a whole run are the check of this cost.
 - **Phase 6's branches** follow the same setup, at about 182 H100-h per 10K steps instead of 307. A control and its arms use the same GPU count and micro batch.
 
 ### Phase 5: stage 3 and release (redesigned 2026-11-27: no stage 3 by default; was 288 H100-h)
@@ -351,7 +355,7 @@ With the collector change of §8, A is 169 H100-h in 21 h (measured).
 | B. 1K steps on one node, judged on TabArena's 15 datasets above 10K rows and on BeyondArena | about 95 (estimate), 12 h | a direct test on v2's weights | — |
 | C. As planned: 2K steps on 32 H100 | 288 | v1's recipe unchanged | — |
 
-**Recommended: A, with B kept open.** Stage 3 continues from the stage-2 weights, so it can be added after the release evaluation without repeating anything. B is run if that evaluation shows v2 behind v1 on the tables above 10K rows by more than the noise.
+**Recommended: A, with B kept open. Not decided yet.** Stage 3 continues from the stage-2 weights, so it can be added after the release evaluation without repeating anything. B is run if that evaluation shows v2 behind v1 on the tables above 10K rows by more than the noise.
 
 - **Release evaluation, unchanged**, against v1 at the same tabsil version: the full TabArena with the official protocol, AMLB, and the four task suites as guards (fev-bench, ADBench, the imputation suite, IHDP and ACIC). As before, evaluations are not in the totals.
 
@@ -367,7 +371,7 @@ Phase 1B resolves about 2% with 7 runs of 30K steps at v1's size (9 before PS1 w
 | 2 control and 2 arm seeds first, the third of each only if both arm seeds beat both controls | 495, up to 745 | about 2% | — (the rule's p of 0.05 needs all six) |
 | Stage-2 branches from one checkpoint on one node: control, its repeat and the arm | 545 for 10K steps each; 182 with a control and a repeat that exist | about 0.6% (ν 0.003, phase 1A) | the change can be switched on in stage 2. ν was measured at micro batch 1 on 32 H100 and is measured again by the repeat |
 
-**Recommended: stage-2 branches for every question they can answer** (prior parts, table sizes, stage-2 length and lr, the task priors of phase 6). They resolve three times finer for the same cost. A screen from scratch is kept for what a branch cannot test (the optimizer, the size): on one node per run, with 2 + 2 seeds first, and at 20K steps if 1B's logs allow it.
+**Recommended, not decided yet: stage-2 branches for every question they can answer** (prior parts, table sizes, stage-2 length and lr, the task priors of phase 6). They resolve three times finer for the same cost. A screen from scratch is kept for what a branch cannot test (the optimizer, the size): on one node per run, with 2 + 2 seeds first, and at 20K steps if 1B's logs allow it.
 
 - **What sets the cost of a screen from scratch** is the spread between seeds, about 1% (§1.1), not the evaluation. For a fixed resolution the cost is proportional to the cost of a run times the squared spread, so a design has to lower one of the two.
 - **Not known: the noise between two continuations of one stage-1 checkpoint.** If it is as small as in stage 2, stage-1 questions about the prior could be branched too, at about 40 H100-h per 10K steps. Two such runs (80 H100-h) would measure it. Not proposed for now.
@@ -387,26 +391,26 @@ Each of these is a stage-2 branch from the v2 stage-1 weights, at 307 H100-h per
 | Lean | phase 0; 1A without L20; 1B with 9 runs; no phase 2 (v1's size); phase 3; phase 4 at 10K; phase 5 | 2,689 |
 | Recommended | phases 0 to 5 as written, phase 4 at 20K | 4,350 |
 
-Budget after the redesign of 2026-11-27, in H100-h. The tiers above are the plan of 2026-11-26.
+Budget after the redesign of 2026-11-27, in H100-h. The tiers above are the plan of 2026-11-26. The last column holds the decided option where one is decided, and the recommended one otherwise.
 
-| Phase | Plan (recommended tier) | Spent or committed by 2026-11-27 | Redesign, recommended options |
+| Phase | Plan (recommended tier) | Spent or committed by 2026-11-27 | Redesign |
 |---|---|---|---|
 | 0 | 30 | about 30, done | — |
-| 1A | 1,228 | N10 305 and R10 450, done. L20 about 360 on 8 H100 at micro batch 2 (decided 2026-11-27; 614 on 32 H100 before) | — |
+| 1A | 1,228 | N10 305 and R10 450, done. L20 about 360, running on 8 H100 at micro batch 2 (614 on 32 H100 as planned) | — |
 | 1B | 500-670 | about 940: 7 runs at v1's size at about 124 each and the two PS1 runs that were stopped. Running | — |
 | GPU cost measurements | — | 29, done | — |
 | Phases 0 to 1B | 1,928 | about 2,230: about 1,250 spent by 2026-11-27 08:00 UTC, with the evaluations, smoke runs and diagnostics that the rows above leave out, about 620 left of 1B and about 360 for L20 | — |
-| 2 | 570 | — | 0 (skip). 240 for option B |
-| 3 | 950 | — | 745 on 16 H100. 620 on 8 H100 |
-| 4 | 307 (10K steps) to 614 (20K) | — | 182 to 364 on 8 H100 at micro batch 2 |
-| 5 | 288 | — | 0 (no stage 3). About 95 for option B |
-| Phases 2 to 5 | 2,115-2,422 | — | 930-1,110 |
-| Total | 4,350 | | about 3,190-3,370 |
+| 2 | 570 | — | 0. Skipped, decided 2026-11-27 |
+| 3 | 950 | — | 620 on 8 H100, decided 2026-11-27. About 590 with the collector change, which is decided too |
+| 4 | 307 (10K steps) to 614 (20K) | — | 182 to 364 on 8 H100 at micro batch 2, recommended and open. 169 to 338 with the collector change |
+| 5 | 288 | — | 0 (no stage 3), recommended and open. About 95 for option B |
+| Phases 2 to 5 | 2,115-2,422 | — | 800-985. 760-930 with the collector change |
+| Total | 4,350 | | about 3,060-3,245. About 3,020-3,190 with the collector change |
 
 - With phases 2 to 5 as planned, the total would be about 4,380-4,680.
-- The cheapest set, with phase 3 on one node, is 800-985 for phases 2 to 5.
-- With the collector change of §8 the recommended set is about 850-1,020.
-- What the redesign gives up: a measured size curve (phase 2), whatever stage 3 adds on long tables, which was 0.1% for v1 and within the noise (phase 5), and wall time against runs on 32 H100: 17 h in phase 3 and 13 h per 10K steps in phase 4.
+- The collector change's 592 and 169 are measured through the probe with one `gc.freeze()` (results, "Collector pauses"). The change as it is implemented is measured again before phase 3.
+- The recommended set before the decisions had phase 3 on 16 H100 (about 745): 930-1,110 for phases 2 to 5.
+- What the redesign gives up: a measured size curve (phase 2), whatever stage 3 adds on long tables, which was 0.1% for v1 and within the noise (phase 5), and wall time against runs on 32 H100: 47 h in phase 3 and 13 h per 10K steps in phase 4.
 
 - The earlier plans added up to 2.7-4.3K H100-h: phases 1 and 2 of [v2-task-priors.md](v2-task-priors.md) at 0.95-1.52K, the final run at 1.55K, and steps A and B of [v2-scaling.md](v2-scaling.md) at 0.17-1.19K.
 - What the measured levers support: #14's stage-2 prior gave about 1%, and the second half of stage 2 gave less than 1%. Together that is about the distance to TabPFN-3.5 (default) in §1.3, which is 2%, most of it on one dataset.
@@ -429,8 +433,8 @@ Risks:
 - **Decisions still read TabArena-Lite.** The development suite and the untouched BeyondArena limit the overfitting, but the 51 datasets have been used for every choice so far. Kumo states the same about its own development.
 - **PS1 changes several things at once.** If it does harm, v2 falls back to the v1 stage-1 prior with the stage-2 parts from 1A.
 - **The size choice rests on one compute point.**
-- **(2026-11-27) The costs on 16 H100 are estimates.** The simulation behind them gives the measured step on 8 H100 and v1's record on 32 H100 within 3% in stage 1, and is 4-8% low in stage 2. A 300-step timing run comes before a run on 16 H100 is committed.
-- **(2026-11-27) Without phase 2, v2's size rests on other models' evidence** (§1.3), not on a TabSil run.
+- **(2026-11-27) The costs on 16 H100 are estimates.** The simulation behind them gives the measured step on 8 H100 and v1's record on 32 H100 within 3% in stage 1, and is 4-8% low in stage 2. No run on 16 H100 is decided. A 300-step timing run comes before one is.
+- **(2026-11-27) Without phase 2, v2's size rests on other models' evidence** (§1.3), not on a TabSil run. Phase 2 was skipped by the user's decision of 2026-11-27.
 - **(2026-11-27) Micro batch 2 in stage 2 halves the table sizes per step.** No run has compared it with micro batch 1.
 - **(2026-11-27) Without stage 3, v2 has seen no table above 10,240 rows.** v1's stage 3 did not change the error on such tables in TabArena. BeyondArena has not been looked at.
 - **(2026-11-27) L20 now differs from its controls in two things.** It runs 20K steps at micro batch 2 on 8 H100. #14's run and N10 ran 10K steps at micro batch 1 on 32 H100. Its G against them holds the length and the micro batch together. If L20 passes the branch rule, phase 4 takes both. If it does not, a 10K-step run at micro batch 2 (182 H100-h) is what separates the two.
@@ -442,13 +446,13 @@ Decisions for the user:
 4. Whether TabSil stays one model for both tasks. The plan keeps it and lists the test as optional.
 5. Whether the task priors wait for phase 6.
 
-Decisions from the redesign of 2026-11-27, open. The recommended option is first.
-6. Phase 2: skip it (0 H100-h), run XS against 1B's seeds (240), or run it as planned (570).
-7. Phase 3: 16 H100 after a timing check (about 745 H100-h, 47 h), 8 H100 (620, 77 h), or 32 H100 as v1 (950, 30 h).
-8. Phase 4: one node at micro batch 2 (182 H100-h and 23 h per 10K steps), one node at micro batch 1 (223, 28 h), or 32 H100 as N10 (305, 9.5 h). The length follows L20.
-9. Phase 5: no stage 3 (0), 1K steps on one node (about 95), or 2K steps on 32 H100 as v1 (288).
-10. The code changes of §8: the collector change before phase 3 (about 3 lines, the training result unchanged), and equal work per GPU (it changes which tables a run sees, and its effect is an estimate).
-11. Later screens: stage-2 branches on one node wherever they can answer the question, and screens from scratch at 20K steps if 1B's logs allow it.
+Decisions from the redesign of 2026-11-27. The decided ones carry the date. For the open ones the recommended option is first.
+6. Phase 2: **decided 2026-11-27, skipped.** v2 keeps v1's size. The other options were XS against 1B's seeds (240 H100-h) and the phase as planned (570).
+7. Phase 3: **decided 2026-11-27, 8 H100**: about 620 H100-h in 77 h, without the timing run on 16 H100. The recommendation was 16 H100 (about 745 H100-h, 47 h). 32 H100 as v1 is 950 in 30 h.
+8. Phase 4, open: one node at micro batch 2 (182 H100-h and 23 h per 10K steps), one node at micro batch 1 (223, 28 h), or 32 H100 as N10 (305, 9.5 h). The length follows L20.
+9. Phase 5, open: no stage 3 (0), 1K steps on one node (about 95), or 2K steps on 32 H100 as v1 (288).
+10. The code changes of §8. The collector change: **decided 2026-11-27, made before phase 3**, in the worktree `v2-gc-freeze` (implementation, tests, a GPU measurement and a review, then the merge to dev-v2). Equal work per GPU: open. It changes which tables a run sees, and its effect is an estimate.
+11. Later screens, open: stage-2 branches on one node wherever they can answer the question, and screens from scratch at 20K steps if 1B's logs allow it.
 
 ## 8. Code needed first
 
@@ -465,7 +469,7 @@ Decisions from the redesign of 2026-11-27, open. The recommended option is first
 
 ### Changes proposed by the cost measurements (2026-11-27)
 
-Not made. The evidence for each is in [v2-experiment-results.md](v2-experiment-results.md) ("Changes that need code").
+None is made yet. The first was decided on 2026-11-27 and is made before phase 3 in the worktree `v2-gc-freeze`. The others are proposals. The evidence for each is in [v2-experiment-results.md](v2-experiment-results.md) ("Changes that need code").
 
 | Change | For | Effect |
 |---|---|---|

@@ -255,6 +255,8 @@ The three runs against `stage2-10k` (the v1 prior), on 3 splits and the developm
 
 ### L20: proposal, not launched
 
+**Update 2026-11-27: launched, on another setup than this proposal.** The user chose 8 H100 at micro batch 2 from the GPU cost measurements ("GPU cost" below): `tabsil-v2-s2-l20` (`893293ed7d8d419780be2d178b8cc713`), started 12:28 UTC, 20K steps, seed 0, the other settings as N10. It costs about 360 H100-h in 44 to 46 h, instead of 614 in 19 h. Its controls ran at micro batch 1 on 32 H100, so its G against them holds the length and the micro batch together (plan §7).
+
 L20 is proposed on `graph_scm_hicard_missing`: stage 2 from `stage1-150k` for 20K steps, seed 0, the other settings as N10. It is 614 H100-h at 3.3 s per step (19.1 h on 32 H100, so `timeout_minutes=1440` or two chunks). Its control is the mean of #14's run and N10, and 20K steps are adopted for phase 4 if the pooled G is at most 0.9944 with a CI below 1 and no task more than 0.5% worse. The user decides before it runs.
 
 - **Why this prior.** It is the only one that passes the branch rule against the v1 prior pooled. R10 does not improve on it and costs more. It also has two 10K runs from the same code as controls, so L20's difference to them can be set against a measured ν. The v1 prior's `stage2-10k` is one run, written by minipfn's code.
@@ -485,7 +487,7 @@ Python's garbage collector stops each GPU's process for a full collection at int
 
 At micro batch 1 on 8 H100, the longest wait of a GPU for its tables is 1.14 s per step on average (0.89 s after the freeze), and 17% of steps have a wait above 0.3 s. The other GPUs wait for that GPU unless it would have finished early anyway. Rank 0 logs a wait of 0-5%. At micro batch 2 the longest wait is 0.17-0.28 s.
 
-The cause is the one of R10's slowness (phase 1A in PR #33, "Why R10 was slow"): the loader hands tables over in request order, and a table is requested 32 micro batches ahead per task. At micro batch 1 on 8 H100 that head start is one step of the task, about 19 s. `graph_scm_hicard_missing` has tables of 10 to 23 s (0.33% of them over 10 s), and a worker builds its four in a row. On 32 H100 the same 32 tables are 4 steps of the task (26 s), and N10 shows little of it (0.3% on rank 0). Micro batch 2 doubles the head start. With `TABSIL_PREFETCH_FACTOR=16` at micro batch 2 the longest data wait among the GPUs is 3 ms per step (`adfefd0f…`).
+The cause is the one of R10's slowness ("Why R10 was slow" in phase 1A above): the loader hands tables over in request order, and a table is requested 32 micro batches ahead per task. At micro batch 1 on 8 H100 that head start is one step of the task, about 19 s. `graph_scm_hicard_missing` has tables of 10 to 23 s (0.33% of them over 10 s), and a worker builds its four in a row. On 32 H100 the same 32 tables are 4 steps of the task (26 s), and N10 shows little of it (0.3% on rank 0). Micro batch 2 doubles the head start. With `TABSIL_PREFETCH_FACTOR=16` at micro batch 2 the longest data wait among the GPUs is 3 ms per step (`adfefd0f…`).
 
 ### GPUs per run
 
@@ -546,7 +548,7 @@ Stage 3 trains on tables of up to 60,000 rows. On the 15 TabArena datasets above
 
 ### Changes that need code
 
-None was made. Each is a proposal with what the measurements above say it would give.
+None was made here. Each is a proposal with what the measurements above say it would give. The first was decided on 2026-11-27 and is made before phase 3 in the worktree `v2-gc-freeze` (plan §7 and §8).
 
 | Change | Where | Expected effect | Evidence |
 |---|---|---|---|
