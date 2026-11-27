@@ -138,3 +138,20 @@ def run_architecture(params: dict[str, str]) -> dict:
             for name in names
         },
     }
+
+
+def weights_digest(model: nn.Module, borders: torch.Tensor | None = None) -> str:
+    """SHA-1 of a model's weights (every state_dict tensor's name, dtype, shape and bytes, in
+    name order) and of the regression borders: two checkpoints at different paths with the same
+    weights get the same digest, and new weights at an old path a new one."""
+    import hashlib
+
+    digest = hashlib.sha1()
+    tensors = sorted(model.state_dict().items())
+    if borders is not None:
+        tensors.append(("<borders>", torch.as_tensor(borders)))
+    for name, t in tensors:
+        t = t.detach().cpu().contiguous()
+        digest.update(f"{name}|{t.dtype}|{tuple(t.shape)}|".encode())
+        digest.update(t.reshape(-1).view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()

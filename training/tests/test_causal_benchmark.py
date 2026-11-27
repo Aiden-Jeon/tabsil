@@ -200,39 +200,60 @@ def _eval_script():
     return helpers.load_script("scripts/eval.py", "eval_script_causal")
 
 
-def _checkpoint(path):
-    import torch
-
-    from tabsil.models import randomize_zero_weights, save_checkpoint
-    from tabsil.models.column_row_transformer import (
-        ColumnRowTransformer,
-        ColumnRowTransformerConfig,
-    )
-
-    torch.manual_seed(0)
-    model = randomize_zero_weights(ColumnRowTransformer(ColumnRowTransformerConfig.tiny())).eval()
-    save_checkpoint(path, model, torch.linspace(-4, 4, 33))
-    return str(path)
-
-
 def test_eval_suite_causal_end_to_end(data_dir, tmp_path):
+    from train_helpers import tiny_checkpoint
+
+    from tabsil_train.hub import load_model, weights_digest
+
     script = _eval_script()
     out = tmp_path / "eval"
-    args = ["--suite", "causal", "--regressor-path", _checkpoint(tmp_path / "m.pt"),
-            "--datasets", "ihdp,acic2016", "--causal-realizations", "1-2",
+    model = tiny_checkpoint(tmp_path / "m.pt")
+    args = ["--suite", "causal", "--datasets", "ihdp,acic2016", "--causal-realizations", "1-2",
             "--causal-methods", "tabsil_t,tabsil_s", "--n-estimators", "2", "--device", "cpu",
             "--out-dir", str(out)]  # fmt: skip
-    script.main(args)
+    script.main([*args, "--regressor-path", model])
     summary = json.loads((out / "causal" / "summary.json").read_text())
     assert summary["planned_cells"] == 8 and summary["results"] == 8
     assert summary["missing_pct"] == 0 and summary["failures"] == 0
     assert set(summary["methods"]) == {f"{b}/{m}" for b in ("ihdp", "acic2016")
                                        for m in ("tabsil_t", "tabsil_s")}  # fmt: skip
-    rows = pd.read_csv(out / "causal" / "results.csv")
-    assert rows.opts.str.endswith("n_estimators=2 seed=0").all()
+    results = out / "causal" / "results.csv"
+    rows = pd.read_csv(results)
+    digest = weights_digest(*load_model(model, "regression", tmp_path))
+    assert rows.opts.str.startswith(f"weights={digest} n_estimators=2 seed=0 ").all()
+    assert rows.opts.nunique() == 1 and "m.pt" not in rows.opts.iloc[0]  # no checkpoint path
+    first = results.read_text()
+    # the same weights at another path: the rerun resumes, nothing is computed again
+    script.main([*args, "--regressor-path", tiny_checkpoint(tmp_path / "copy.pt")])
+    assert results.read_text() == first
     # a rerun with other settings does not resume from these rows
     with pytest.raises(ValueError, match="other settings"):
-        script.main([*args, "--seed", "1"])
+        script.main([*args, "--regressor-path", model, "--seed", "1"])
+    # nor with other weights, also when they replace the file at the first path
+    for path in (tmp_path / "other.pt", tmp_path / "m.pt"):
+        with pytest.raises(ValueError, match="other settings"):
+            script.main([*args, "--regressor-path", tiny_checkpoint(path, seed=1)])
+    assert results.read_text() == first
+
+
+def test_baseline_rows_are_reused_with_another_model(data_dir, tmp_path):
+    calls = []
+
+    def baseline(split, seed):
+        calls.append(seed)
+        return _oracle(split, seed)
+
+    estimators = {"tabsil_t": _oracle, "econml_t": baseline}
+    plan, methods = {"ihdp": [1, 2]}, ["tabsil_t", "econml_t"]
+    opts = {"tabsil_t": "weights=a n_estimators=8 seed=0", "econml_t": "EconML defaults"}
+    causal.run(estimators, plan, methods, tmp_path, opts, log=lambda s: 0)
+    assert calls == [1, 2]
+    # another model: its TabSil rows are not these, the EconML rows still are
+    opts["tabsil_t"] = "weights=b n_estimators=8 seed=0"
+    with pytest.raises(ValueError, match=r"\['tabsil_t'\] results with other settings"):
+        causal.run(estimators, plan, methods, tmp_path, opts, log=lambda s: 0)
+    rows, failures = causal.run(estimators, plan, ["econml_t"], tmp_path, opts, log=lambda s: 0)
+    assert calls == [1, 2] and len(rows) == 4 and not failures
 
 
 def test_eval_suite_causal_argument_errors(data_dir, tmp_path):

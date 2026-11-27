@@ -27,8 +27,11 @@ e4235ac8e6c42ac6b781ac41f8d2102fe5ba1e33, copied to `adbench_reference/`):
   reference imputed with the IsolationForest value stay imputed, `imputed`) plus TabSil
 
 `run` writes one row per (table, split, method) to `results.csv` as it goes and skips rows
-already there, so a rerun resumes. A failed (table, split, method) is reported and the run ends with
-an error after the others; nothing is imputed for our methods.
+already there, so a rerun resumes. A row is reused only with the settings it was computed with
+(`opts`; for TabSil the weights, member count, seed, number of column orders and saved inference
+settings, `_files.model_settings`): a rerun with another model into the same folder stops, and
+IsolationForest rows are reused whatever the model. A failed (table, split, method) is reported
+and the run ends with an error after the others; nothing is imputed for our methods.
 """
 
 from __future__ import annotations
@@ -212,6 +215,12 @@ def read_results(path: Path) -> pd.DataFrame:
     return _files.read_results(path, RESULT_COLUMNS)
 
 
+def row_settings(methods: list[str], opts: dict[str, str] | None) -> dict[str, str]:
+    """Method -> the settings string (`opts`) of its rows: its base method's (a `+clean` row is
+    computed with the settings of the method it is a diagnostic of)."""
+    return {m: (opts or {}).get(base(m), "") for m in methods}
+
+
 def run(
     scorers: dict[str, Callable],
     datasets: list[str],
@@ -223,12 +232,15 @@ def run(
 ) -> tuple[pd.DataFrame, list[dict]]:
     """Score every (table, split, method) not yet in `out_dir/results.csv`, appending a row as
     each finishes. `scorers[base method](X_train, X_test, seed)` -> test scores (higher = more
-    anomalous). Returns (all rows, failures)."""
+    anomalous). `opts[base method]` is the settings string written with its rows; rows of
+    `methods` already there with another string stop the run (`_files.check_settings`). Returns
+    (all rows, failures)."""
     from sklearn.metrics import average_precision_score, roc_auc_score
 
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "results.csv"
     done = read_results(path)
+    _files.check_settings(done, row_settings(methods, opts), path)
     finished = set(zip(done.dataset, done.split, done.method, strict=True))
     failures = []
     for dataset in datasets:
@@ -443,10 +455,20 @@ def summary_table(ours: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index()
 
 
+# the files `report` writes
+REPORT_FILES = ("table_d4.csv", "summary.csv", "elo.csv")
+
+
 def report(ours: pd.DataFrame, out_dir: Path, methods: list[str] = (OURS,)) -> dict:
-    """Write `summary.csv` (per table), `elo.csv` (pool with IsolationForest = 1000), `clean.csv`
-    (contaminated vs clean context) and `table_d4.csv` (the split check), and return the main
-    numbers. The Elo needs every (table, split) of our methods (it does not impute ours)."""
+    """Write `table_d4.csv` (the split check, with IsolationForest rows), `summary.csv` (per table,
+    with TabSil rows) and `elo.csv` (pool with IsolationForest = 1000), and return the main
+    numbers. The Elo needs every (table, split) of our methods (it does not impute ours).
+
+    `ours` is the rows to report: the caller passes those of the methods its run asked for (other
+    rows of `results.csv` can be an earlier run's, of another model). A file an earlier report
+    wrote and this one does not is removed, so the folder holds one report."""
+    for name in REPORT_FILES:
+        (out_dir / name).unlink(missing_ok=True)
     out: dict = {}
     if ANCHOR in set(ours.method):
         check = table_d4_check(ours)

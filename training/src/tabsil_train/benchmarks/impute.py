@@ -32,9 +32,12 @@ extension and the usual baselines, every method on the same rows and masks.
   those same column kinds) is the ablation for that difference
 
 `run` writes one row per (table, rate, seed, method) to `results.csv` as it goes and skips rows
-already there, so a rerun resumes. A method that raises or leaves a masked cell non-finite is a
-failure: it is recorded in `failures.json` and the run ends with an error after the others;
-nothing is filled in for it.
+already there, so a rerun resumes. A row is reused only with the settings it was computed with
+(`opts`; for TabSil the weights, member count, seed and saved inference settings,
+`_files.model_settings`): a rerun with another model into the same folder stops, and the
+baselines' rows are reused whatever the model. A method that raises or leaves a masked cell
+non-finite is a failure: it is recorded in `failures.json` and the run ends with an error after
+the others; nothing is filled in for it.
 """
 
 from __future__ import annotations
@@ -492,11 +495,18 @@ def new_rows(rows: pd.DataFrame, existing: pd.DataFrame) -> pd.DataFrame:
     """The rows of `rows` whose (table, rate, seed, method) is not in `existing` (to merge a
     worker's results without repeating rows an earlier run merged)."""
     merged = finished_keys(existing)
-    return rows[[k not in merged for k in finished_keys_list(rows)]]
+    new = np.array([k not in merged for k in finished_keys_list(rows)], dtype=bool)
+    return rows[new]  # a boolean mask, also when `rows` is empty (the columns stay)
 
 
 def read_results(path: Path) -> pd.DataFrame:
     return _files.read_results(path, RESULT_COLUMNS)
+
+
+def row_settings(methods: list[str], opts: dict[str, str] | None) -> dict[str, str]:
+    """Result method -> the settings string (`opts`) of its rows: its job method's
+    (`tabsil_median` rows are written by the `tabsil` job)."""
+    return {out: (opts or {}).get(m, "") for m in methods for out in METHODS[m]}
 
 
 def run(
@@ -511,11 +521,13 @@ def run(
 ) -> tuple[pd.DataFrame, list[dict]]:
     """Impute every (table, rate, seed, job method) whose rows are not all in
     `out_dir/results.csv`, appending rows as each finishes. `imputers[method](X_masked,
-    categorical, seed)` -> the filled table, or {result method: filled table}. Returns (all rows,
-    failures)."""
+    categorical, seed)` -> the filled table, or {result method: filled table}. `opts[method]` is
+    the settings string written with its rows; rows of `methods` already there with another
+    string stop the run (`_files.check_settings`). Returns (all rows, failures)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "results.csv"
     done = read_results(path)
+    _files.check_settings(done, row_settings(methods, opts), path)
     finished = finished_keys(done)
     failures = []
     for dataset in datasets:
