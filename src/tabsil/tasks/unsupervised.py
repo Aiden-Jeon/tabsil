@@ -286,13 +286,10 @@ class TabSilUnsupervised:
     ) -> None:
         from tabsil.hub import model_or_pretrained
         from tabsil.recipe import HUB_DEFAULT
+        from tabsil.tasks.regression import check_borders
 
-        if isinstance(model, nn.Module):
-            if borders is None:
-                raise ValueError("pass the regression borders together with a model")
-        else:
-            if borders is not None:
-                raise ValueError("borders are only given with a model (downloads include them)")
+        check_borders(model, borders)
+        if not isinstance(model, nn.Module):
             model, borders = model_or_pretrained(model, HUB_DEFAULT, "regression")
             if "classification" not in model.tasks:
                 raise ValueError("the model must serve classification as well as regression")

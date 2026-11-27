@@ -160,6 +160,8 @@ class TabSilCATE:
         random_state: int = 0,
         **estimator_kwargs: Any,
     ) -> None:
+        from tabsil.tasks.regression import check_borders
+
         if learner not in LEARNERS:
             raise ValueError(f"learner is one of {LEARNERS}: {learner!r}")
         if n_folds < 2:
@@ -170,12 +172,8 @@ class TabSilCATE:
         # unless `classifier`)
         needs_regression = regressor is None
         needs_classification = classifier is None and learner in ("x", "dr")
-        if isinstance(model, nn.Module):
-            if needs_regression and borders is None:
-                raise ValueError("pass the regression borders together with a model")
-        elif borders is not None:
-            raise ValueError("borders are only given with a model (downloads include them)")
-        elif needs_regression or needs_classification:
+        check_borders(model, borders, required=needs_regression)
+        if not isinstance(model, nn.Module) and (needs_regression or needs_classification):
             from tabsil.hub import model_or_pretrained
             from tabsil.recipe import HUB_DEFAULT
 

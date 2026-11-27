@@ -20,6 +20,23 @@ from tabsil.inference.ensemble import EnsembleRegressor
 from tabsil.recipe import HUB_REPOS, inference_kwargs
 
 
+def check_borders(
+    model: nn.Module | str | Path | None, borders: torch.Tensor | None, *, required: bool = True
+) -> None:
+    """Check the `model` and `borders` arguments of `TabSilRegressor`, and of the estimators that
+    take the same pair (`TabSilForecaster`, `TabSilUnsupervised`, `TabSilCATE`).
+
+    A model (an `nn.Module`) comes with its regression borders; `required=False` lets them be
+    missing, for an estimator that does not use this model for regression. Anything else (None, a
+    Hub repo id, a local folder) is loaded with its own borders, so `borders` must not be given.
+    ValueError otherwise."""
+    if isinstance(model, nn.Module):
+        if required and borders is None:
+            raise ValueError("pass the regression borders together with a model")
+    elif borders is not None:
+        raise ValueError("borders are only given with a model (downloads include them)")
+
+
 class TabSilRegressor(EnsembleRegressor):
     """TabSil regression: `EnsembleRegressor` with TabSil's inference defaults. Without `model` it
     downloads the weights and their regression borders from the default Hub repo (`HUB_REPO`) at
@@ -40,12 +57,8 @@ class TabSilRegressor(EnsembleRegressor):
         member_kinds: str | tuple[str, ...] | None = None,
         **kwargs: Any,
     ) -> None:
-        if isinstance(model, nn.Module):
-            if borders is None:
-                raise ValueError("pass the regression borders together with a model")
-        else:
-            if borders is not None:
-                raise ValueError("borders are only given with a model (downloads include them)")
+        check_borders(model, borders)
+        if not isinstance(model, nn.Module):
             # Not a model: download from a Hub repo id or a local folder (None: the default Hub
             # repo)
             from tabsil.hub import model_or_pretrained

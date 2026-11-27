@@ -205,6 +205,7 @@ class TabSilForecaster:
         **regressor_kwargs: Any,
     ) -> None:
         from tabsil.recipe import HUB_REPOS, SUPPORTED_SIZE
+        from tabsil.tasks.regression import check_borders
 
         if point_forecast not in POINT_FORECASTS:
             raise ValueError(f"point_forecast is one of {POINT_FORECASTS}: {point_forecast}")
@@ -216,12 +217,8 @@ class TabSilForecaster:
                 f"max_context_length must be between 1 and TabSil's supported size ({limit}"
                 f" training rows): {max_context_length}"
             )
-        if isinstance(model, nn.Module):
-            if borders is None:
-                raise ValueError("pass the regression borders together with a model")
-        else:
-            if borders is not None:
-                raise ValueError("borders are only given with a model (downloads include them)")
+        check_borders(model, borders)
+        if not isinstance(model, nn.Module):
             from tabsil.hub import model_or_pretrained
 
             model, borders = model_or_pretrained(model, HUB_REPOS["regression"], "regression")
