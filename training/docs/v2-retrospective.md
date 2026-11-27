@@ -7,7 +7,7 @@ The plan, every recommendation and the coordination of the runs were made by AI 
 How to read it:
 
 - **Recorded** is what a document, a commit, a PR, an MLflow run, a job record or a conversation shows. **Judgment** is this review's reading. What could not be checked is marked **not verified**.
-- Conversations are cited by session and time, and are paraphrased.
+- Conversations are cited by session and time, and are paraphrased. Words of a conversation in quotation marks are translated from Korean.
 - Times are UTC. The user works in KST (UTC+9), so the stop of 2026-11-27 23:00 is the plan's "decisions of 2026-11-28".
 - GPU use was counted again from the AI Runtime job records: run time × GPUs of every job of the plan, from the first one (2026-11-26 13:45) on. G is the paired error ratio of the plan's §3. Below 1 is better.
 
@@ -337,7 +337,7 @@ Each rule names what it comes from and how it is checked.
 
 ## Open at the end
 
-- **The 1B verdict** comes as a PR of the phase-1B worker and was not open at 2026-11-27 23:45. The provisional numbers above are that worker's with two of C's three seeds, and this review's reading of the reference loss.
+- **The 1B verdict** comes as a PR of the phase-1B worker and was not open at 2026-11-27 23:58: the evaluation of C's third seed was still running. The provisional numbers above are that worker's with two of C's three seeds, and this review's reading of the reference loss. They are to be replaced by the verdict's.
 - **The v2 candidate** is the weights of phase 1A. They have not been evaluated with the release protocol of phase 5, and whether they are released is not decided (plan §4, phase 5).
 - **L20's checkpoint of step 5,000** is in its MLflow run (`893293ed…`). No resume is planned.
 - **Not verified:** the bar the user would have set on 2026-11-26. The records show it only as the stop at +20 to +40 Elo. Of the worker chats, the questions to the user and the user's messages were read, and the rest through their PRs and their mails to the coordinating session.
