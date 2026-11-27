@@ -47,7 +47,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks import _elo, _files
 from tabsil_train.benchmarks._files import download_verified
 
 ADBENCH_REPO = "Minqi824/ADBench"
@@ -96,8 +96,6 @@ METHODS = ("tabsil_unsup", "iforest")
 ANCHOR = "iforest"  # Elo 1000
 OURS = "tabsil_unsup"
 OFFICIAL = "tabpfn_unsup"
-# Elo (fm-agent-bench elo.py)
-ELO_SCALE, ELO_INIT, ELO_ROUNDS, ELO_SEED = 400, 1000.0, 200, 0
 RESULT_COLUMNS = [
     "dataset", "split", "seed", "method", "auroc", "aupr", "seconds", "n_context", "n_test",
     "test_anomalies", "n_features", "opts",
@@ -326,34 +324,14 @@ def table_d4_check(ours: pd.DataFrame, method: str = ANCHOR) -> pd.DataFrame:
     return out.reset_index(names="dataset")
 
 
-# --- Elo (fm-agent-bench fab/bench/tabarena/elo.py) ------------------------------------------
+# --- Elo (`_elo`: fm-agent-bench fab/bench/tabarena/elo.py) -----------------------------------
 
 
-def _elo_fit(err: np.ndarray, weight: np.ndarray) -> np.ndarray:
-    """err (methods, units) without gaps, weight per unit -> uncalibrated Elo per method."""
-    from sklearn.linear_model import LogisticRegression
-
-    m = err.shape[0]
-    i, j = np.triu_indices(m, 1)
-    a, b = err[i], err[j]
-    win_i = ((a < b) + 0.5 * (a == b)) @ weight
-    win_j = ((a > b) + 0.5 * (a == b)) @ weight
-    x = np.zeros((len(i), m))
-    x[np.arange(len(i)), i], x[np.arange(len(i)), j] = np.log(10), -np.log(10)
-    keep = (win_i + win_j) > 0
-    X = np.vstack([x[keep], x[keep]])
-    y = np.r_[np.ones(keep.sum()), np.zeros(keep.sum())]
-    w = np.r_[win_i[keep], win_j[keep]]
-    lr = LogisticRegression(fit_intercept=False, C=1e6, tol=1e-10, max_iter=1000)
-    lr.fit(X, y, sample_weight=w)
-    return ELO_SCALE * lr.coef_[0] + ELO_INIT
-
-
-def elo(long: pd.DataFrame, anchor: str = ANCHOR, rounds: int = ELO_ROUNDS,
-        seed: int = ELO_SEED) -> pd.DataFrame:  # fmt: skip
+def elo(long: pd.DataFrame, anchor: str = ANCHOR, rounds: int = _elo.ROUNDS,
+        seed: int = _elo.SEED) -> pd.DataFrame:  # fmt: skip
     """long: method, dataset, split, metric_error (+ imputed 0/1) without gaps -> per method elo,
     elo+, elo- (95% bootstrap over tables), rank, winrate, imputed share. Pairs compare within a
-    (table, split), weighted 1 / (splits of the table)."""
+    (table, split), weighted 1 / (splits of the table) (`_elo.table`)."""
     key = ["method", "dataset", "split"]
     if long.duplicated(key).any():
         raise ValueError("repeated (method, dataset, split) rows")
@@ -367,33 +345,10 @@ def elo(long: pd.DataFrame, anchor: str = ANCHOR, rounds: int = ELO_ROUNDS,
         raise ValueError(f"{int(wide.isna().sum().sum())} gaps: fill them first")
     imp = long.pivot(index="method", columns=["dataset", "split"], values="imputed")
     imp = imp.reindex_like(wide)
-    ds = wide.columns.get_level_values("dataset").to_numpy()
-    names, ds_idx = np.unique(ds, return_inverse=True)
-    weight = 1.0 / np.bincount(ds_idx)[ds_idx]
-    err = wide.to_numpy(float)
-    raw = _elo_fit(err, weight)
-    rng = np.random.default_rng(seed)
-    boots = []
-    for _ in range(rounds):
-        pick = np.bincount(rng.integers(0, len(names), len(names)), minlength=len(names))
-        w = weight * pick[ds_idx]
-        boots.append(_elo_fit(err[:, w > 0], w[w > 0]))
-    boots = np.array(boots)
-    lo, hi = np.quantile(boots, 0.025, axis=0), np.quantile(boots, 0.975, axis=0)
-    a = list(wide.index).index(anchor)
-    rank = wide.rank(axis=0, method="average").to_numpy()
-    m = len(wide)
-    out = pd.DataFrame(
-        {
-            "elo": raw - raw[a] + ELO_INIT,
-            "elo+": np.clip(hi - raw, 0, None),
-            "elo-": np.clip(raw - lo, 0, None),
-            "rank": (rank * weight).sum(1) / weight.sum(),
-            "winrate": ((m - rank) / (m - 1) * weight).sum(1) / weight.sum(),
-            "imputed": (imp.fillna(0.0).to_numpy(float) * weight).sum(1) / weight.sum(),
-            "datasets": len(names),
-        },
-        index=wide.index,
+    names, _, weight = _elo.unit_weights(wide)
+    out = _elo.table(wide, anchor, rounds, seed).assign(
+        imputed=(imp.fillna(0.0).to_numpy(float) * weight).sum(1) / weight.sum(),
+        datasets=len(names),
     )
     return out.sort_values("elo", ascending=False).rename_axis("method").reset_index()
 
