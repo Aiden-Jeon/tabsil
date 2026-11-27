@@ -55,13 +55,14 @@ splits by their original training row count.
 
 `--suite fev` is time series forecasting on 10 fev-bench tasks
 (`tabsil_train.benchmarks.forecast.fevbench`, needs the `fev` extra, installed apart from the dev
-group like the arena extra: `uv sync --package tabsil-train --no-dev --extra fev --group
-arena-dev`): `tabsil.TabSilForecaster` with the `--regressor-path` model on every rolling window,
-scored with fev's SQL and MASE and put in an Elo pool (Seasonal Naive = 1000) with the per-window
-results fm-agent-bench recorded for 7 methods. Our Seasonal Naive is recomputed on the same windows
-and must match those. `--datasets` picks tasks, `--fev-windows N` only the last N windows of each (a
-quick check; the task-mean Elo pool then drops out). A failed series, window or task stops the run
-(nothing is imputed). Results go to `<out-dir>/fev/`.
+group like the arena extra:
+`uv sync --package tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.TabSilForecaster`
+with the `--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in
+an Elo pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7
+methods. Our Seasonal Naive is recomputed on the same windows and must match those. `--datasets`
+picks tasks, `--fev-windows N` only the last N windows of each (a quick check; the task-mean Elo
+pool then drops out). A failed series, window or task stops the run (nothing is imputed). Results go
+to `<out-dir>/fev/`.
 
   $RUN --no-dev --extra fev --group arena-dev python $EVAL --suite fev \
     --regressor-path hf://aiden-jeon/tabsil@v1 --datasets ecdc_ili --fev-windows 2
@@ -104,9 +105,9 @@ diagnostic (context = training rows labeled normal; kept out of the Elo); `--dat
 `--suite impute` is missing value imputation on 10 OpenML tables x MCAR rates 10/30/50% x 3 seeds
 (`tabsil_train.benchmarks.unsupervised.impute`): `TabSilUnsupervised.impute` (zero-shot, the
 `--regressor-path` model serving both column kinds; mean and median from one evaluation) against the
-official TabPFN v2 extension (`impute` and `simple_impute`, needs the `impute` extra: `uv sync
---all-packages --extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on the same
-rows and masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
+official TabPFN v2 extension (`impute` and `simple_impute`, needs the `impute` extra:
+`uv sync --all-packages --extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on
+the same rows and masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
 `--impute-methods`, `--impute-rates`, `--impute-seeds` and `--datasets` pick the grid. A failed
 (table, rate, seed, method) is reported and the run ends with an error (nothing is filled in).
 With `--shards N` the GPU methods run as (table, rate, method) jobs on N GPUs and the CPU

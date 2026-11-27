@@ -7,6 +7,6 @@
   the `tabarena` package; requires the `tabarena` package from the `arena` extra)
 - `uncertainty`: predictive-distribution and uncertainty metrics (regression CRPS, interval
   coverage, PIT; classification ECE, conformal coverage)
-- `subsample`: `SubsampledEstimator`, which reduces the rows passed to fit to N (class-stratified
+- `subsample`: `SubsampledEstimator`, which passes at most N training rows to fit (class-stratified
   for classification; for context-length experiments, `eval.py --subsample-train-rows`)
 """

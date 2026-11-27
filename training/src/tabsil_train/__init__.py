@@ -2,10 +2,8 @@
 
 - `priors`: training data (assembler, generators, transforms, table size rules, graph SCM prior)
 - `training`: training config, the training loop, data feeding, losses, stability
-- `benchmarks`: evaluation, one folder per task (`tabular`: AMLB/CTR23, TabArena, BeyondArena,
-  uncertainty metrics and `SubsampledEstimator`, which passes at most N training rows to fit, for
-  context-length experiments; `forecast`: fev-bench; `unsupervised`: ADBench, imputation; `causal`:
-  IHDP, ACIC 2016)
+- `benchmarks`: the evaluation benchmarks, one folder per task (`tabular` for classification and
+  regression, `forecast`, `unsupervised`, `causal`)
 - `evaluation`: the runs `scripts/eval.py` starts for the fev, ADBench, causal and impute suites
 - `recipe`: TabSil's training curriculum (the structure and inference defaults are in
   `tabsil.recipe`)
