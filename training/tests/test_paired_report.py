@@ -233,12 +233,32 @@ def test_report_warns_when_the_runs_were_evaluated_differently():
     assert script.settings_differences(a, old) == ["inference_classification is not logged by b"]
 
     def run(params, suite="dev"):
-        return types.SimpleNamespace(params=params, suite=suite)
+        return types.SimpleNamespace(params=params, suite=suite, unchecked=[])
 
     assert script.pair_warnings("dev", run(None), run(b)) == []  # a local file has no settings
     lines = script.pair_warnings("dev", run(a), run(b, "amlb-all"))
     assert lines[0] == "- warning (dev): a and b differ in suite: a dev, b amlb-all"
     assert len(lines) == 4
+
+
+def test_averaged_runs_must_agree_in_the_settings(tmp_path, monkeypatch):
+    script = helpers.load_script("scripts/paired_report.py", "paired_report_average")
+    path = tmp_path / "results_per_split.csv"
+    _splits({"a": 0.2, "r": 3.0}, {"a": "binary", "r": "regression"}, 2).to_csv(path)
+    logged = {"seed": "0", "inference_classification": json.dumps({"n_estimators": 8})}
+    params = {"one": logged, "old": {"seed": "0"}, "other": {**logged, "seed": "1"}}
+    monkeypatch.setattr(
+        script, "resolve", lambda source, cache: (path, "tabarena-3split", {}, params[source])
+    )
+    # a setting one of the averaged runs did not log is a warning, not an error
+    mean = script.Run("one+old", False, tmp_path)
+    assert mean.unchecked == ["inference_classification"] and mean.params == logged
+    assert script.pair_warnings("s", mean, script.Run("one", False, tmp_path)) == [
+        "- warning (s): the runs averaged into a could not be compared in"
+        " inference_classification (one of them did not log it)"
+    ]
+    with pytest.raises(SystemExit, match="differ in"):
+        script.Run("one+other", False, tmp_path)
 
 
 # development suite
