@@ -2,8 +2,9 @@
 (v2 experiment plan §3, "Arm trained from scratch (phase 1B)").
 
 Every training run has one evaluation run per suite. A run's score is its mean log error over the
-datasets (the splits of a dataset are averaged first, as in `tabsil_train.benchmarks.paired`). For
-each arm the report gives, per suite and pooled over the suites:
+datasets (the splits of a dataset are averaged first, as in
+`tabsil_train.benchmarks.tabular.paired`). For each arm the report gives, per suite and pooled
+over the suites:
 
 - the score of every control and arm seed, and whether every arm seed is below every control seed
   (the rule's first test). Under exchangeable runs, k arm seeds below all n control seeds has the
@@ -48,7 +49,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from tabsil_train.benchmarks import paired
+from tabsil_train.benchmarks.tabular import paired
 
 POOLED = "pooled"
 REPORT_GROUPS = ("all", "classification", "regression")

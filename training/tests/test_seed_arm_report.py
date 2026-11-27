@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 from train_helpers import load_script
 
-from tabsil_train.benchmarks import paired
+from tabsil_train.benchmarks.tabular import paired
 
 KIND = {"a": "binary", "b": "multiclass", "r": "regression", "q": "regression"}
 
