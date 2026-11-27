@@ -88,6 +88,44 @@ def test_imputed_missing_and_mismatched_splits_are_errors():
         paired.dataset_ratios(a, b)
 
 
+def test_mean_of_runs_is_the_split_mean_of_their_errors():
+    kind = {"a": "binary", "r": "regression"}
+    one = paired.splits_frame(_splits({"a": [0.1, 0.3], "r": 4.0}, kind, 2), "one")
+    two = paired.splits_frame(_splits({"a": [0.3, 0.5], "r": 2.0}, kind, 2), "two")
+    mean = paired.mean_splits([one, two.iloc[::-1]])  # the row order does not matter
+    assert list(mean.columns) == paired.COLUMNS
+    errors = mean.set_index(["dataset", "split"])["error"]
+    assert errors[("a", 0)] == pytest.approx(0.2) and errors[("a", 1)] == pytest.approx(0.4)
+    assert errors[("r", 1)] == pytest.approx(3.0)
+    arm = paired.splits_frame(_splits({"a": [0.15, 0.15], "r": 3.0}, kind, 2), "arm")
+    ratios = paired.compare({"s": (mean, arm)}, rounds=50)["ratios"].set_index("dataset")["ratio"]
+    assert ratios["a"] == pytest.approx(0.5) and ratios["r"] == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="different splits"):
+        paired.mean_splits([one, two[two["dataset"] == "a"]])
+    multiclass = {**kind, "a": "multiclass"}
+    other_kind = paired.splits_frame(_splits({"a": 0.1, "r": 1.0}, multiclass, 2), "other")
+    with pytest.raises(ValueError, match="problem type"):
+        paired.mean_splits([one, other_kind])
+
+
+def test_report_script_averages_runs_joined_with_plus(tmp_path, capsys):
+    script = helpers.load_script("scripts/paired_report.py", "paired_report_script")
+    kind = {"a": "binary", "r": "regression"}
+    paths = {}
+    for run, (a, r) in {"c1": (0.1, 2.0), "c2": (0.3, 4.0), "arm": (0.1, 3.0)}.items():
+        d = tmp_path / run / "tabarena-3split"
+        d.mkdir(parents=True)
+        _splits({"a": a, "r": r}, kind, 3).to_csv(d / "results_per_split.csv")
+        (d / "summary.json").write_text('{"elo": 1500}')
+        paths[run] = str(d / "results_per_split.csv")
+    out = tmp_path / "out"
+    script.main(["--a", f"{paths['c1']}+{paths['c2']}", "--b", paths["arm"], "--out-dir", str(out)])
+    ratios = pd.read_csv(out / "ratios.csv").set_index("dataset")["ratio"]
+    assert ratios["a"] == pytest.approx(0.5) and ratios["r"] == pytest.approx(1.0)
+    # the mean of two runs has no Elo of its own
+    assert "1500 →" not in capsys.readouterr().out
+
+
 def test_zero_errors_are_floored():
     a = paired.splits_frame(_splits({"a": 0.0, "b": 0.0}, KIND), "a")
     b = paired.splits_frame(_splits({"a": 0.0, "b": 1e-5}, KIND), "b")

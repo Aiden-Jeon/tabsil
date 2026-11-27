@@ -6,7 +6,9 @@ pooled.
 A run is a per-split table: a local `results_per_split.csv` (TabArena / BeyondArena) or
 `eval_rows.csv` (AMLB, `--suite dev`), or an MLflow run, `runs:/<run_id>` (the eval artifact is
 found under `eval/`) or `runs:/<run_id>/<artifact path>`. Give `--a` and `--b` once per suite, in
-the same order; more than one pair is also pooled. MLflow runs need
+the same order; more than one pair is also pooled. Several runs joined with `+`
+(`runs:/<id>+runs:/<id>`) are one side that is their mean: on every split, the mean of the runs'
+errors (the control of a branch that was repeated with another seed). MLflow runs need
 `DATABRICKS_CONFIG_PROFILE=<profile> MLFLOW_TRACKING_URI=databricks`.
 
 From the repository root:
@@ -34,12 +36,19 @@ ELO_GROUPS = ("classification", "regression", "binary", "multiclass")
 
 
 class Run:
-    """One side of a comparison: its per-split errors, suite name and Elo per group."""
+    """One side of a comparison: its per-split errors, suite name and Elo per group. A source of
+    several runs joined with `+` is their mean (`paired.mean_splits`); it has no Elo."""
 
     def __init__(self, source: str, allow_imputed: bool, cache: Path) -> None:
         self.source = source
-        path, self.suite, self.elo = resolve(source, cache)
-        self.splits = paired.load_splits(path, allow_imputed=allow_imputed)
+        parts = [resolve(part, cache) for part in source.split("+")]
+        suites = {suite for _, suite, _ in parts}
+        if len(suites) > 1:
+            raise SystemExit(f"{source}: the runs to average are of different suites {suites}")
+        self.suite = parts[0][1]
+        self.elo = parts[0][2] if len(parts) == 1 else {}
+        frames = [paired.load_splits(path, allow_imputed=allow_imputed) for path, _, _ in parts]
+        self.splits = frames[0] if len(frames) == 1 else paired.mean_splits(frames)
 
 
 def resolve(source: str, cache: Path) -> tuple[Path, str, dict]:
