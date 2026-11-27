@@ -11,7 +11,7 @@ The regression borders (the buckets the quantile outputs are turned into) go int
     model, borders = from_pretrained("aiden-jeon/tabsil@stage2-10k")
 
 For inference alone this function is not needed: `TabSilClassifier()`·`TabSilRegressor()`
-(`tabsil.tasks`) download from the default Hub repo (`tabsil.recipe.HUB_REPO` at the tag
+(importable from `tabsil`) download from the default Hub repo (`tabsil.recipe.HUB_REPO` at the tag
 `HUB_REVISION`) (`model_or_pretrained`).
 
 The evaluation and upload scripts read a Hub repo (`hf://owner/name`), a local `save_pretrained`

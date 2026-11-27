@@ -124,9 +124,10 @@ def inference_kwargs(
     n_estimators: int | None,
     member_kinds: str | tuple[str, ...] | list[str] | None,
 ) -> dict:
-    """The ensemble arguments of `TabSilClassifier` / `TabSilRegressor` (`tabsil.tasks`):
-    `n_estimators` and `member_kinds` given by the caller (not None) come first, then the model's
-    inference settings (`default_inference`)."""
+    """The ensemble arguments of `TabSilClassifier` / `TabSilRegressor`
+    (`tabsil.tasks.classification`, `tabsil.tasks.regression`): `n_estimators` and `member_kinds`
+    given by the caller (not None) come first, then the model's inference settings
+    (`default_inference`)."""
     out = default_inference(model, task)
     if n_estimators is not None:
         out["n_estimators"] = n_estimators

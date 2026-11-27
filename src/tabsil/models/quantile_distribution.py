@@ -16,10 +16,11 @@ loss. Only that behavior is reimplemented here.
   target-transform members, distributional metrics) is thus reused unchanged. The mass outside the
   lowest and the highest quantile (1/(n + 1) each) goes to the bucket holding that quantile (our
   choice)
-- The other direction (`bucket_quantiles`): quantiles of a bucket distribution, with the density
-  taken as uniform within a bucket. It is applied to the ensemble's predictive distribution
-  (numpy, float64): quantile forecasts (`tabsil.tasks.forecast`), medians and draws
-  (`tabsil.tasks.unsupervised`)
+
+`bucket_quantiles` goes the other way and is not from Kumo-Tabular: the quantiles of a bucket
+distribution, with the density taken as uniform within a bucket. It is applied to the ensemble's
+predictive distribution (numpy, float64), for quantile forecasts (`tabsil.tasks.forecast`) and
+for medians and draws (`tabsil.tasks.unsupervised`).
 """
 
 from __future__ import annotations
