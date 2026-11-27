@@ -18,6 +18,9 @@ from tabsil_train.priors import PRIOR_TYPES, prior_module
 from tabsil_train.training.config import TASKS, TrainConfig
 
 RESUME = ["--resume-run-id", "abc"]
+# The base lr of the checkpoint that is resumed. No preset has it (a collapse rewind lowers a
+# run's lr), so a config compared below shows whether `main` kept it
+CHECKPOINT_LR = 3e-4
 # The ten settings as a stage-2 run records them: the MLflow params of `tabsil-v2-s2-l20`
 # (893293ed7d8d419780be2d178b8cc713), read on 2026-11-27. Ints, floats and bools are all strings
 STAGE2_RUN = {
@@ -83,8 +86,7 @@ def _main_config(script, monkeypatch, tmp_path, argv, params) -> TrainConfig:
         return {"history": {}, "final_path": None}
 
     monkeypatch.setattr(script.mlflow.artifacts, "download_artifacts", download)
-    # the checkpoint's base lr is the config's (no lr was given)
-    monkeypatch.setattr(script, "_check_source", lambda path, config, resume: config.lr)
+    monkeypatch.setattr(script, "_check_source", lambda path, config, resume: CHECKPOINT_LR)
     monkeypatch.setattr(script, "train", fake_train)
     monkeypatch.setenv("RANK", "1")  # not rank 0, so no MLflow run is opened
     try:
@@ -125,12 +127,14 @@ def test_unset_settings_are_the_resumed_runs(script, monkeypatch, tmp_path):
     run = replace(TrainConfig.medium(), **CUSTOM)
     args = script.parse_args(["--config-name", "medium", *RESUME])
     assert script.resume_data_options(args, _params(run)) == CUSTOM
-    # `main` builds the run's config again from the preset and the run's params
+    # `main` builds the run's config again from the preset and the run's params, with the
+    # checkpoint's lr (no --lr is given)
+    resumed = replace(run, lr=CHECKPOINT_LR)
     argv = ["--config-name", "medium", *RESUME]
-    assert _main_config(script, monkeypatch, tmp_path, argv, _params(run)) == run
+    assert _main_config(script, monkeypatch, tmp_path, argv, _params(run)) == resumed
     # also when resuming from a kept step, which writes to a new run
     argv = [*argv, "--resume-step", "5000"]
-    assert _main_config(script, monkeypatch, tmp_path, argv, _params(run)) == run
+    assert _main_config(script, monkeypatch, tmp_path, argv, _params(run)) == resumed
     # a real run's params: what a stage-2 run records is what the stage-2 preset has
     stage2 = recipe.curriculum(2)
     assert {name: str(value) for name, value in _data(script, stage2).items()} == STAGE2_RUN
@@ -176,13 +180,14 @@ def test_the_same_values_pass(script, monkeypatch, tmp_path):
     same += ["--min-train-fraction", "0.79", "--max-train-fraction", "0.81"]
     argv = ["--config-name", "stage2", *RESUME, *same, "--filter-unpredictable"]
     assert script.resume_data_options(script.parse_args(argv), _params(run)) == _data(script, run)
-    assert _main_config(script, monkeypatch, tmp_path, argv, _params(run)) == run
+    resumed = replace(run, lr=CHECKPOINT_LR)
+    assert _main_config(script, monkeypatch, tmp_path, argv, _params(run)) == resumed
     # and through the environment, as a chunk submitted again with its overrides gives them
     env = {"MIN_ROWS": "500", "BINARY_PROB": "0.25", "FILTER_UNPREDICTABLE": "1"}
     for name, value in env.items():
         monkeypatch.setenv("TABSIL_" + name, value)
     argv = ["--config-name", "stage2", *RESUME]
-    assert _main_config(script, monkeypatch, tmp_path, argv, _params(run)) == run
+    assert _main_config(script, monkeypatch, tmp_path, argv, _params(run)) == resumed
 
 
 @pytest.mark.parametrize(
@@ -227,11 +232,14 @@ def test_a_chunk_submitted_again_with_the_same_settings_trains_as_before(
     monkeypatch.setenv("TABSIL_RESUME_RUN_ID", "abc")
     monkeypatch.setenv("TABSIL_STOP_STEP", "10000")
     config = _main_config(script, monkeypatch, tmp_path, [], _params(first))
-    assert config == replace(first, stop_step=10_000)
+    # every setting is the first chunk's; only the stop step is the chunk's own, and the lr is
+    # the checkpoint's
+    assert config == replace(first, stop_step=10_000, lr=CHECKPOINT_LR)
 
 
 def test_taking_only_the_weights_is_not_affected(script, monkeypatch, tmp_path):
-    # --init-run-id starts a new run: the preset's tables, or the given ones
+    # --init-run-id starts a new run: the preset's tables, or the given ones (and the preset's
+    # lr, not the checkpoint's)
     params = _params(replace(recipe.curriculum(1), **CUSTOM))
     argv = ["--config-name", "stage2", "--init-run-id", "abc"]
     assert script.resume_data_options(script.parse_args(argv), params) == {}

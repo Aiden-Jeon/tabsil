@@ -474,9 +474,8 @@ def build_config(
     """The training config. `source` is the model structure of the run being resumed or whose
     weights are taken (`tabsil_train.hub.run_architecture`); it must match the preset's structure.
     `speed_options` are that run's training speed options (`source_speed_options`), and
-    `data_options` the table size and prior settings of a resumed run (`resume_data_options`),
+    `data_options` its table size and prior settings when it is resumed (`resume_data_options`),
     which replace the preset's."""
-    data_options = data_options or {}
     try:
         if args.config_name in CURRICULUM_NAMES:
             # The curriculum sets the warmup from the step count, so --steps goes to the recipe
@@ -490,7 +489,7 @@ def build_config(
     base = _replace(base, _structure_values(args))
     _check_structure(base)
     if source is None:
-        return _replace(base, {**_override_values(args), **data_options})
+        return _overrides(base, args)
     differ = {k: (getattr(base, k), v) for k, v in source.items() if getattr(base, k) != v}
     if differ:
         raise SystemExit(
@@ -507,8 +506,18 @@ def build_config(
     # Apply the original run's structure and options and the arguments at once (so the config
     # check never sees an intermediate state). The resumed run's table settings come last: a
     # given value equals them (`resume_data_options`), and an on/off one may be off in the run
-    changes = {**source, **(speed_options or {}), **_override_values(args), **data_options}
+    changes = {
+        **source,
+        **(speed_options or {}),
+        **_override_values(args),
+        **(data_options or {}),
+    }
     return _replace(base, changes)
+
+
+def _overrides(config: TrainConfig, args: argparse.Namespace) -> TrainConfig:
+    """Overwrite the config with the values given as arguments or environment variables."""
+    return _replace(config, _override_values(args))
 
 
 def _structure_values(args: argparse.Namespace) -> dict:
