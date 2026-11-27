@@ -1,4 +1,4 @@
-"""fev-bench forecasting evaluation of TabSil (`tabsil.forecast.TabSilForecaster`, zero-shot).
+"""fev-bench forecasting evaluation of TabSil (`tabsil.TabSilForecaster`, zero-shot).
 
 Tasks, splits and metrics follow fm-agent-bench P7 (`docs/forecast.md` at commit
 `FM_AGENT_BENCH_COMMIT`), which compared public tabular FMs on fev-bench:
@@ -49,6 +49,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from tabsil_train.benchmarks import _elo
 
 FEV_VERSION = "0.10.0"
 # autogluon/fev commit of the task definitions and the public results
@@ -375,45 +377,23 @@ def check_seasonal_naive(ours: pd.DataFrame, tolerance: float = SNAIVE_TOLERANCE
 
 
 # ---------------------------------------------------------------------------
-# Elo (fm-agent-bench fab/bench/tabarena/elo.py `elo`, the TabArena computation)
+# Elo (`_elo`: fm-agent-bench fab/bench/tabarena/elo.py `elo`, the TabArena computation)
 # ---------------------------------------------------------------------------
-ELO_SCALE, ELO_INIT, ELO_ROUNDS, ELO_SEED = 400, 1000.0, 200, 0
 MIN_CI_TASKS = 10  # fewer tasks: no bootstrap interval
-
-
-def _fit_elo(err: np.ndarray, weight: np.ndarray) -> np.ndarray:
-    """Bradley-Terry maximum likelihood (logistic regression, C = 1e6): err (methods, units),
-    weight per unit -> uncalibrated Elo per method. In a pair the lower error wins, ties count
-    half."""
-    from sklearn.linear_model import LogisticRegression
-
-    m = err.shape[0]
-    i, j = np.triu_indices(m, 1)
-    a, b = err[i], err[j]
-    win_i = ((a < b) + 0.5 * (a == b)) @ weight
-    win_j = ((a > b) + 0.5 * (a == b)) @ weight
-    x = np.zeros((len(i), m))
-    x[np.arange(len(i)), i], x[np.arange(len(i)), j] = np.log(10), -np.log(10)
-    keep = (win_i + win_j) > 0
-    X = np.vstack([x[keep], x[keep]])
-    y = np.r_[np.ones(keep.sum()), np.zeros(keep.sum())]
-    w = np.r_[win_i[keep], win_j[keep]]
-    lr = LogisticRegression(fit_intercept=False, C=1e6, tol=1e-10, max_iter=1000)
-    lr.fit(X, y, sample_weight=w)
-    return ELO_SCALE * lr.coef_[0] + ELO_INIT
 
 
 def elo(
     long: pd.DataFrame,
     anchor: str = ANCHOR,
-    rounds: int = ELO_ROUNDS,
-    seed: int = ELO_SEED,
+    rounds: int = _elo.ROUNDS,
+    seed: int = _elo.SEED,
     min_ci: int = MIN_CI_TASKS,
 ) -> pd.DataFrame:
     """Elo per method from `long` (method, task, split, error; no missing cells): each task's
     splits weighted 1 / split count, `anchor` moved to 1000. The 95% interval (`elo+`, `elo-`)
     is the 2.5% / 97.5% quantile of `rounds` bootstrap fits over tasks minus the point estimate
-    (empty with fewer than `min_ci` tasks). Also the weighted mean rank and win rate."""
+    (empty with fewer than `min_ci` tasks). Also the weighted mean rank and win rate
+    (`_elo.table`)."""
     key = ["method", "task", "split"]
     if long.duplicated(key).any():
         raise ValueError("repeated (method, task, split) rows")
@@ -423,34 +403,8 @@ def elo(
         raise ValueError(f"missing results (nothing is imputed): {missing[missing].index[:5]}")
     if anchor not in wide.index:
         raise ValueError(f"the anchor {anchor!r} is not in the pool")
-    tasks = wide.columns.get_level_values("task").to_numpy()
-    names, task_idx = np.unique(tasks, return_inverse=True)
-    weight = 1.0 / np.bincount(task_idx)[task_idx]
-    err = wide.to_numpy(float)
-    raw = _fit_elo(err, weight)
-    if rounds > 0 and len(names) >= min_ci:
-        rng = np.random.default_rng(seed)
-        boots = []
-        for _ in range(rounds):
-            pick = np.bincount(rng.integers(0, len(names), len(names)), minlength=len(names))
-            w = weight * pick[task_idx]
-            boots.append(_fit_elo(err[:, w > 0], w[w > 0]))
-        lo, hi = np.quantile(boots, 0.025, axis=0), np.quantile(boots, 0.975, axis=0)
-    else:
-        lo = hi = np.full_like(raw, np.nan)
-    m = len(wide)
-    rank = wide.rank(axis=0, method="average").to_numpy()
-    out = pd.DataFrame(
-        {
-            "elo": raw - raw[list(wide.index).index(anchor)] + ELO_INIT,
-            "elo+": np.clip(hi - raw, 0, None),
-            "elo-": np.clip(raw - lo, 0, None),
-            "rank": (rank * weight).sum(1) / weight.sum(),
-            "winrate": ((m - rank) / (m - 1) * weight).sum(1) / weight.sum(),
-            "tasks": len(names),
-        },
-        index=wide.index,
-    )
+    names, _, _ = _elo.unit_weights(wide)
+    out = _elo.table(wide, anchor, rounds, seed, min_ci).assign(tasks=len(names))
     return out.sort_values("elo", ascending=False)
 
 

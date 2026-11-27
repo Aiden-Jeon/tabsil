@@ -7,7 +7,7 @@ models are the regular inference classes: `TabSilRegressor.predict` (the predict
 outcome and `TabSilClassifier.predict_proba` for the propensity score e(x) = P(T = 1 | X = x). No
 weights are trained; each base model is one in-context fit.
 
-    from tabsil.causal import TabSilCATE
+    from tabsil import TabSilCATE
 
     est = TabSilCATE(device="cuda").fit(X, treatment, y)  # the S-learner
     tau = est.effect(X_test)    # (n,) CATE per row
@@ -65,7 +65,7 @@ from torch import nn
 
 LEARNERS = ("s", "t", "x", "dr")
 # The S-learner: the best of the four on IHDP and second on ACIC 2016 (best average rank,
-# README "Treatment effects"), and the cheapest (one outcome fit)
+# docs/task-results.md "Treatment effects"), and the cheapest (one outcome fit)
 DEFAULT_LEARNER = "s"
 DEFAULT_N_FOLDS = 5
 DEFAULT_PROPENSITY_CLIP = 0.01
@@ -132,7 +132,7 @@ class TabSilCATE:
     """Conditional average treatment effects with TabSil base learners (module docstring for the
     learners and where they differ from EconML).
 
-    `model` and `borders` are given as for `tabsil.recipe.TabSilRegressor` (None: the default Hub
+    `model` and `borders` are given as for `TabSilRegressor` (None: the default Hub
     repo at its default tag, `tabsil.recipe.HUB_DEFAULT`; a Hub repo id or a local folder; or a
     model with its `borders`). The model must serve regression (outcomes) and, for the X- and
     DR-learners, classification (propensity scores); the weights are loaded once and shared by
@@ -160,6 +160,8 @@ class TabSilCATE:
         random_state: int = 0,
         **estimator_kwargs: Any,
     ) -> None:
+        from tabsil.tasks.regression import check_borders
+
         if learner not in LEARNERS:
             raise ValueError(f"learner is one of {LEARNERS}: {learner!r}")
         if n_folds < 2:
@@ -170,12 +172,8 @@ class TabSilCATE:
         # unless `classifier`)
         needs_regression = regressor is None
         needs_classification = classifier is None and learner in ("x", "dr")
-        if isinstance(model, nn.Module):
-            if needs_regression and borders is None:
-                raise ValueError("pass the regression borders together with a model")
-        elif borders is not None:
-            raise ValueError("borders are only given with a model (downloads include them)")
-        elif needs_regression or needs_classification:
+        check_borders(model, borders, required=needs_regression)
+        if not isinstance(model, nn.Module) and (needs_regression or needs_classification):
             from tabsil.hub import model_or_pretrained
             from tabsil.recipe import HUB_DEFAULT
 
@@ -213,7 +211,7 @@ class TabSilCATE:
             from sklearn.base import clone
 
             return clone(self.regressor).fit(X, y)
-        from tabsil.recipe import TabSilRegressor
+        from tabsil.tasks.regression import TabSilRegressor
 
         return TabSilRegressor(
             self.model,
@@ -229,7 +227,7 @@ class TabSilCATE:
             from sklearn.base import clone
 
             return clone(self.classifier).fit(X, t)
-        from tabsil.recipe import TabSilClassifier
+        from tabsil.tasks.classification import TabSilClassifier
 
         return TabSilClassifier(
             self.model,

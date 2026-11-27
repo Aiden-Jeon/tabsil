@@ -1,9 +1,9 @@
 """Missing value imputation: 10 OpenML tables x MCAR rates 10/30/50% x 3 seeds, TabSil
-(`tabsil.unsupervised.TabSilUnsupervised.impute`, zero-shot) against the official TabPFN v2
+(`tabsil.TabSilUnsupervised.impute`, zero-shot) against the official TabPFN v2
 extension and the usual baselines, every method on the same rows and masks.
 
 - tables (`TABLES`): OpenML datasets used in imputation benchmarks (HyperImpute, GAIN, MissForest
-  evaluations), 4 numeric only and 6 with categorical columns, at most 21 columns. The whole table
+  evaluations), 3 numeric only and 7 with categorical columns, at most 21 columns. The whole table
   is imputed (the OpenML target is a column like the others). The ARFF file is downloaded once from
   OpenML and checked against `SHA256` (cache: `$TABSIL_IMPUTE_DIR`, default
   `~/.cache/tabsil/impute`). Column kinds are the ARFF's: a nominal attribute is categorical (codes
@@ -30,11 +30,19 @@ extension and the usual baselines, every method on the same rows and masks.
   given the table's categorical columns; both TabPFN extension methods add the numeric columns
   they infer as categorical (`extension_categorical`), and `tabsil_inferred` (TabSil's mean with
   those same column kinds) is the ablation for that difference
+- reruns: the same command on the same hardware gives the same rows a second time. No method
+  draws from an unseeded generator: TabSil, MissForest and `tabpfn_impute` draw from the split's
+  `seed`, the TabPFN estimators keep their own fixed seed, and `mean`, `knn` and `mice` draw
+  nothing. For this MissForest predicts on one thread (`impute_missforest`), and
+  `tabpfn_imputer` seeds both global generators the official `impute` draws from
 
 `run` writes one row per (table, rate, seed, method) to `results.csv` as it goes and skips rows
-already there, so a rerun resumes. A method that raises or leaves a masked cell non-finite is a
-failure: it is recorded in `failures.json` and the run ends with an error after the others;
-nothing is filled in for it.
+already there, so a rerun resumes. A row is reused only with the settings it was computed with
+(`opts`; for TabSil the weights, member count, seed and saved inference settings,
+`_files.model_settings`): a rerun with another model into the same folder stops, and the
+baselines' rows are reused whatever the model. A method that raises or leaves a masked cell
+non-finite is a failure: it is recorded in `failures.json` and the run ends with an error after
+the others; nothing is filled in for it.
 """
 
 from __future__ import annotations
@@ -42,8 +50,8 @@ from __future__ import annotations
 import functools
 import json
 import os
+import random
 import time
-import traceback
 import zlib
 from collections.abc import Callable
 from pathlib import Path
@@ -51,7 +59,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from tabsil.unsupervised import nearest_class  # the same rule as TabSilUnsupervised.impute
+from tabsil.tasks.unsupervised import nearest_class  # the same rule as TabSilUnsupervised.impute
 from tabsil_train.benchmarks import _files
 from tabsil_train.benchmarks._files import download_verified
 
@@ -298,8 +306,9 @@ def impute_mice(X: np.ndarray, categorical: list[int], seed: int, max_iter: int 
 
 
 def n_jobs() -> int:
-    """Parallel jobs of MissForest's forests: `$TABSIL_IMPUTE_N_JOBS` (set per worker by
-    `eval.py --suite impute --shards`), else -1 (every core)."""
+    """Parallel jobs of MissForest's forest fits: `$TABSIL_IMPUTE_N_JOBS` (set per worker by
+    `eval.py --suite impute --shards`), else -1 (every core). The count changes the time, not
+    the imputation."""
     return int(os.environ.get("TABSIL_IMPUTE_N_JOBS", -1))
 
 
@@ -332,6 +341,10 @@ def impute_missforest(
                 n_estimators=n_trees, max_features="sqrt", random_state=seed, n_jobs=n_jobs()
             )
             forest.fit(current[~miss[:, j]][:, others], X[~miss[:, j], j])
+            # predict on one thread: with several, scikit-learn adds the trees' outputs in the
+            # order the threads finish, so the last bits differ from call to call, and with them
+            # the round at which the loop stops
+            forest.set_params(n_jobs=1)
             current[miss[:, j], j] = forest.predict(current[miss[:, j]][:, others])
         change = []
         for cols in kinds:
@@ -386,7 +399,9 @@ def tabpfn_imputer(device: str, simple: bool) -> Callable:
     defaults and the given categorical columns (`official_model_class`: with the missing-value
     fix of `use_classifier_`), or `simple_impute(X, clf, reg, categorical_features)`. Both add the
     numeric columns they infer as categorical (at most 40 values, more than 10 rows per value);
-    such columns are still scored as numeric."""
+    such columns are still scored as numeric. `seed` seeds the two global generators `impute`
+    draws from, torch's (its samples) and Python's `random` (its column orders); `simple_impute`
+    draws from neither."""
 
     def impute(X: np.ndarray, categorical: list[int], seed: int) -> np.ndarray:
         import torch
@@ -394,7 +409,8 @@ def tabpfn_imputer(device: str, simple: bool) -> Callable:
         os.environ.setdefault("TABPFN_DISABLE_TELEMETRY", "1")
         from tabpfn_extensions.unsupervised import simple_impute
 
-        torch.manual_seed(seed)  # the official samples with torch's global generator
+        torch.manual_seed(seed)
+        random.seed(seed)
         clf, reg = tabpfn_models(device)
         if simple:
             return np.asarray(simple_impute(X, clf, reg, categorical_features=list(categorical)))
@@ -427,7 +443,7 @@ def tabsil_imputer(
     `seed_offset`. With `extension_kinds`, the categorical columns are those the TabPFN extension
     uses (`extension_categorical`) and the result is {"tabsil_inferred": mean}; scoring still
     follows the table's kinds."""
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil.tasks.unsupervised import TabSilUnsupervised
 
     def impute(X: np.ndarray, categorical: list[int], seed: int) -> dict[str, np.ndarray]:
         kinds = extension_categorical(X, categorical) if extension_kinds else list(categorical)
@@ -492,11 +508,18 @@ def new_rows(rows: pd.DataFrame, existing: pd.DataFrame) -> pd.DataFrame:
     """The rows of `rows` whose (table, rate, seed, method) is not in `existing` (to merge a
     worker's results without repeating rows an earlier run merged)."""
     merged = finished_keys(existing)
-    return rows[[k not in merged for k in finished_keys_list(rows)]]
+    new = np.array([k not in merged for k in finished_keys_list(rows)], dtype=bool)
+    return rows[new]  # a boolean mask, also when `rows` is empty (the columns stay)
 
 
 def read_results(path: Path) -> pd.DataFrame:
     return _files.read_results(path, RESULT_COLUMNS)
+
+
+def row_settings(methods: list[str], opts: dict[str, str] | None) -> dict[str, str]:
+    """Result method -> the settings string (`opts`) of its rows: its job method's
+    (`tabsil_median` rows are written by the `tabsil` job)."""
+    return {out: (opts or {}).get(m, "") for m in methods for out in METHODS[m]}
 
 
 def run(
@@ -511,13 +534,11 @@ def run(
 ) -> tuple[pd.DataFrame, list[dict]]:
     """Impute every (table, rate, seed, job method) whose rows are not all in
     `out_dir/results.csv`, appending rows as each finishes. `imputers[method](X_masked,
-    categorical, seed)` -> the filled table, or {result method: filled table}. Returns (all rows,
-    failures)."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "results.csv"
-    done = read_results(path)
-    finished = finished_keys(done)
-    failures = []
+    categorical, seed)` -> the filled table, or {result method: filled table}. `opts[method]` is
+    the settings string written with its rows; rows of `methods` already there with another
+    string stop the run (`_files.check_settings`). Returns (all rows, failures)."""
+    results = _files.Results(out_dir, RESULT_COLUMNS, row_settings(methods, opts), "impute", log)
+    finished = finished_keys(results.done)
     for dataset in datasets:
         X_all, categorical, _ = load(dataset)
         for rate in rates:
@@ -544,12 +565,7 @@ def run(
                                     "masked cells"
                                 )
                     except Exception as e:  # noqa: BLE001 - record and go on; the run fails
-                        failures.append(
-                            dict(dataset=dataset, rate=rate, seed=seed, method=method,
-                                 error=repr(e))
-                        )  # fmt: skip
-                        log(f"[impute] {dataset} {rate} {seed} {method} FAILED:\n"
-                            f"{traceback.format_exc()}")  # fmt: skip
+                        results.fail(dict(dataset=dataset, rate=rate, seed=seed, method=method), e)
                         continue
                     seconds = round(time.time() - t0, 1)
                     rows = []
@@ -565,13 +581,8 @@ def run(
                             f"[impute] {dataset} {rate} {seed} {m}: nrmse {s['nrmse']:.4f} "
                             f"accuracy {s['accuracy']:.4f} ({seconds:.0f}s)"
                         )
-                    pd.DataFrame(rows, columns=RESULT_COLUMNS).to_csv(
-                        path, mode="a", header=not path.exists() or not path.stat().st_size,
-                        index=False,
-                    )  # fmt: skip
-    if failures:
-        (out_dir / "failures.json").write_text(json.dumps(failures, indent=1))
-    return read_results(path), failures
+                    results.append(rows)
+    return results.finish()
 
 
 # --- report ---------------------------------------------------------------------------------
