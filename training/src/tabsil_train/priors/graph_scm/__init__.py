@@ -63,7 +63,7 @@ from typing import Literal
 import torch
 
 from tabsil_train.priors.base import PriorBatch
-from tabsil_train.priors.generators.graph_scm import GraphSCM
+from tabsil_train.priors.graph_scm.generator import GraphSCM
 from tabsil_train.priors.hyperparameters import ClassCount
 from tabsil_train.priors.pipeline import Pipeline, Rng
 from tabsil_train.priors.table_size import check_split_sizes, sample_split_size

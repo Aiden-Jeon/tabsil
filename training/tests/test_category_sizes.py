@@ -4,7 +4,7 @@ default, up to 200 with `corrected_cat_sizes`."""
 
 import pytest
 
-from tabsil_train.priors.generators.graph_scm import GraphSCM, _graph_scm_classes
+from tabsil_train.priors.graph_scm.generator import GraphSCM, _graph_scm_classes
 from tabsil_train.priors.pipeline import Rng
 
 

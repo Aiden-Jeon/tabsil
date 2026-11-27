@@ -12,7 +12,7 @@ from torch import nn
 
 from tabsil_train import recipe
 from tabsil_train.priors import graph_scm as P
-from tabsil_train.priors.generators import graph_scm as G
+from tabsil_train.priors.graph_scm import generator as G
 from tabsil_train.priors.hyperparameters import ClassCount
 from tabsil_train.priors.pipeline import Rng
 from tabsil_train.priors.table_size import long_table_feature_cap, sample_split_size
