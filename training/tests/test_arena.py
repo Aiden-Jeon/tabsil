@@ -402,6 +402,27 @@ def test_dataset_queue_puts_expensive_datasets_first_and_skips_unrun_splits():
     assert queue == [("mid_a", 3), ("mid_b", 3), ("big", 1), ("small", 30), ("tiny", 10)]
 
 
+def test_link_checkpoints_replaces_a_link_whose_target_is_gone(tmp_path):
+    script = _eval_script()
+    worker = tmp_path / "out" / "shards" / "shard0"
+    worker.mkdir(parents=True)
+    checkpoints = tmp_path / "out" / "checkpoints"
+    script.link_checkpoints(worker, checkpoints)  # hf:// or local weights: nothing to point at
+    assert not (worker / "checkpoints").is_symlink()
+    checkpoints.mkdir()
+    (checkpoints / "c.pt").write_text("weights")
+    script.link_checkpoints(worker, checkpoints)
+    script.link_checkpoints(worker, checkpoints)  # a rerun keeps the link
+    assert (worker / "checkpoints" / "c.pt").read_text() == "weights"
+    # the output folder was moved: the link still names the old place, where nothing is left
+    (tmp_path / "out").rename(tmp_path / "moved")
+    worker = tmp_path / "moved" / "shards" / "shard0"
+    checkpoints = tmp_path / "moved" / "checkpoints"
+    assert (worker / "checkpoints").is_symlink() and not (worker / "checkpoints").exists()
+    script.link_checkpoints(worker, checkpoints)
+    assert (worker / "checkpoints" / "c.pt").read_text() == "weights"
+
+
 def test_shard_worker_command_replaces_dataset_and_output_flags(tmp_path):
     script = _eval_script()
     argv = [

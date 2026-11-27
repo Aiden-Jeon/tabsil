@@ -1100,6 +1100,19 @@ def host_state_bytes(grid, rows: dict[str, int], estimate) -> dict[str, int]:
     return out
 
 
+def link_checkpoints(worker_dir: Path, checkpoints: Path) -> None:
+    """Point `worker_dir/checkpoints` at the parent's `checkpoints` folder (if there is one), so
+    that a worker reuses what the parent downloaded. A link whose target is gone (the output folder
+    was moved after an earlier run) is replaced."""
+    link = worker_dir / "checkpoints"
+    if not checkpoints.is_dir():
+        return
+    if link.is_symlink() and not link.exists():
+        link.unlink()
+    if not link.exists():
+        link.symlink_to(checkpoints, target_is_directory=True)
+
+
 def run_shards(
     args, suite, limits, datasets, out_dir: Path, cache_id: str = "", host_estimate=None
 ) -> list:
@@ -1159,9 +1172,7 @@ def run_shards(
     def spawn(i: int):
         worker_dir = worker_dirs[i]
         worker_dir.mkdir(parents=True, exist_ok=True)
-        link = worker_dir / "checkpoints"
-        if checkpoints.is_dir() and not link.exists():
-            link.symlink_to(checkpoints, target_is_directory=True)
+        link_checkpoints(worker_dir, checkpoints)
         env = {k: v for k, v in os.environ.items() if k != "MLFLOW_RUN_ID"}
         env.update(CUDA_VISIBLE_DEVICES=devices[i], OMP_NUM_THREADS=str(threads))
         log = open(out_dir / "shards" / f"shard{i}.log", "w")  # noqa: SIM115 (open until the end)
