@@ -15,8 +15,10 @@ requires-python = ">=3.11"
 # pandas comes with tabsil (>=2.2) and is raised to >=3.0.6 in the dev group; the arena extra's
 # tabarena (autogluon) needs pandas<2.4, so that install gets 2.3 (tool.uv.conflicts in the
 # workspace root pyproject.toml).
+# tabsil is the workspace member (tool.uv.sources below). This package imports `tabsil.tasks`,
+# which tabsil has from 0.2.0.
 dependencies = [
-    "tabsil",
+    "tabsil>=0.2.0",
     "matplotlib>=3.10",
     "mlflow>=2.15",
     "openml>=0.15",
