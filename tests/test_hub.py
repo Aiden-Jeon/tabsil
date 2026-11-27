@@ -145,6 +145,31 @@ def test_from_pretrained_reads_the_branch_after_at(monkeypatch, tmp_path):
         hub.from_pretrained("owner/name@step-100k", revision="step-200k")
 
 
+def test_from_hub_reads_the_hub_when_a_folder_has_the_repo_name(monkeypatch, tmp_path):
+    # A path that exists is read as a folder, also when written like a repo id. `from_hub=True`
+    # asks the Hub whatever is on disk (the `hf://` specs of tabsil-train's `load_model`)
+    monkeypatch.chdir(tmp_path)
+    local = _model()
+    torch.manual_seed(1)
+    remote = smoke_model().eval()
+    with pytest.raises(AssertionError):
+        _same_weights(local, remote)  # two different models
+    hub.save_pretrained(local, None, "owner/name")  # ./owner/name
+    hub.save_pretrained(remote, None, tmp_path / "hub")
+    calls = []
+
+    def download(repo_id, filename, revision=None):
+        calls.append((repo_id, revision))
+        return str(tmp_path / "hub" / filename)
+
+    monkeypatch.setattr(hub, "hf_hub_download", download)
+    _same_weights(local, hub.from_pretrained("owner/name")[0])
+    assert not calls
+    _same_weights(remote, hub.from_pretrained("owner/name", from_hub=True)[0])
+    _same_weights(remote, hub.from_pretrained("owner/name@stage2-10k", from_hub=True)[0])
+    assert set(calls) == {("owner/name", None), ("owner/name", "stage2-10k")}
+
+
 def test_default_weights_are_the_pinned_tag_and_other_revisions_pass_through(monkeypatch, tmp_path):
     # A tabsil release pins the weights it downloads by default: the Hub tag `v1.1`, so moving
     # `main` does not change what `TabSilClassifier()` runs. A repo id given by the caller keeps

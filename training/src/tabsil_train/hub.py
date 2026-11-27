@@ -6,10 +6,11 @@ way; `run_architecture` gives the model structure a training run logged as param
     model, borders = load_model("hf://aiden-jeon/tabsil@stage2-10k", "regression", out_dir)
     structure = run_architecture(run.data.params)  # replace(config, **structure)
 
-Hub repos are written as `hf://owner/name`, so a mistyped local path is not sent to the Hub.
-Intermediate checkpoints live on branches of the same repo (`stage1-150k`, `stage2-10k`) and are
-loaded as `hf://owner/name@stage2-10k`. The Hub format (`save_pretrained`, `from_pretrained`) is
-in `tabsil.hub`.
+Hub repos are written as `hf://owner/name`, so a mistyped local path is not sent to the Hub and
+a local folder named like the repo is not read in its place. Intermediate checkpoints live on
+branches of the same repo (`stage1-150k`, `stage2-10k`) and are loaded as
+`hf://owner/name@stage2-10k`. The Hub format (`save_pretrained`, `from_pretrained`) is in
+`tabsil.hub`.
 """
 
 from __future__ import annotations
@@ -87,7 +88,8 @@ def load_model(
     - `runs:/<run_id>/<path>`: a file or folder a training run logged to MLflow (downloaded into
       `dst`; an earlier download in the same `dst` is reused, see `download_artifact`)
     - `hf://owner/name`: a Hub repo (uploaded with `save_pretrained`). Append `@<revision>` to
-      load a branch, tag or commit (e.g. `hf://owner/name@step-100k`)
+      load a branch, tag or commit (e.g. `hf://owner/name@step-100k`). It is downloaded from the
+      Hub also when the working directory has a folder `owner/name`
     - a local `save_pretrained` folder, or a file saved with `tabsil.models.save_checkpoint`
 
     Checkpoints written during training (`checkpoints/step_XXXXXXX.pt`, `latest.pt`) build the
@@ -98,7 +100,7 @@ def load_model(
     spec = str(spec)
     if spec.startswith(HUB_PREFIX):
         repo_id, _, revision = spec.removeprefix(HUB_PREFIX).partition("@")
-        loaded = hub.from_pretrained(repo_id, revision=revision or None)
+        loaded = hub.from_pretrained(repo_id, revision=revision or None, from_hub=True)
     else:
         path = download_artifact(spec, dst) if spec.startswith(RUNS_PREFIX) else Path(spec)
         if not path.exists():

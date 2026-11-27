@@ -56,7 +56,7 @@ def test_hub_needs_the_hf_prefix_and_missing_local_paths_fail(tmp_path, monkeypa
     monkeypatch.setattr(
         hub,
         "from_pretrained",
-        lambda spec, revision=None: seen.append((spec, revision)) or (_model(), None),
+        lambda spec, revision=None, **_: seen.append((spec, revision)) or (_model(), None),
     )
     train_hub.load_model("hf://owner/name", "classification", tmp_path)
     assert seen == [("owner/name", None)]
@@ -66,6 +66,31 @@ def test_hub_needs_the_hf_prefix_and_missing_local_paths_fail(tmp_path, monkeypa
     with pytest.raises(SystemExit, match="hf://"):
         train_hub.load_model("models/clf", "classification", tmp_path)  # mistyped local path
     assert len(seen) == 2
+
+
+def test_hf_spec_is_the_hub_when_a_local_folder_has_the_repo_name(tmp_path, monkeypatch, chdir_tmp):
+    # `hf://owner/name` is the Hub repo, also when the working directory holds a folder
+    # `owner/name` (a local download of the repo, say). The folder is read when given as a path
+    local = _model()
+    torch.manual_seed(1)
+    remote = tabsil_smoke().build_model().eval()
+    with pytest.raises(AssertionError):
+        _same_weights(local, remote)  # two different models
+    hub.save_pretrained(local, None, "owner/name")  # ./owner/name: the cwd is tmp_path
+    hub.save_pretrained(remote, None, tmp_path / "hub")
+    calls = []
+
+    def download(repo_id, filename, revision=None):
+        calls.append((repo_id, revision))
+        return str(tmp_path / "hub" / filename)
+
+    monkeypatch.setattr(hub, "hf_hub_download", download)
+    for spec in ("hf://owner/name@stage2-10k", "hf://owner/name"):
+        _same_weights(remote, train_hub.load_model(spec, "classification", tmp_path)[0])
+    assert set(calls) == {("owner/name", "stage2-10k"), ("owner/name", None)}
+    calls.clear()
+    _same_weights(local, train_hub.load_model("owner/name", "classification", tmp_path)[0])
+    assert not calls
 
 
 def test_hf_spec_without_a_revision_is_main(tmp_path, monkeypatch):

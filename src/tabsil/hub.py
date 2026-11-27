@@ -67,11 +67,15 @@ def save_pretrained(
 
 
 def from_pretrained(
-    repo_id_or_path: str | Path, revision: str | None = None
+    repo_id_or_path: str | Path, revision: str | None = None, *, from_hub: bool = False
 ) -> tuple[nn.Module, torch.Tensor | None]:
     """Load (model, regression borders) from a Hub repo id or a local `save_pretrained` folder.
-    Pass an intermediate checkpoint branch as `revision` or as `owner/name@stage2-10k`."""
-    if _is_local_path(repo_id_or_path):
+    Pass an intermediate checkpoint branch as `revision` or as `owner/name@stage2-10k`.
+
+    A path that exists is read as a folder, also when it is written like a repo id (a folder
+    `owner/name` in the working directory); `revision` is not used for a folder. `from_hub=True`
+    reads `repo_id_or_path` as a Hub repo id whatever is on disk."""
+    if not from_hub and _is_local_path(repo_id_or_path):
         local = Path(repo_id_or_path).expanduser()
         weights_path, config_path = local / WEIGHTS_NAME, local / CONFIG_NAME
     else:
