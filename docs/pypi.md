@@ -32,7 +32,7 @@ Since tabsil 0.1.2 the same weights also run zero-shot forecasting (`TabSilForec
 
 ## Results
 
-On [TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard) with TabArena's official pipeline, TabSil places 18th of 121 methods (Elo 1755, tabsil 0.1.0). The charts, the other benchmarks and how they were run are in the [repository README](https://github.com/Aiden-Jeon/tabsil#results) and on the [model card](https://huggingface.co/aiden-jeon/tabsil).
+On [TabArena-Lite](https://huggingface.co/spaces/TabArena/leaderboard) with TabArena's official pipeline, TabSil places 18th of 121 methods (Elo 1755, tabsil 0.1.0). The charts, the other benchmarks and how they were run are in the [repository README](https://github.com/Aiden-Jeon/tabsil#benchmarks) and on the [model card](https://huggingface.co/aiden-jeon/tabsil).
 
 ## License
 

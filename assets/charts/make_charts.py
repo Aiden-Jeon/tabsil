@@ -204,9 +204,9 @@ class Svg:
 def tabarena_lite(mode: str) -> str:
     """Elo with 95% CI of the README's TabArena-Lite table, TabSil highlighted."""
     readme = README.read_text()
-    rows = table(README, "Results", "Method")
+    rows = table(README, "TabArena-Lite", "Method")
     place_of_pool = re.search(r"places (\d+)\w+ of (\d+) methods", readme)
-    datasets = re.search(r"TabArena-Lite has (\d+) datasets", readme)
+    datasets = re.search(r"\((\d+) datasets", readme)
     if not (place_of_pool and datasets):
         raise SystemExit("README.md: the TabArena-Lite sentences changed; update make_charts.py")
     pool = int(place_of_pool[2])
