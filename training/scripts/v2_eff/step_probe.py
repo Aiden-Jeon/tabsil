@@ -58,8 +58,9 @@ TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "train.py"
 # falls into the record of the step after its log step. Records made before the loop froze have no
 # `freeze_ms`, and their `gc_ms` holds the probe's one collection
 FIELDS = ("wall_s", "opt_ms", "clip_ms", "norms_ms", "wait_ms", "gc_ms", "freeze_ms")
-# the folder where the prior workers of this process write their records (`_worker_init`)
-WORKER_DIR = "TABSIL_EFF_WORKER_DIR"
+# The folder where the prior workers of this process write their records (`_worker_init`). Not a
+# `TABSIL_*` name: those are the run's settings, and `train.py` tags the run with them
+WORKER_DIR = "EFF_PROBE_WORKER_DIR"
 
 
 class Probe:
