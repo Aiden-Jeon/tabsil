@@ -161,7 +161,7 @@ Paired comparisons (G (95% CI), p, better / worse). "Pooled" puts the 51 + 48 = 
 
 ## Phase 1A
 
-Stage 2 (10K steps) from `aiden-jeon/tabsil@stage1-150k` on 32 H100, with the training code of dev-v2 01973a5. N10, R10 and #14's run have the same settings and differ in the prior and the seed. N10 ran on 2026-11-26, and R10 from 2026-11-26 to 2026-11-27.
+Stage 2 (10K steps) from `aiden-jeon/tabsil@stage1-150k` on 32 H100, with the training code of dev-v2 01973a5. N10, R10 and #14's run have the same settings and differ in the prior and the seed. N10 ran on 2026-11-26, and R10 from 2026-11-26 to 2026-11-27. L20 (20K steps planned) ran on 2026-11-27 on 8 H100 at micro batch 2, with the training code of dev-v2 aab3d9c, and was stopped at step 5,200 by the user's decision; its section lists what differs from these runs.
 
 ### Runs
 
@@ -253,18 +253,78 @@ The three runs against `stage2-10k` (the v1 prior), on 3 splits and the developm
 - **N10's gain on the development suite is that run's, not the prior's.** The other two runs are at 1.000 and 1.001 there.
 - **Against the v1 prior by the branch rule, pooled:** the hicard prior passes with its two seeds together (0.9918 against 0.9944, CI upper end 0.9998) and with N10 alone, and not with #14's run alone (CI 0.980-1.001). R10 does not pass (0.9949, CI up to 1.003). Without polish_companies_bankruptcy nothing passes.
 
-### L20: proposal, not launched
+### L20: stopped at step 5,200, no verdict
 
-**Update 2026-11-27: launched, on another setup than this proposal.** The user chose 8 H100 at micro batch 2 from the GPU cost measurements ("GPU cost" below): `tabsil-v2-s2-l20` (`893293ed7d8d419780be2d178b8cc713`), started 12:28 UTC, 20K steps, seed 0, the other settings as N10. It costs about 360 H100-h in 44 to 46 h, instead of 614 in 19 h. Its controls ran at micro batch 1 on 32 H100, so its G against them holds the length and the micro batch together (plan §7).
+L20 asked whether a longer stage 2 helps: stage 2 from `stage1-150k` for 20K steps on `graph_scm_hicard_missing`, seed 0. On 2026-11-27 the user chose this prior from the proposal's three options (this prior, the v1 prior, no L20), and then 8 H100 at micro batch 2 instead of the proposal's 32 H100 at micro batch 1, from the GPU cost measurements ("GPU cost" below). The control was the mean of #14's run and N10. 20K steps were to be adopted for phase 4 if the pooled G was at most 0.9944, the CI lay below 1 and no task was more than 0.5% worse.
 
-L20 is proposed on `graph_scm_hicard_missing`: stage 2 from `stage1-150k` for 20K steps, seed 0, the other settings as N10. It is 614 H100-h at 3.3 s per step (19.1 h on 32 H100, so `timeout_minutes=1440` or two chunks). Its control is the mean of #14's run and N10, and 20K steps are adopted for phase 4 if the pooled G is at most 0.9944 with a CI below 1 and no task more than 0.5% worse. The user decides before it runs.
+**The user stopped L20 on 2026-11-28 (the job was cancelled at 2026-11-27 23:04 UTC, which is 2026-11-28 08:04 KST), shortly after step 5,200 of 20,000.** The gain measured for v2 so far is +20 to +40 Elo on TabArena-Lite, about 1% of error (N10 1788 and #14's run 1808, against 1768 for v1.1). The user judged further experiments for a gain of that size not worth running. L20's own gain was expected to be 0.7% at most. By the same decision phases 3 to 5 are not run (plan §7).
+
+- **There is no verdict.** Nothing was evaluated. Step 5,000 is a quarter of a 20K-step cosine schedule (learning rate 8.6e-5 of the peak 1e-4), not the end of a stage 2, so its weights do not answer the question. Whether a longer stage 2 helps stays open.
+- **The run itself had no fault.** No step was skipped, there was no rewind and no memory error, and the loss was at the controls' level.
+
+| Run | MLflow run | Job run | GPUs | Micro batch | Steps | Seed | Started | Ended | Wall time | H100-h |
+|---|---|---|---|---|---|---|---|---|---|---|
+| L20 `tabsil-v2-s2-l20` | `893293ed7d8d419780be2d178b8cc713` | `364643392108130` | 8 H100 (one node) | 2 | 5,200 of 20,000 | 0 | 2026-11-27 12:28 UTC | 23:04 UTC, cancelled | 10.60 h | 85 |
+
+**What is left.** `checkpoints/step_0005000.pt` and `checkpoints/latest.pt` are in the MLflow run, both at step 5,000 with the optimizer state. There is no `model/final.pt`. The run can be continued from step 5,000 with `TABSIL_RESUME_RUN_ID`, the launch's settings and the code of dev-v2 aab3d9c. No resume is planned.
+
+**The run to step 5,200** (100-step windows after the first, which holds the compilation):
+
+| | L20 | For comparison |
+|---|---|---|
+| s / step, mean (10th-90th percentile) | 7.16 (6.99-7.38) | 7.93 in steps 20-59 of the timing run (`8b954553…`); 3.30 for N10 on 32 H100 |
+| H100-h per 1K steps | 15.9 from the step time; 16.2 for the whole job, with its start, the compilation, one validation and five checkpoints | 17.6 from the timing run; 29.3 for N10 |
+| Train loss, steps 100-1,000 → 4,100-5,200 | 0.1828 → 0.1821 | #14's run 0.1829 → 0.1823; N10 0.1829 → 0.1812 |
+| Skipped steps, rewinds | none | none |
+| GPU memory | 57.6 GB allocated at most (`gpu_mem_gb`); 71.0 GB at most as the driver reports it | 56.4 GB in the timing run; 58.7 GB (driver 68.1 GB) with every table at 10,240 rows |
+| GPU power, utilization | 442 W, 89% | 310 W, 84-88% for the controls |
+| Node CPU use | 18% | 14% for the controls |
+| Data wait on rank 0 | 0.5% on average; 7 of 52 windows above 1%, the largest 5.0% | 0.3% for N10 |
+
+- **The step time held over the 5,200 steps.** Each stretch of about 1,000 steps is between 7.13 and 7.18 s. The 7.93 s of the timing run came from 40 steps. For a stage 2 on one node at micro batch 2, with the code before the collector change and prefetch 4, L20 gives about 162 H100-h per 10K steps, where the plan's phase 4 has 182.
+- **Validation at step 5,000** uses the 64 tables per task that L20 shares with #14's run (the same seed). L20: loss 0.1764 (classification 0.2853, regression 0.0676, accuracy 0.8543). #14's run at its step 5,000: 0.1766 (0.2854, 0.0677, 0.8543). The two are level, at different points of their schedules (learning rate 8.6e-5 for L20 and 5.1e-5 for #14's run), so this judges neither the length nor the setup.
+
+**The design.**
 
 - **Why this prior.** It is the only one that passes the branch rule against the v1 prior pooled. R10 does not improve on it and costs more. It also has two 10K runs from the same code as controls, so L20's difference to them can be set against a measured ν. The v1 prior's `stage2-10k` is one run, written by minipfn's code.
 - **What L20 can resolve.** The pooled CI of one branch against another is about ±0.4% (N10 against #14's run: 0.993-1.001). A length effect below about 0.5% will not pass the rule. The only estimate so far is 0.993 for 5K → 10K steps within one schedule, which overstates the effect of the length (plan §1.1).
 - **What it does not settle.** The prior's gain over the v1 prior is one dataset wide. If phase 4 should rest on a prior with no such caveat, the alternative is 20K steps on `graph_scm` against `stage2-10k`, at the same cost and with the weaker control.
-- **Code.** #14's run and N10 ran on the training code of dev-v2 01973a5. dev-v2 now has #32's training changes. `training/tests/test_default_behavior.py` pins their defaults to 01973a5's behavior (the batches of this prior, the borders and a short training run), so L20 runs from dev-v2 with the default settings. This prior needs no larger prefetch.
 
-For phase 4 this leaves `graph_scm_hicard_missing` as the stage-2 prior, without the parts `graph_scm_realism` adds, and the length open until L20.
+**What differs from the controls.** The configuration that was submitted (`training_config.yaml` of the launch) was compared with N10's. Besides the run name and the timeout (3,300 minutes), L20 differed from #14's run and N10 in these:
+
+| | #14's run and N10 | L20 | Note |
+|---|---|---|---|
+| Steps | 10,000 | 20,000 | The question |
+| Warmup | 100 steps | 200 steps | The recipe sets the warmup to 1% of the stage's steps (`recipe.curriculum`), so it follows `TABSIL_STEPS` |
+| GPUs | 32 H100 (4 nodes) | 8 H100 (1 node) | The batch stays 256: 16 accumulation steps instead of 8 |
+| Micro batch | 1 | 2 | A step has 128 table sizes instead of 256. A table's loss and weight do not depend on the micro batch ("What a larger micro batch changes" below; read from the code, not measured) |
+| Tables | seeds 0 and 1 | seed 0 | The training stream depends on the GPU's rank and the micro batch, so L20 saw other tables than #14's run. The validation set depends on the seed only: L20 and #14's run share their 64 validation tables per task |
+| Training code | dev-v2 01973a5 | dev-v2 aab3d9c | #32's changes, with the default settings (next paragraph) |
+| `tabicl` | `>=2.2`, which installed 2.2.0 (N10's log) | `==2.2.0` | The same version |
+
+- **L20's G against its controls would have held the length, the micro batch and the GPU count together** (plan §7). A clear pass or a clear fail would have read the same either way. Near the threshold on either side, the length could not have been told from the setup without a 10K-step run at micro batch 2.
+
+**Code.** `git diff 01973a5 aab3d9c -- src training/src training/scripts/train.py` is not empty. `src` (the inference package) is unchanged. 20 files under `training/` changed: 4 of the evaluation code (`benchmarks/`, not used in training) and 16 of the training script, the priors and the training loop, from #32. For the default settings, which L20 used, the diff was read:
+
+- `train.py`: the new options (`--prefetch-factor`, `--optimizer`, `--muon-momentum`, `--reference-val-tables`, `--target-train-rows`) are unset by default and then add nothing to the config. The functions that inherit a run's settings act only on a resume.
+- `training/loop.py` and `training/muon.py`: with the default `optimizer="muon"` every parameter stays in the Muon groups and the AdamW step has no group. Validation takes the old path unless the reference set or `target_train_rows` is on. The loader's `prefetch_factor` comes from the config, whose default is the 4 that was fixed before. New and outside the training computation: the attention temperature metrics, the `prior_options` param and the `tabicl_version` tag.
+- `priors/`: `graph_scm_hicard_missing.py` is unchanged. The options added to `graph_scm.py` and its generator (`reject_trivial_prob`, `target_train_rows`, `min_missing_rate`, `correlate_discrete_levels`) are off or at the old value by default, and the default path draws the same random numbers.
+- `training/tests/test_default_behavior.py` compares this prior's batches, the regression borders, the validation batches and a 6-step training run (losses, weights, optimizer state) with values written on 01973a5. It passes on aab3d9c, in the whole suite (`pytest training/tests`: 414 passed, 13 skipped for optional packages or a GPU that the local environment lacks).
+- No unit test runs several GPUs with compilation and TF32 at stage-2 table sizes. The diff changes that path only in the optimizer's group filter above.
+
+**The first 300 steps** (100-step windows; #14's run and N10 give the loss level, on other tables):
+
+| Step | Train loss L20 / #14 / N10 | Classification | Regression | L20 s / step | L20 GPU memory |
+|---|---|---|---|---|---|
+| 100 | 0.1843 / 0.1841 / 0.1850 | 0.304 / 0.306 / 0.307 | 0.0645 / 0.0620 / 0.0631 | 11.18 (with the compilation) | 56.4 GB |
+| 200 | 0.1798 / 0.1857 / 0.1797 | 0.301 / 0.313 / 0.299 | 0.0584 / 0.0584 / 0.0601 | 7.85 | 56.4 GB |
+| 300 | 0.1860 / 0.1792 / 0.1828 | 0.312 / 0.299 / 0.306 | 0.0600 / 0.0589 / 0.0596 | 7.40 | 56.8 GB |
+
+- **The loss is at the controls' level** in both tasks, and no step was skipped.
+- **Speed and memory are those of the timing run** (`8b954553…`: 7.9 s per step and 56.4 GB). The memory is below the 58.7 GB of the check with every table at 10,240 rows. GPU power is 424 W and utilization 89% (310 W and 84-88% for the controls at micro batch 1 on 32 H100).
+- **Data wait:** rank 0 waited 2.6% of the third window and under 0.1% of the first two. `TABSIL_PREFETCH_FACTOR` was left at 4, as in the timing run. With 16 the longest wait was 3 ms per step in a 110-step run ("Data stalls on one node in stage 2" below); that queue size has not run longer than that at stage 2.
+
+**What phase 1A leaves.** The stage-2 prior is answered: `graph_scm_hicard_missing`, without the parts `graph_scm_realism` adds (N10 and R10 above). The stage-2 length is not, because L20 has no verdict. Phase 4 is not run (plan §4, decided 2026-11-28). The v2 candidate stays what 1A has: v1's stage 1 (`stage1-150k`) with 10K steps of stage 2 on this prior, of which #14's run and N10 are the two seeds.
 
 ### Why R10 was slow
 
