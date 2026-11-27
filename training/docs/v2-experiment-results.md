@@ -181,7 +181,7 @@ No run skipped a step or rewound. The s / step column is the mean of the 100-ste
 | #14 (control) | `7cc31c48…` | 1807.6 | `facabb77…` | 1804.2 | `f12907e6…` |
 
 Checks on the per-split errors:
-- TabArena-Lite's 51 splits are split 0 of the 3-split suite (0.5). N10's Lite run and split 0 of its 3-split run also have identical errors on all 51. So the Lite rows below are a subset of the 3-split rows, not independent evidence.
+- TabArena-Lite's 51 splits are split 0 of the 3-split suite (0.5). The Lite runs of N10 and R10 and split 0 of their 3-split runs also have identical errors on all 51. So the Lite rows below are a subset of the 3-split rows, not independent evidence.
 - `a8b69941…` and `7cc31c48…` were run before the applied inference settings were logged, and `a8b69941…` before `--categories counts` was passed explicitly. Both are identical to split 0 of their 3-split runs (`fa88e6df…`, `facabb77…`), which log the settings, so they were evaluated the same way.
 - N10's arena runs used 1 H100 with one shard, because the 8xH100 nodes were taken. The shard count does not change the result: v1's Lite run with one shard (`138151a2…`) is identical on all 51 splits to split 0 of its 8-shard 3-split run (`98c91ea0…`).
 
@@ -260,13 +260,13 @@ L20 is proposed on `graph_scm_hicard_missing`: stage 2 from `stage1-150k` for 20
 - **Why this prior.** It is the only one that passes the branch rule against the v1 prior pooled. R10 does not improve on it and costs more. It also has two 10K runs from the same code as controls, so L20's difference to them can be set against a measured ν. The v1 prior's `stage2-10k` is one run, written by minipfn's code.
 - **What L20 can resolve.** The pooled CI of one branch against another is about ±0.4% (N10 against #14's run: 0.993-1.001). A length effect below about 0.5% will not pass the rule. The only estimate so far is 0.993 for 5K → 10K steps within one schedule, which overstates the effect of the length (plan §1.1).
 - **What it does not settle.** The prior's gain over the v1 prior is one dataset wide. If phase 4 should rest on a prior with no such caveat, the alternative is 20K steps on `graph_scm` against `stage2-10k`, at the same cost and with the weaker control.
-- **Code.** #14's run and N10 ran on the training code of dev-v2 01973a5. dev-v2 now has #32's training changes, whose defaults are pinned to the old behavior by `training/tests/test_default_behavior.py`. Running L20 from 01973a5's training code keeps the comparison to one variable.
+- **Code.** #14's run and N10 ran on the training code of dev-v2 01973a5. dev-v2 now has #32's training changes. `training/tests/test_default_behavior.py` pins their defaults to 01973a5's behavior (the batches of this prior, the borders and a short training run), so L20 runs from dev-v2 with the default settings. This prior needs no larger prefetch.
 
 For phase 4 this leaves `graph_scm_hicard_missing` as the stage-2 prior, without the parts `graph_scm_realism` adds, and the length open until L20.
 
 ### Why R10 was slow
 
-R10 took 4.95 s per step against 3.30 for N10, with the same settings, and 450 H100-h against 305. The cause is the time the prior takes to make a few large tables, and it is fixed in the data loader, not by the GPU count.
+R10 took 4.95 s per step against 3.30 for N10, with the same settings, and 450 H100-h against 305. The cause is the time the prior takes to make a few large tables, and the fix is a data loader setting.
 
 **What the runs show.** GPU work is the same, and R10's GPUs wait:
 
