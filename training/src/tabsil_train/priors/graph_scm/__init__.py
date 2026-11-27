@@ -1,6 +1,12 @@
 """Graph SCM prior (prior axis, `prior_type="graph_scm"`): the TabICLv2 graph SCM generator plus a
-table size rule and missing values. It chains the parts (`tabsil_train.priors.generators.graph_scm`,
-`transforms`) with `Pipeline`, and is the prior used by the TabSil recipe (`tabsil_train.recipe`).
+table size rule and missing values. It chains the parts (`generator.GraphSCM` in this folder,
+`tabsil_train.priors.transforms`) with `Pipeline`, and is the prior used by the TabSil recipe
+(`tabsil_train.recipe`).
+
+This folder holds what is specific to the graph SCM. This module is the prior: `GraphSCMPrior`,
+and `make_prior`, `make_borders` and `check_config`, which build it from a training config.
+`generator` is the generator it wraps. `variants` holds the priors that are this one with some of
+its options at fixed values, each registered under its own name.
 
 1. Table size: each batch draws the rows (train + eval) and the train-row share, then the feature
    count, with the TabICLv2 training-script rule (`table_size.sample_split_size`). All datasets
@@ -36,10 +42,10 @@ borders are drawn with them (`make_borders(..., **options)`, `TARGET_FIELDS`):
   factors (x only). `correlate_discrete_levels` (default 100) is the most distinct values of a
   column that blending keeps as they are
 - `relabel_prob` (`transforms.Relabel`): the target recomputed from 1-4 columns
-- `corrected_num_converters`, `corrected_cat_sizes` (`generators.graph_scm.GraphSCM`): the two
-  TabICL `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 200 categories)
-- `reject_trivial_prob` (`generators.graph_scm.GraphSCM`): with this probability a dataset that an
-  ExtraTrees probe predicts almost perfectly is drawn again
+- `corrected_num_converters`, `corrected_cat_sizes` (`generator.GraphSCM`): the two TabICL
+  `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 200 categories)
+- `reject_trivial_prob` (`generator.GraphSCM`): with this probability a dataset that an ExtraTrees
+  probe predicts almost perfectly is drawn again
 
 Regression target scaling, off by default: with `target_train_rows`
 (`transforms.TrainRowTargetScale`, a training config field like `filter_unpredictable`), the
@@ -63,8 +69,7 @@ from typing import Literal
 import torch
 
 from tabsil_train.priors.base import PriorBatch
-from tabsil_train.priors.generators.graph_scm import GraphSCM
-from tabsil_train.priors.hyperparameters import ClassCount
+from tabsil_train.priors.graph_scm.generator import GraphSCM
 from tabsil_train.priors.pipeline import Pipeline, Rng
 from tabsil_train.priors.table_size import check_split_sizes, sample_split_size
 from tabsil_train.priors.transforms import (
@@ -87,6 +92,29 @@ MAX_CLASSES = 10
 MAX_ATTEMPTS = 100  # most redraws for one dataset (so that a bad setting raises instead of hanging)
 # Fewest train rows of a table: classification needs two so that two classes can appear
 MIN_TRAIN_ROWS = {"classification": 2, "regression": 1}
+
+
+class ClassCount:
+    """Class count `num_classes` ~ U{2, ..., min(max_classes, train rows)}.
+
+    Every class must appear among the train rows, so the class count never exceeds the train row
+    count. With `binary_prob` > 0, 2 is picked first with that probability, otherwise the count is
+    drawn from the uniform distribution above (TabICLv2 `PriorDataset` uses 0.5, giving binary
+    tasks 0.5 + 0.5/9 ≈ 56% of the time). With 0, no extra random number is drawn, so the datasets
+    are the same as without the option.
+    """
+
+    def __init__(self, max_classes: int, binary_prob: float = 0.0) -> None:
+        if not 0.0 <= binary_prob <= 1.0:
+            raise ValueError(f"binary_prob must be between 0 and 1: {binary_prob}")
+        self.max_classes = max_classes
+        self.binary_prob = binary_prob
+
+    def __call__(self, rng: Rng, n_train: int, n_features: int) -> dict:
+        if self.binary_prob and rng.numpy.random() < self.binary_prob:
+            return {"num_classes": 2}
+        max_classes = min(self.max_classes, n_train)
+        return {"num_classes": int(rng.numpy.integers(2, max_classes + 1))}
 
 
 class GraphSCMPrior:
@@ -254,7 +282,7 @@ SIZE_FIELDS = tuple(SIZE_DEFAULTS)
 # Prior options that change the training data distribution
 PRIOR_FIELDS = ("binary_prob", "filter_unpredictable", "target_train_rows")
 # Options that change only x, off by default (module docstring). They are not training config
-# fields: a prior that turns them on is its own module with fixed values (`tabsil_train.priors`)
+# fields: a prior that turns them on is a variant with fixed values (`variants`)
 REALISM_FIELDS = (
     "noise_prob",
     "coarsen_prob",
@@ -265,11 +293,11 @@ REALISM_FIELDS = (
     "correlate_prob",
     "correlate_discrete_levels",
 )
-# The MCAR missing values (step 3; x only). missing_dataset_prob is a training config field; a prior
-# module may fix it and the rates instead (then the config value is not used)
+# The MCAR missing values (step 3; x only). missing_dataset_prob is a training config field; a
+# variant may fix it and the rates instead (then the config value is not used)
 MISSING_FIELDS = ("missing_dataset_prob", "max_missing_rate", "min_missing_rate")
 # Options that also change the target, off by default. Like REALISM_FIELDS they are fixed by a
-# prior module, which passes them to `make_borders` too
+# variant, which passes them to `make_borders` too
 TARGET_FIELDS = (
     "relabel_prob",
     "corrected_num_converters",
