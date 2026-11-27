@@ -841,8 +841,12 @@ def problem_type(task_type: str, n_classes: int) -> str:
     return "binary" if n_classes == 2 else "multiclass"
 
 
-# probabilities are clipped to [LOG_LOSS_EPS, 1 - LOG_LOSS_EPS] in the log loss, as in sklearn and
-# AutoGluon (TabArena's scorer)
+# Probabilities are clipped to [LOG_LOSS_EPS, 1 - LOG_LOSS_EPS] in the log loss. TabArena's scorer
+# (AutoGluon's `log_loss`, which calls `sklearn.metrics.log_loss`) clips at the machine epsilon of
+# the predictions' dtype instead (2.2e-16 for float64, 1.2e-7 for float32) and does not
+# renormalize. The two agree unless a test row's true class gets a probability below the larger
+# of the two clips (1e-15 against float64 predictions, 1.2e-7 against float32): such a row costs
+# up to 34.5 here and up to 36.0 (float64) or 15.9 (float32) there.
 LOG_LOSS_EPS = 1e-15
 
 
@@ -851,18 +855,20 @@ def metric_error(
 ) -> float:
     """TabArena's error of one fold (lower is better) for `kind` (`problem_type`): 1 - ROC AUC
     (binary), log loss (multiclass) or RMSE (regression). As in `score_fold`, test rows of a
-    class the training fold does not have are dropped. The log loss is over all training classes
-    (the probabilities renormalized after clipping), so a test fold without some class is still
-    scored."""
+    class the training fold does not have are dropped (NaN if no row is left, as `score_fold`).
+    The log loss is over all training classes (the probabilities renormalized after clipping,
+    `LOG_LOSS_EPS`), so a test fold without some class is still scored."""
     if kind == "regression":
         return float(mean_squared_error(y_true, prediction) ** 0.5)
     if kind == "binary":
         return 1.0 - score_fold("classification", y_true, prediction, classes)
     y_true, prediction = drop_unseen_classes(y_true, prediction, classes)
+    if len(y_true) == 0:
+        return float("nan")
     proba = np.clip(np.asarray(prediction, dtype=np.float64), LOG_LOSS_EPS, 1 - LOG_LOSS_EPS)
     proba = proba / proba.sum(axis=1, keepdims=True)
     position = {c: i for i, c in enumerate(np.asarray(classes).tolist())}
-    index = np.array([position[c] for c in np.asarray(y_true).tolist()])
+    index = np.array([position[c] for c in np.asarray(y_true).tolist()], dtype=int)
     return float(-np.mean(np.log(proba[np.arange(len(y_true)), index])))
 
 

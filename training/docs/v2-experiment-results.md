@@ -98,6 +98,26 @@ The script's output holds every layer and head.
 
 **Recommendation: phase 1B gets no FP16 arm.** The BF16 failure Kumo guards against is not present in v1's training. In the OPTK runs, the first row-ICL layer's `head_scale` should be watched: the training runs already log `weight_norm/row_icl_log_scale/muon` per group, and the AdamW group would need the same. An FP16 regression arm is added only if those scales grow several-fold.
 
+### 0.5: evaluation code
+
+PR #31 adds `--suite tabarena-3split`, `--suite dev` and `training/scripts/paired_report.py`, and puts the weights and the applied inference settings in the arena cache key. The checks below were made on the runs of 0.1, 0.2 and 0.6.
+
+**The development suite holds no TabArena data.** Of the 57 AMLB / CTR23 tasks, 9 have data that is also among TabArena's 51 datasets (`amlb.TABARENA_OVERLAP`). That leaves 48: 23 classification (13 binary and 10 multiclass) and 25 regression. The 57 were compared with the curated TabArena metadata of the `tabarena` package in three ways:
+
+- Names, in lower case with only letters and digits (`training/scripts/dev_suite_overlap.py`). This gives 7 matches: blood-transfusion-service-center, qsar-biodeg, credit-g, churn, airfoil_self_noise, concrete_compressive_strength and QSAR_fish_toxicity.
+- Sources, read from both lists. This gives 2 more. AMLB's dna is the UCI splice-junction data that TabArena has as splice. AMLB's wine-quality-white is the white-wine half of TabArena's wine_quality.
+- Row counts of the remaining 48 against the 51. Two pairs have the same count and are different data: energy_efficiency and diabetes (768 rows), and grid_stability and Bank_Customer_Churn (10,000 rows). The next closest pair is kr-vs-kp (3,196 rows, chess endgames) and splice (3,190 rows, DNA).
+
+Related tables with other rows stay in the suite. kc1 and pc4 are other NASA projects than TabArena's jm1. Australian is another credit table than credit-g. student_performance_por is another UCI table than students_dropout_and_academic_success. The plan's earlier count of 10 classification and 3 regression overlaps was a name match over the full AMLB lists, made before the list for these 57.
+
+**Split 0 of the 3-split suite is the TabArena-Lite split.** For v1.1, `stage2-10k` and #14, the error on split 0 of the 3-split run equals the error of the TabArena-Lite run with the same weights and settings, on all 51 datasets and to the last digit. Splits 1 and 2 are the other two folds of repeat 0.
+
+**The error has the same definition in both suites.** It is 1 − ROC AUC for binary tasks, the log loss for multiclass tasks and the RMSE for regression. In `results_per_split.csv` the `metric` column is `roc_auc`, `log_loss` and `rmse` for the three task types. One detail differs. The development suite clips probabilities at 1e-15 in the log loss. TabArena's scorer (`sklearn.metrics.log_loss`) clips at the machine epsilon of the predictions' type, 1.2e-7 for float32. The two differ only where a test row's true class gets a probability below these values.
+
+**The paired report matches a second computation.** A separate script that uses only pandas and scipy gives the same G, CI, p and counts for every comparison of 0.1, 0.2 and 0.6. No dataset of any run is near the report's error floor of 1e-6: the smallest dataset error is 1.8e-4 (kr-vs-kp).
+
+The report stops if two pooled suites share a dataset, because that dataset would count twice. For MLflow runs it prints a warning when a and b differ in the evaluation seed, the fold count, the context cap or the applied inference settings.
+
 ### 0.6: baselines
 
 Every later comparison uses these runs as its control. The 3-split runs are TabArena with splits 0-2 of each dataset (`--suite tabarena-3split`, 153 splits, 8 H100) and have 0% imputed splits. The dev runs are the development suite (`--suite dev`: 23 classification and 25 regression tasks × 10 folds, 1 H100). A failed fold stops a dev run, and all of them finished. Every run logs `inference_classification` and `inference_regression` with 8 members and the numeric-cycle kinds.
@@ -132,7 +152,7 @@ Paired comparisons (G (95% CI), p, better / worse). "Pooled" puts the 51 + 48 = 
 | 0.2 | §1.2's reading holds: capped `stage1-150k` against capped v1 is 1.003 overall and 1.005 in regression. Phase 1B's capped readout stands |
 | 0.3 | XS costs 98 H100-h per 30K steps on 8 H100 (the plan said 56), S 115 and M 121. Phase 1B costs 880-1,180 H100-h on XS. Phase 2 at 190 H100-h per size is M 47K, S 49K and XS 58K steps |
 | 0.4 | No attention temperature grew (largest a_h 0.76, first in-context layer mean 0.19). Phase 1B gets no FP16 arm; watch the scales in OPTK |
-| 0.5 | PR #31: `--suite tabarena-3split`, `--suite dev`, `training/scripts/paired_report.py`, weights and applied inference in the arena cache key |
+| 0.5 | PR #31: `--suite tabarena-3split`, `--suite dev`, `training/scripts/paired_report.py`, weights and applied inference in the arena cache key. The development suite's 48 datasets hold no TabArena data |
 | 0.6 | The baselines above |
 
 **Phase 1B.** The readout, the controls and the FP16 question are settled, so phase 1B can start as designed except for its cost. On XS it costs 1.8 times the plan's estimate, and at M size only 1.24 times the XS cost. The size of the 1B model (XS or M) is a decision to make before the runs. One XS timing run at micro batch 8 (about 1.5 H100-h) would make the XS number firmer.

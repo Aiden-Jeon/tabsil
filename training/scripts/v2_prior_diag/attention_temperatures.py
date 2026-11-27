@@ -6,15 +6,16 @@ U(0, 1) at initialization, and q and k carry an RMSNorm without gain, so a_h bou
 (sqrt(head dim) * a_h * log n). Kumo-Tabular reports that with BF16 the temperature of its first
 in-context layer grew about 30-fold, and trains its regressors in FP16 for that reason. This
 script reads a_h from the weight files only (no forward pass) and prints, per layer and per
-checkpoint, the mean, the largest |a_h| and the largest |a_h| over the mean of the U(0, 1) draw
-(0.5). The gated row-stage attention also has a gate (1 + tanh) that can at most double a_h; its
-weights are not read here.
+checkpoint, the mean and the largest |a_h|. The mean of the U(0, 1) draw is 0.5, so a 30-fold
+growth would be an |a_h| of about 15. The gated row-stage attention also has a gate (1 + tanh)
+that can at most double a_h; its weights are not read here.
 
     uv run --package tabsil-train python training/scripts/v2_prior_diag/attention_temperatures.py \
         aiden-jeon/tabsil@stage1-150k aiden-jeon/tabsil@stage2-10k aiden-jeon/tabsil@v1.1
 
 An argument is a Hub repo id (`owner/name@revision`) or a local `.safetensors` / `.pt` file
-(a `tabsil.models.save_checkpoint` file). `--csv` writes the per-head values.
+(a `tabsil.models.save_checkpoint` file or a training checkpoint). `--csv` writes the per-head
+values.
 """
 
 from __future__ import annotations
@@ -26,8 +27,8 @@ from pathlib import Path
 import pandas as pd
 import torch
 
-# U(0, 1) initialization of head_scale: the expected value of a freshly drawn a_h
-INIT_MEAN = 0.5
+from tabsil.models import state_weights
+
 SUFFIX = ".log_scale.head_scale"
 # Display order of the attention groups, with the meaning of each
 GROUPS = {
@@ -51,8 +52,7 @@ def load_state(source: str) -> dict[str, torch.Tensor]:
 
         with safe_open(str(path), "pt") as f:
             return {k: f.get_tensor(k) for k in f.keys() if k.endswith(SUFFIX)}
-    state = torch.load(path, map_location="cpu", weights_only=False)
-    state = state.get("model", state.get("state_dict", state))
+    state = state_weights(torch.load(path, map_location="cpu", weights_only=True))
     return {k.removeprefix("module."): v for k, v in state.items() if k.endswith(SUFFIX)}
 
 
@@ -66,8 +66,8 @@ def layer_key(name: str) -> tuple[int, int, str]:
 
 
 def temperatures(sources: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(per-layer table, per-head table). Per layer: mean a_h, max |a_h| and max |a_h| / 0.5,
-    one column group per source."""
+    """(per-layer table, per-head table). Per layer: mean a_h and max |a_h|, one column group
+    per source."""
     heads, layers = [], []
     for source in sources:
         for name, value in load_state(source).items():
@@ -83,7 +83,6 @@ def temperatures(sources: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "layer": label,
                     "mean": a.mean().item(),
                     "max_abs": a.abs().max().item(),
-                    "max_over_init": a.abs().max().item() / INIT_MEAN,
                 }
             )
     if not layers:

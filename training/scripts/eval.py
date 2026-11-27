@@ -1359,7 +1359,9 @@ def main(argv: list[str] | None = None) -> None:
         IMPUTE_SUITE,
     ):
         # the arenas report only the official package's metrics; stop rather than silently ignore
-        raise SystemExit("--uncertainty is for AMLB suites only (classification, regression, all).")
+        raise SystemExit(
+            "--uncertainty is for AMLB suites only (classification, regression, all, dev)."
+        )
     if args.latency and args.suite not in ARENA_SUITES:
         raise SystemExit("--latency is for the TabArena / BeyondArena suites only.")
     out_dir = Path(args.out_dir)
