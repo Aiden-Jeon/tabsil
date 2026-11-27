@@ -20,11 +20,15 @@ the CLS token count (the row ICL width is their product); unset, the preset's va
 When resuming or taking weights from a run, that run must have the same structure: a run of another
 size needs the same `--emsize` and `--n-cls` again.
 The scale is set with arguments or environment variables (`TABSIL_CONFIG_NAME`, `TABSIL_STEPS`,
-`TABSIL_BATCH_SIZE`, `TABSIL_MICRO_BATCH`, `TABSIL_NUM_WORKERS`, `TABSIL_LR`,
-`TABSIL_CHECKPOINT_EVERY`, `TABSIL_VAL_EVERY`, `TABSIL_LOG_EVERY`). The training speed options
-(`TrainConfig` comments) are turned on with `--compile`, `--tf32`, `--weight-average K` (or
-`TABSIL_COMPILE=1` etc., `TABSIL_WEIGHT_AVERAGE=K`). The optimizer is Muon on every
-parameter; its weight decay is `TABSIL_MUON_WEIGHT_DECAY`. `--muon-distributed node|all` (or
+`TABSIL_BATCH_SIZE`, `TABSIL_MICRO_BATCH`, `TABSIL_NUM_WORKERS`, `TABSIL_PREFETCH_FACTOR`,
+`TABSIL_LR`, `TABSIL_CHECKPOINT_EVERY`, `TABSIL_VAL_EVERY`, `TABSIL_LOG_EVERY`). The training
+speed options (`TrainConfig` comments) are turned on with `--compile`, `--tf32`,
+`--weight-average K` (or `TABSIL_COMPILE=1` etc., `TABSIL_WEIGHT_AVERAGE=K`). The optimizer is
+Muon on every
+parameter; its weight decay is `TABSIL_MUON_WEIGHT_DECAY` and its momentum `TABSIL_MUON_MOMENTUM`
+(resuming keeps the original run's values). `--optimizer muon_adamw` (`TABSIL_OPTIMIZER`) puts
+the target encoders, the output and the parameters that are not Linear weights on AdamW instead
+(`tabsil_train.training.muon`); a resumed run keeps its optimizer. `--muon-distributed node|all` (or
 `TABSIL_MUON_DISTRIBUTED`) splits Muon's Newton–Schulz iteration over the GPUs of a node or over
 all GPUs (same results and checkpoint format; resuming keeps the original run's value, `off`
 turns it off).
@@ -32,10 +36,17 @@ The table size and prior settings (`TrainConfig` comments) can be changed with
 `TABSIL_MIN_ROWS`·`TABSIL_MAX_ROWS`·`TABSIL_MIN_TRAIN_FRACTION`·
 `TABSIL_MAX_TRAIN_FRACTION`, `TABSIL_BINARY_PROB`, `TABSIL_FILTER_UNPREDICTABLE=1`
 (unset values keep the preset).
+Training recipe options of the v2 experiments (`TrainConfig` comments; off by default, and a
+resumed run keeps the original run's values): `--target-train-rows` (`TABSIL_TARGET_TRAIN_ROWS=1`)
+standardizes the regression target again with the train rows, as inference does.
 `--prior-type` (`TABSIL_PRIOR_TYPE`) trains on another registered prior (`tabsil_train.priors.
 PRIOR_TYPES`, e.g. `graph_scm_hicard_missing`); unset, the preset's (`graph_scm`). A resumed run
 keeps the prior it was trained on (a different `--prior-type` is an error); a run that takes only
 the weights (`--init-run-id`) uses the preset's or the given one.
+`--reference-val-tables N` (`TABSIL_REFERENCE_VAL_TABLES`) adds a validation set of N tables per
+task that depends neither on the run's seed nor on its prior (`tabsil_train.training.reference`,
+metrics `ref_*`), so that runs of different seeds and priors can be compared on it; a resumed run
+keeps the original run's value.
 The training diagnostics (`tabsil_train.training.diagnostics`) always log per-group weight and
 gradient norms; `--grad-cosine` (`TABSIL_GRAD_COSINE=1`) adds the per-group cosine between the two
 tasks' gradients, and `--rank-timing` (`TABSIL_RANK_TIMING=1`) adds per-GPU forward/backward time
@@ -149,6 +160,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=_env("TABSIL_BATCH_SIZE", int))
     parser.add_argument("--micro-batch", type=int, default=_env("TABSIL_MICRO_BATCH", int))
     parser.add_argument("--num-workers", type=int, default=_env("TABSIL_NUM_WORKERS", int))
+    # micro batches requested ahead per prior worker (TrainConfig comment); the data is the same
+    parser.add_argument("--prefetch-factor", type=int, default=_env("TABSIL_PREFETCH_FACTOR", int))
     parser.add_argument("--lr", type=float, default=_env("TABSIL_LR", float))
     parser.add_argument("--stop-step", type=int, default=_env("TABSIL_STOP_STEP", int))
     parser.add_argument("--deadline", default=os.environ.get("TABSIL_DEADLINE"))
@@ -175,6 +188,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--muon-weight-decay", type=float, default=_env("TABSIL_MUON_WEIGHT_DECAY", float)
     )
+    parser.add_argument("--muon-momentum", type=float, default=_env("TABSIL_MUON_MOMENTUM", float))
+    parser.add_argument(
+        "--optimizer",
+        choices=["muon", "muon_adamw"],
+        default=os.environ.get("TABSIL_OPTIMIZER") or None,
+    )
     parser.add_argument(
         "--muon-distributed",
         choices=["off", "node", "all"],
@@ -199,14 +218,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--" + name.replace("_", "-"), type=int, default=_env("TABSIL_" + name.upper(), int)
         )
     parser.add_argument("--prior-type", default=os.environ.get("TABSIL_PRIOR_TYPE") or None)
+    # The reference validation set (`tabsil_train.training.reference`). A resumed run keeps the
+    # original run's value unless one is given
+    parser.add_argument(
+        "--reference-val-tables", type=int, default=_env("TABSIL_REFERENCE_VAL_TABLES", int)
+    )
     parser.add_argument(
         "--filter-unpredictable",
         action="store_true",
         default=_env_flag("TABSIL_FILTER_UNPREDICTABLE"),
     )
+    # Training recipe options of the v2 experiments (TrainConfig comments). A resumed run keeps the
+    # original run's values (`inherit_recipe_options`)
+    parser.add_argument(
+        "--target-train-rows",
+        action="store_true",
+        default=_env_flag("TABSIL_TARGET_TRAIN_ROWS"),
+    )
     # For short comparison runs: the seed changes the initial weights, training data and validation
-    # set, and the warmup replaces the preset's length. On resume, pass the original run's values
-    # again
+    # set, and the warmup replaces the preset's length. A resumed run keeps the original run's
+    # seed, steps and warmup (`inherit_schedule`)
     parser.add_argument("--seed", type=int, default=_env("TABSIL_SEED", int))
     parser.add_argument("--warmup-steps", type=int, default=_env("TABSIL_WARMUP_STEPS", int))
     parser.add_argument("--resume-run-id", default=os.environ.get("TABSIL_RESUME_RUN_ID"))
@@ -277,6 +308,64 @@ def inherit_batch_size(args: argparse.Namespace, params: dict[str, str]) -> None
     value."""
     if args.resume_run_id and args.batch_size is None and "batch_size" in params:
         args.batch_size = int(params["batch_size"])
+
+
+# What a resumed run keeps of its schedule and data stream (TrainConfig field -> MLflow param).
+# Without these a resumed run fell back to seed 0 and the preset's step count: other tables, another
+# validation set and another cosine. The curriculum's warmup follows the inherited step count
+SCHEDULE_OPTIONS = ("seed", "steps", "warmup_steps")
+
+
+def inherit_schedule(args: argparse.Namespace, params: dict[str, str]) -> None:
+    """On resume, the original run's seed, step count and warmup (`SCHEDULE_OPTIONS`) where none is
+    given. A different `--seed` stops the script: the resumed steps would draw another run's
+    tables."""
+    if not args.resume_run_id:
+        return
+    for name in SCHEDULE_OPTIONS:
+        if name not in params:
+            continue
+        saved = int(params[name])
+        if getattr(args, name) is None:
+            setattr(args, name, saved)
+        elif name == "seed" and args.seed != saved:
+            raise SystemExit(f"--seed {args.seed} differs from the resumed run's {saved}")
+
+
+def inherit_reference_val(args: argparse.Namespace, params: dict[str, str]) -> None:
+    """On resume without `--reference-val-tables`, keep the original run's reference validation
+    set (so that a chunked run logs the same `ref_*` metrics in every chunk)."""
+    if args.resume_run_id and args.reference_val_tables is None:
+        if "reference_val_tables" in params:
+            args.reference_val_tables = int(params["reference_val_tables"])
+
+
+# Training recipe options a resumed run keeps (TrainConfig field -> parser of its MLflow param).
+# A run must not change them midway, so a different value given on resume stops the script. A run
+# that takes only the weights (`--init-run-id`) uses the preset's or the given values
+RECIPE_OPTIONS = {"target_train_rows": lambda text: text == "True", "optimizer": str}
+
+
+def inherit_recipe_options(args: argparse.Namespace, params: dict[str, str]) -> None:
+    """On resume, the original run's recipe options (`RECIPE_OPTIONS`; runs that predate a param
+    used its default). An on/off option can only be turned on with its flag, so an option the run
+    had on is kept on, and turning on one the run had off stops the script."""
+    if not args.resume_run_id:
+        return
+    defaults = TrainConfig()
+    for name, parse in RECIPE_OPTIONS.items():
+        saved = parse(params[name]) if name in params else getattr(defaults, name)
+        given = getattr(args, name)
+        if isinstance(saved, bool):
+            if given and not saved:
+                raise SystemExit(f"--{name.replace('_', '-')} is off in the resumed run")
+            setattr(args, name, saved)
+        elif given is None:
+            setattr(args, name, saved)
+        elif given != saved:
+            raise SystemExit(
+                f"--{name.replace('_', '-')} {given} differs from the resumed run's {saved}"
+            )
 
 
 def inherit_prior_type(args: argparse.Namespace, params: dict[str, str]) -> None:
@@ -367,6 +456,7 @@ def _override_values(args: argparse.Namespace) -> dict:
         "batch_size": args.batch_size,
         "micro_batch": args.micro_batch,
         "num_workers": args.num_workers,
+        "prefetch_factor": args.prefetch_factor,
         "lr": args.lr,
         "stop_step": args.stop_step,
         "checkpoint_every": args.checkpoint_every,
@@ -376,6 +466,8 @@ def _override_values(args: argparse.Namespace) -> dict:
         "weight_average": args.weight_average,
         "weight_average_every": args.weight_average_every,
         "muon_weight_decay": args.muon_weight_decay,
+        "muon_momentum": args.muon_momentum,
+        "optimizer": args.optimizer,
         "muon_distributed": args.muon_distributed,
         "min_rows": args.min_rows,
         "max_rows": args.max_rows,
@@ -383,6 +475,7 @@ def _override_values(args: argparse.Namespace) -> dict:
         "max_train_fraction": args.max_train_fraction,
         "binary_prob": args.binary_prob,
         "prior_type": args.prior_type,
+        "reference_val_tables": args.reference_val_tables,
         "seed": args.seed,
         "warmup_steps": args.warmup_steps,
         **{
@@ -393,6 +486,7 @@ def _override_values(args: argparse.Namespace) -> dict:
                 "grad_cosine",
                 "rank_timing",
                 "filter_unpredictable",
+                "target_train_rows",
             )
             if getattr(args, name)
         },
@@ -470,7 +564,10 @@ def main(argv: list[str] | None = None) -> None:
             # (absolute steps) are not inherited
             speed_options.pop("phases", None)
         inherit_batch_size(args, params)
+        inherit_schedule(args, params)
         inherit_prior_type(args, params)
+        inherit_reference_val(args, params)
+        inherit_recipe_options(args, params)
     config = build_config(args, source, speed_options)
     if args.resume_run_id:
         config = resume_phase_lr(config, args, params)  # checked before the checkpoint download

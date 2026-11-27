@@ -1,4 +1,5 @@
-"""Muon on every parameter (TabSil's optimizer; TabICLv2 training scripts' `--muon True`).
+"""Muon on every parameter (TabSil's optimizer; TabICLv2 training scripts' `--muon True`), or
+Muon on the weight matrices and AdamW on the rest (`TrainConfig.optimizer="muon_adamw"`).
 
 Muon (Jordan et al. 2024) updates 2-D weight matrices with their gradient momentum
 orthogonalized by Newton–Schulz iterations. TabICLv2 (arXiv 2602.11139), EXAONE Tabular and
@@ -18,6 +19,29 @@ Mitra-v2 use it instead of (or alongside) AdamW.
 - The Muon computation matches `torch.optim.Muon` (PyTorch 2.11; 5 Newton–Schulz steps in bf16,
   Nesterov). Unsplit matrices are bit-identical (tested). The step lives here only to add the
   split
+
+Muon with AdamW (`optimizer="muon_adamw"`, `Muon.for_model(..., adamw=True)`): Kumo-Tabular's split
+(NVIDIA structured-data-models `train/kumo/tabular/optim.py` `configure_optimizers`, Apache-2.0;
+see NOTICE). Muon takes the weights of the `nn.Linear` layers, except those of the target
+embeddings, the output layers and the attention logit scales; AdamW takes everything else
+(`adamw_parameters`):
+
+- Muon: every `nn.Linear` weight outside `ADAMW_MODULES` and the `LogScale` modules
+- AdamW with weight decay `ADAMW_WEIGHT_DECAY`: the `LogScale` parameters (per-head scales and their
+  query gates) and the other parameters with at least 2 dimensions (embeddings, inducing points,
+  CLS tokens, the Linear weights of `ADAMW_MODULES`)
+- AdamW without weight decay: the remaining 1-D parameters (biases, norms, Fourier frequencies)
+
+`ADAMW_MODULES` are TabSil's counterparts of Kumo's `y_emb`, `y_lin` and `head`: the target encoders
+of the cell stage and the row ICL (`cell_target`, `icl_target`), and the output (`pre_head`, the
+residual MLP before the output layer, and `heads`, the classification retrieval decoder and the
+regression quantile layer). AdamW is `torch.optim.AdamW`'s computation with its defaults (betas
+0.9 and 0.999, eps 1e-8, decoupled weight decay 0.01), as Kumo uses it. Both parts share the lr and
+its schedule, as in Kumo (one `LambdaLR` for both). The AdamW groups live in the same optimizer as
+extra param groups (`adamw` key), so the scheduler, the checkpoint and the collapse rewinds treat
+it as one optimizer; the Muon weight decay setting (`muon_weight_decay`, its phases) changes only
+the Muon groups, and the AdamW decay stays 0.01. Kumo's Muon uses `torch.optim.Muon`'s momentum
+0.95 (TabSil's default is 0.9, `TrainConfig.muon_momentum`).
 
 Distributed Muon (training option `muon_distributed`): by default every GPU computes the same
 Newton–Schulz for every matrix. With `process_group`, the GPUs of that group split the matrix
@@ -43,6 +67,12 @@ MUON_MOMENTUM = 0.95  # the `torch.optim.Muon` default (TabSil trains with 0.9, 
 NS_COEFFICIENTS = (3.4445, -4.7750, 2.0315)
 NS_STEPS = 5
 NS_EPS = 1e-7
+# AdamW of the `muon_adamw` optimizer: `torch.optim.AdamW` defaults, as Kumo-Tabular uses them
+ADAMW_BETAS = (0.9, 0.999)
+ADAMW_EPS = 1e-8
+ADAMW_WEIGHT_DECAY = 0.01
+# Top-level modules whose parameters go to AdamW (module docstring): target encoders and output
+ADAMW_MODULES = ("cell_target", "icl_target", "pre_head", "heads")
 
 
 def muon_parameters(model: nn.Module) -> list[tuple[nn.Parameter, int]]:
@@ -59,6 +89,27 @@ def muon_parameters(model: nn.Module) -> list[tuple[nn.Parameter, int]]:
             elif isinstance(module, nn.MultiheadAttention) and module.in_proj_weight is not None:
                 splits[id(module.in_proj_weight)] = 3
     return [(p, splits.get(id(p), 1)) for p in model.parameters()]
+
+
+def adamw_parameters(model: nn.Module) -> tuple[set[int], set[int]]:
+    """(ids of the parameters AdamW takes with weight decay, ids of those it takes without) for
+    `optimizer="muon_adamw"` (module docstring); the other parameters are Muon's. ValueError if the
+    model lacks one of `ADAMW_MODULES` (the split would silently differ from the documented one)."""
+    from tabsil.models.column_row_transformer import LogScale
+
+    children = dict(model.named_children())
+    missing = [name for name in ADAMW_MODULES if name not in children]
+    if missing:
+        raise ValueError(f"the muon_adamw optimizer needs the modules {missing} of TabSil")
+    adamw = {id(p) for name in ADAMW_MODULES for p in children[name].parameters()}
+    scales = {id(p) for m in model.modules() if isinstance(m, LogScale) for p in m.parameters()}
+    muon = {id(m.weight) for m in model.modules() if isinstance(m, nn.Linear)} - adamw - scales
+    decay, no_decay = set(), set()
+    for p in model.parameters():
+        if id(p) in muon:
+            continue
+        (decay if id(p) in scales or p.ndim >= 2 else no_decay).add(id(p))
+    return decay, no_decay
 
 
 def _matrix(t: torch.Tensor) -> torch.Tensor:
@@ -165,6 +216,8 @@ class Muon(torch.optim.Optimizer):
         }
         super().__init__(params, defaults)
         for group in self.param_groups:
+            if group.get("adamw"):
+                continue
             for p in group["params"]:
                 # with any_shape, non-2-D parameters are accepted as flattened matrices
                 shape = _matrix(p).shape if any_shape else p.shape
@@ -187,14 +240,30 @@ class Muon(torch.optim.Optimizer):
         weight_decay: float = 0.0,
         momentum: float = MUON_MOMENTUM,
         process_group=None,
+        adamw: bool = False,
     ) -> Muon:
         """Muon on every parameter of `model` (module docstring), one param group per split count
-        (`muon_parameters`)."""
+        (`muon_parameters`). With `adamw`, the parameters of `adamw_parameters` go to two AdamW
+        groups instead (with and without weight decay), after the Muon groups."""
         muon = muon_parameters(model)
+        decay, no_decay = adamw_parameters(model) if adamw else (set(), set())
+        muon = [(p, s) for p, s in muon if id(p) not in decay | no_decay]
         groups = [
             {"params": [p for p, s in muon if s == split], "split": split}
             for split in sorted({s for _, s in muon})
         ]
+        for ids, decay_value in ((decay, ADAMW_WEIGHT_DECAY), (no_decay, 0.0)):
+            params = [p for p in model.parameters() if id(p) in ids]
+            if params:
+                groups.append(
+                    {
+                        "params": params,
+                        "adamw": True,
+                        "weight_decay": decay_value,
+                        "betas": ADAMW_BETAS,
+                        "eps": ADAMW_EPS,
+                    }
+                )
         return cls(
             groups,
             lr=lr,
@@ -221,10 +290,15 @@ class Muon(torch.optim.Optimizer):
     def step(self, closure=None):
         if closure is not None:
             raise ValueError("Muon does not take a closure")
+        for group in self.param_groups:
+            if group.get("adamw"):
+                self._adamw_step(group)
         if self.process_group is not None:
             self._step_sharded()
             return
         for group in self.param_groups:
+            if group.get("adamw"):
+                continue
             split = group["split"]
             for p in group["params"]:
                 if p.grad is None:
@@ -237,6 +311,30 @@ class Muon(torch.optim.Optimizer):
                 else:
                     update = torch.cat([_newton_schulz(u) for u in update.split(rows)])
                 _apply(p, update, group)
+
+    def _adamw_step(self, group: dict) -> None:
+        """`torch.optim.AdamW`'s update (single-tensor form, decoupled weight decay, bias
+        correction) for the parameters of an AdamW group that have a gradient. Every GPU computes
+        it (it is elementwise and cheap)."""
+        beta1, beta2 = group["betas"]
+        lr, eps, decay = group["lr"], group["eps"], group["weight_decay"]
+        for p in group["params"]:
+            if p.grad is None:
+                continue
+            state = self.state[p]
+            if "step" not in state:
+                state["step"] = 0
+                state["exp_avg"] = torch.zeros_like(p)
+                state["exp_avg_sq"] = torch.zeros_like(p)
+            state["step"] += 1
+            step, grad = state["step"], p.grad
+            p.mul_(1 - lr * decay)
+            state["exp_avg"].lerp_(grad, 1 - beta1)
+            state["exp_avg_sq"].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+            correction1 = 1 - beta1**step
+            correction2 = 1 - beta2**step
+            denom = (state["exp_avg_sq"].sqrt() / math.sqrt(correction2)).add_(eps)
+            p.addcdiv_(state["exp_avg"], denom, value=-lr / correction1)
 
     def _momentum(self, p: torch.Tensor, group: dict) -> torch.Tensor:
         """Update the momentum buffer with this gradient and return it (shared by both paths)."""
@@ -263,6 +361,7 @@ class Muon(torch.optim.Optimizer):
         active = [  # (parameter, group, piece rows); no gradient here means none on any GPU (DDP)
             (p, g, _matrix(p).shape[0] // g["split"])
             for g in self.param_groups
+            if not g.get("adamw")
             for p in g["params"]
             if p.grad is not None
         ]

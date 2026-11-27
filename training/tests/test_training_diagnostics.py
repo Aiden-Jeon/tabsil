@@ -16,6 +16,8 @@ from tabsil_train.training.diagnostics import (
     RankTiming,
     TaskGradientCosine,
     group_norms,
+    head_scale_groups,
+    head_scale_metrics,
     parameter_groups,
     rank_timing_metrics,
     shared_groups,
@@ -61,6 +63,26 @@ def test_groups_split_by_stage_task_and_optimizer():
     assert "row_icl_log_scale/muon" in shared
     # without optimizer ids no suffix is added
     assert "row_icl" in parameter_groups(model)
+
+
+def test_head_scale_metrics_follow_each_stage_and_the_first_icl_layer():
+    model = _multitask().build_model()
+    groups = head_scale_groups(model)
+    assert set(groups) == {"column_stage", "row_stage", "row_icl", "row_icl_first", "output"}
+    first = model.icl_layers[0].attention.log_scale.head_scale
+    assert len(groups["row_icl_first"]) == 1 and groups["row_icl_first"][0] is first
+    assert len(groups["row_icl"]) == len(model.icl_layers)
+    with torch.no_grad():
+        first.fill_(0.25)
+        first[0] = -7.0
+    metrics = head_scale_metrics(groups)
+    assert metrics["head_scale_max/row_icl_first"] == pytest.approx(7.0)
+    assert metrics["head_scale_mean/row_icl_first"] == pytest.approx(first.mean().item())
+    assert metrics["head_scale_max/row_icl"] == pytest.approx(7.0)
+    every = torch.cat([p.detach().reshape(-1) for p in groups["column_stage"]])
+    assert metrics["head_scale_mean/column_stage"] == pytest.approx(every.mean().item())
+    assert metrics["head_scale_max/column_stage"] == pytest.approx(every.abs().max().item())
+    assert head_scale_metrics({}) == {}
 
 
 def test_group_norms_match_a_flat_norm_and_skip_unused():

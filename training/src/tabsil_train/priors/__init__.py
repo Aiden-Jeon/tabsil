@@ -19,8 +19,12 @@ Assembled priors:
 - `graph_scm_hicard_missing`: `graph_scm` with high-cardinality categorical columns and structured
   (MAR/MNAR, column-group) missing values (`graph_scm` options at fixed values)
 - `graph_scm_realism`: `graph_scm_hicard_missing` plus Kumo-Tabular's other realism parts
-  (Kumaraswamy-warped columns, up to 100 categories, correlated column blocks, relabeled targets,
+  (Kumaraswamy-warped columns, up to 200 categories, correlated column blocks, relabeled targets,
   coarse values)
+- `graph_scm_base_realism`: `graph_scm` with the realism parts Kumo-Tabular uses in every stage, at
+  its stage-1 values (Kumaraswamy-warped columns, up to 200 categories, correlated column blocks,
+  structured missing values, random missing cells in 1% of the tables, too-easy tables drawn
+  again)
 
 The training loop (`tabsil_train.training.loop`) picks its prior from `PRIOR_TYPES` by name
 (`TrainConfig.prior_type`). A prior module provides:
@@ -51,6 +55,7 @@ PRIOR_TYPES: dict[str, str] = {
     "graph_scm": "tabsil_train.priors.graph_scm",
     "graph_scm_hicard_missing": "tabsil_train.priors.graph_scm_hicard_missing",
     "graph_scm_realism": "tabsil_train.priors.graph_scm_realism",
+    "graph_scm_base_realism": "tabsil_train.priors.graph_scm_base_realism",
 }
 # old name -> current name, accepted when reading older training runs whose params still use it
 PRIOR_TYPE_ALIASES: dict[str, str] = {

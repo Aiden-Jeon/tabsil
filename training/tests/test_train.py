@@ -536,3 +536,63 @@ def test_train_script_sets_the_tabicl_prior_options_from_env(monkeypatch):
         )
         == base
     )
+
+
+def test_a_resumed_run_keeps_its_seed_steps_and_warmup(monkeypatch):
+    _clear_env(monkeypatch)
+    for name in ("TABSIL_SEED", "TABSIL_WARMUP_STEPS"):
+        monkeypatch.delenv(name, raising=False)
+    script = _train_script()
+    params = {"seed": "1", "steps": "30000", "warmup_steps": "300"}
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc"])
+    script.inherit_schedule(args, params)
+    config = script.build_config(args)
+    assert (config.seed, config.steps, config.warmup_steps) == (1, 30000, 300)
+    # values given on resume are used, but another seed is an error
+    args = script.parse_args(
+        ["--config-name", "stage1", "--resume-run-id", "abc", "--steps", "40000", "--seed", "1"]
+    )
+    script.inherit_schedule(args, params)
+    assert (args.steps, args.seed, args.warmup_steps) == (40000, 1, 300)
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc", "--seed", "2"])
+    with pytest.raises(SystemExit, match="seed"):
+        script.inherit_schedule(args, params)
+    # runs without the params, and runs that only give their weights, keep the preset
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc"])
+    script.inherit_schedule(args, {})
+    assert script.build_config(args) == recipe.curriculum(1)
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    script.inherit_schedule(args, params)
+    assert script.build_config(args) == recipe.curriculum(2)
+
+
+def test_train_script_sets_the_prefetch_factor(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.delenv("TABSIL_PREFETCH_FACTOR", raising=False)
+    script = _train_script()
+    assert script.build_config(script.parse_args(["--config-name", "stage1"])).prefetch_factor == 4
+    args = script.parse_args(["--config-name", "stage1", "--prefetch-factor", "16"])
+    assert script.build_config(args) == replace(recipe.curriculum(1), prefetch_factor=16)
+    monkeypatch.setenv("TABSIL_PREFETCH_FACTOR", "8")
+    script = _train_script()
+    assert script.build_config(script.parse_args(["--config-name", "stage1"])).prefetch_factor == 8
+    with pytest.raises(ValueError, match="prefetch_factor"):
+        TrainConfig(prefetch_factor=0)
+
+
+def test_the_loaders_request_prefetch_factor_micro_batches_per_worker(tmp_path, monkeypatch):
+    from tabsil_train.training import loop
+
+    seen = []
+    original = loop.DataLoader
+
+    def recording(*args, **kwargs):
+        seen.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(loop, "DataLoader", recording)
+    config = tabsil_smoke(
+        steps=1, warmup_steps=1, num_workers=2, prefetch_factor=3, border_datasets=10
+    )
+    train(config, tmp_path, mlflow_log=False)
+    assert seen and all(k["prefetch_factor"] == 3 and k["num_workers"] == 1 for k in seen)
