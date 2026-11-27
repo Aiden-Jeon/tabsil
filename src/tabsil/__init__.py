@@ -31,11 +31,6 @@ does not import the Hub and inference code).
 
 from typing import TYPE_CHECKING
 
-from tabsil.models.bar_distribution import (
-    BarDistribution,
-    FullSupportBarDistribution,
-    get_bucket_borders,
-)
 from tabsil.utils import get_device, set_seed
 
 if TYPE_CHECKING:
@@ -74,9 +69,6 @@ def __dir__() -> list[str]:
 __all__ = [
     "get_device",
     "set_seed",
-    "BarDistribution",
-    "FullSupportBarDistribution",
-    "get_bucket_borders",
     "from_pretrained",
     "TabSilClassifier",
     "TabSilRegressor",
