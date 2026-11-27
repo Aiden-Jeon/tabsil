@@ -455,6 +455,8 @@ def main() -> None:
     rank = int(os.environ.get("RANK", "0"))
     out_dir = Path(os.environ.get("TABSIL_OUT_DIR", "tabsil_run"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    for stale in out_dir.glob(f"eff_probe_worker_rank{rank}_*"):  # of an earlier run in the folder
+        stale.unlink(missing_ok=True)
     os.environ[WORKER_DIR] = str(out_dir.resolve())
     prefork = os.environ.get("TABSIL_EFF_PREFORK_FREEZE", "").strip().lower()
     PROBE.prefork_freeze = prefork in ("1", "true", "yes", "on")
