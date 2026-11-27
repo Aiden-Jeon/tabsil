@@ -19,11 +19,17 @@ How the parts are defined, per optimizer step and averaged over the steps:
 - waiting for the slowest GPU: the mean backward minus that smallest one. It is caused by whatever
   made one GPU late: a collector pause, a late table, or more work in its tables
 - rest: the step time minus the mean forward and backward. With the probe it splits into the
-  optimizer step, clipping, the norms (rank 0 only), each GPU's own data wait and what is left
-  (the loss all-reduce, logging and the Python between the micro batches)
+  optimizer step, clipping, the norms (rank 0 only), each GPU's own data wait, the training
+  loop's own collection and freeze (`TrainConfig.gc_freeze`) and what is left (the loss
+  all-reduce, logging and the Python between the micro batches)
 
 The backward of the GPU that did not wait belongs to that GPU's tables. Where the tables of the
 slowest GPU are larger than the average, the waiting is understated by that difference.
+
+The loop's collection and freeze at a log step falls into the record of the step after it. The
+first one walks every object and is paid once per run (about a second); the later ones walk what
+was made since. With the default `log_every` of 100 the first is in record 100, so `--steps
+101:300` gives the steady state and `--steps 100:300` holds the one-time pass as well.
 """
 
 from __future__ import annotations
@@ -35,8 +41,6 @@ from pathlib import Path
 
 import mlflow
 import numpy as np
-
-PROBE_FIELDS = ("wall_s", "opt_ms", "clip_ms", "norms_ms", "wait_ms", "gc_ms")
 
 
 def _download(client: mlflow.MlflowClient, run_id: str, folder: str, dst: Path) -> list[Path]:
@@ -109,15 +113,17 @@ def breakdown(
     out["cells_imbalance"] = float(np.mean(cells.max(1) / cells.mean(1)))
     out["cells_per_step"] = float(cells.sum(1).mean())
     if probes:
+        # the record names its fields: those made before the loop froze have no `freeze_ms`
+        fields = list(probes[0]["fields"])
         values = np.array([p["steps"] for p in probes])[:, start:stop, :]  # (GPUs, steps, fields)
-        for i, name in enumerate(PROBE_FIELDS[1:], start=1):
+        for i, name in enumerate(fields[1:], start=1):
             ranks = values[:1] if name == "norms_ms" else values  # the norms are rank 0's
             out[name] = float(ranks[:, :, i].mean())
         # a pause delays the step by the longest one among the GPUs, not by their sum
-        out["gc_max_ms"] = float(values[:, :, 5].max(0).mean())
-        out["wait_max_ms"] = float(values[:, :, 4].max(0).mean())
-        known = sum(out[name] for name in ("opt_ms", "clip_ms", "norms_ms", "wait_ms"))
-        out["other_ms"] = out["rest_ms"] - known
+        out["gc_max_ms"] = float(values[:, :, fields.index("gc_ms")].max(0).mean())
+        out["wait_max_ms"] = float(values[:, :, fields.index("wait_ms")].max(0).mean())
+        named = ("opt_ms", "clip_ms", "norms_ms", "wait_ms", "freeze_ms")
+        out["other_ms"] = out["rest_ms"] - sum(out.get(name, 0.0) for name in named)
     return out
 
 
@@ -138,8 +144,10 @@ def report(run, parts: dict[str, float], probes: list[dict], label: str) -> None
             ("gradient clipping", "clip_ms"),
             ("per-group norms (rank 0)", "norms_ms"),
             ("data wait (own)", "wait_ms"),
+            ("collection and freeze (the loop's or the probe's)", "freeze_ms"),
             ("other", "other_ms"),
         ]
+        rows = [row for row in rows if row[1] in parts]
     else:
         rows.append(("rest (optimizer, clipping, norms, data wait, logging)", "rest_ms"))
     for name, key in rows:
@@ -197,23 +205,29 @@ def main() -> None:
         parts = breakdown(timing, probes, sec_per_step, first, last, args.stall_ms)
         report(run, parts, probes, label)
     if probes:
+        # the collector's own full passes (the probe keeps the loop's apart, in `freezes`)
         pauses = [e for p in probes for e in p["gc_events"] if e[1] == 2 and e[0] >= start]
-        if pauses:
-            seconds = [e[2] for e in pauses]
-            print(
-                f"\nfull collections from step {start}: {len(pauses)} over {len(probes)} GPUs,"
-                f" mean {np.mean(seconds):.3f} s, longest {max(seconds):.3f} s;"
-                f" tracked objects {probes[0]['gc_objects']:,}"
-            )
-        # records made before the probe counted the frozen objects have no `freezes`
+        seconds = [e[2] for e in pauses]
+        # frozen objects are tracked too, and `gc_objects` leaves them out
+        tracked = [p["gc_objects"] + p["gc_frozen"] for p in probes]
+        print(
+            f"\nfull passes of the collector over 50 ms from step {start}: {len(pauses)} over"
+            f" {len(probes)} GPUs"
+            + (f", mean {np.mean(seconds):.3f} s, longest {max(seconds):.3f} s" if pauses else "")
+            + f"; tracked objects per GPU at the end {min(tracked):,}-{max(tracked):,}"
+        )
+        # records made before the probe recorded the freezes have none
         freezes = [p["freezes"] for p in probes if p.get("freezes")]
         if freezes:
-            steps = [step for step, _ in freezes[0]]
+            steps = [freeze[0] for freeze in freezes[0]]
             first, last = [f[0][1] for f in freezes], [f[-1][1] for f in freezes]
+            took = np.array([[freeze[2] for freeze in rank] for rank in freezes])  # (GPUs, freezes)
+            later = f", the later ones {took[:, 1:].max(0).mean():.3f} s" if len(steps) > 1 else ""
             print(
-                f"freezes: {len(steps)} per GPU, the first after {steps[0]} steps and the last"
-                f" after {steps[-1]}; frozen objects per GPU {min(first):,}-{max(first):,} after"
-                f" the first and {min(last):,}-{max(last):,} after the last"
+                f"freezes: {len(steps)} per GPU, after {steps[0]} to {steps[-1]} steps; frozen"
+                f" objects per GPU {min(first):,}-{max(first):,} after the first and"
+                f" {min(last):,}-{max(last):,} after the last; the first collection and freeze"
+                f" took {took[:, 0].max():.3f} s{later} (the slowest GPU)"
             )
 
 

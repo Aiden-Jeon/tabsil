@@ -5,24 +5,23 @@ training code. It runs `training/scripts/train.py` in this process after wrappin
   between two `torch.cuda.synchronize()` calls,
 - the prior DataLoader's `__next__`: the data wait of every GPU (`data_wait_frac` is rank 0's),
 - Python's garbage collector (`gc.callbacks`): the pause of every collection, per generation,
-  and the number of frozen objects after every `gc.freeze()`.
+- the training loop's own full collection and `gc.freeze()` at its log steps
+  (`TrainConfig.gc_freeze`, on by default): their time, apart from the collector's pauses, and
+  the number of frozen objects after each freeze.
 
 The wrapped calls sit where the loop already waits for the GPU (the gradient all-reduce before
 them, the loss read after them), so the timing does not move work. The training computation is
 unchanged. Every GPU writes one JSON file with a record per optimizer step, and rank 0 logs them
 to the MLflow run under `eff_probe/`. `step_breakdown.py` joins them with the rank timing records.
 
-The training loop freezes the collector's objects itself at every log step
-(`TrainConfig.gc_freeze`, on by default), and the probe records that. `TABSIL_GC_FREEZE=0` turns it
-off, which gives the loop as it was when the collector's pauses were first measured.
-
 Options (environment variables):
 
-- `TABSIL_EFF_GC`: empty (default) only measures. `freeze:<step>` collects once and calls
-  `gc.freeze()` after that many optimizer steps, so that later full collections skip the objects
-  that exist by then (the model, the optimizer and the compiled graphs); with `TABSIL_GC_FREEZE=0`
-  the two halves of the run compare the loop with and without one freeze. `off` disables the
-  collector for the run.
+- `TABSIL_EFF_GC`: empty (default) measures the training loop as it is. The other two values
+  replace the loop's own freeze, so they turn it off (they set `TABSIL_GC_FREEZE=0`, and stop if
+  it is set to on): `freeze:<step>` collects once and calls `gc.freeze()` after that many
+  optimizer steps, so that the two halves of the run compare the loop without a freeze and with
+  one (the first measurement of the collector's pauses). `off` disables the collector for the
+  run.
 
     torchrun --standalone --nproc_per_node=8 training/scripts/v2_eff/step_probe.py
 
@@ -45,8 +44,12 @@ from torch.utils.data import DataLoader
 from tabsil_train.training import loop, muon
 
 TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "train.py"
-# what a step record holds, in this order (milliseconds, except the first)
-FIELDS = ("wall_s", "opt_ms", "clip_ms", "norms_ms", "wait_ms", "gc_ms")
+# What a step record holds, in this order (milliseconds, except the first). `gc_ms` is the
+# collector's own passes, which stop one GPU at a time. `freeze_ms` is a full collection called
+# by the code and the freeze after it, which every GPU makes at the same step; the training loop's
+# falls into the record of the step after its log step. Records made before the loop froze have no
+# `freeze_ms`, and their `gc_ms` holds the probe's one collection
+FIELDS = ("wall_s", "opt_ms", "clip_ms", "norms_ms", "wait_ms", "gc_ms", "freeze_ms")
 
 
 class Probe:
@@ -62,21 +65,27 @@ class Probe:
         self.gc_stats = {g: [0, 0.0, 0.0] for g in range(3)}
         self.gc_events: list[tuple[int, int, float]] = []  # (step, generation, seconds) over 50 ms
         self.frozen_at: int | None = None
-        # (optimizer steps done, frozen objects) after every `gc.freeze()`: the training loop's at
-        # its log steps and this probe's. Frozen objects that only grow would be a leak
-        self.freezes: list[tuple[int, int]] = []
+        # After every `gc.freeze()` (the training loop's at its log steps, or this probe's):
+        # (optimizer steps done, frozen objects, seconds of the collection and the freeze). Frozen
+        # objects that only grow would be a leak
+        self.freezes: list[tuple[int, int, float]] = []
+        self.called_collection = False  # inside a full collection called by the code
+        self.collection_seconds = 0.0  # the one before the next freeze
+        self.counting_seconds = 0.0  # spent counting frozen objects: taken off this probe's clock
 
     def add(self, name: str, seconds: float) -> None:
         self.current[name] += seconds * 1000.0
 
     def close_step(self) -> None:
-        now = time.perf_counter() - self.start
+        now = time.perf_counter() - self.start - self.counting_seconds
         self.steps.append([now, *(self.current[name] for name in FIELDS[1:])])
         self.current = dict.fromkeys(FIELDS[1:], 0.0)
 
     def on_gc(self, phase: str, info: dict) -> None:
         if phase == "start":
             self.gc_start = time.perf_counter()
+            return
+        if self.called_collection:  # timed as `freeze_ms` (`_wrap_collector`)
             return
         seconds = time.perf_counter() - self.gc_start
         stats = self.gc_stats[info["generation"]]
@@ -111,15 +120,26 @@ def _timed(name: str, function):
 
 
 def _gc_mode() -> tuple[str, int]:
-    """(`measure`, `freeze` or `off`, the optimizer step to freeze after) from `TABSIL_EFF_GC`."""
+    """(`measure`, `freeze` or `off`, the optimizer step to freeze after) from `TABSIL_EFF_GC`.
+    `freeze` and `off` stand in for the training loop's own freeze, so they turn it off for
+    `train.py` (`TABSIL_GC_FREEZE=0`) and stop if it was asked for."""
     value = os.environ.get("TABSIL_EFF_GC", "").strip().lower()
     if not value:
         return "measure", 0
     if value == "off":
-        return "off", 0
-    if value.startswith("freeze:"):
-        return "freeze", int(value.split(":", 1)[1])
-    raise SystemExit(f"TABSIL_EFF_GC={value!r} is not empty, off or freeze:<step>")
+        mode, step = "off", 0
+    elif value.startswith("freeze:"):
+        mode, step = "freeze", int(value.split(":", 1)[1])
+    else:
+        raise SystemExit(f"TABSIL_EFF_GC={value!r} is not empty, off or freeze:<step>")
+    loop_freeze = os.environ.get("TABSIL_GC_FREEZE", "").strip().lower()
+    if loop_freeze in ("1", "true", "yes", "on"):
+        raise SystemExit(
+            f"TABSIL_EFF_GC={value} measures the loop without its own freeze: unset"
+            " TABSIL_GC_FREEZE or set it to 0"
+        )
+    os.environ["TABSIL_GC_FREEZE"] = "0"
+    return mode, step
 
 
 def _wrap_optimizer_step(mode: str, freeze_at: int) -> None:
@@ -141,16 +161,39 @@ def _wrap_optimizer_step(mode: str, freeze_at: int) -> None:
     muon.Muon.step = timed_step
 
 
-def _wrap_freeze() -> None:
-    """Count the frozen objects after every `gc.freeze()`. The count walks them once (a few
-    milliseconds per million), at the freeze only."""
-    freeze = gc.freeze
+def _wrap_collector() -> None:
+    """Keep the full collections that the code calls apart from the collector's own passes. The
+    training loop calls `gc.collect()` and `gc.freeze()` at its log steps on every GPU at once,
+    and `freeze:<step>` here does the same once. Their time goes to `freeze_ms` instead of
+    `gc_ms`, and each freeze is recorded with the number of frozen objects after it. Counting
+    walks the frozen objects (about 25 ms per million), so that time is taken off this probe's
+    clock; the run's own `sec_per_step` still holds it."""
+    collect, freeze = gc.collect, gc.freeze
+
+    def timed_collect(generation: int = 2) -> int:
+        if generation != 2:  # a partial collection (torch.compile calls one after compiling)
+            return collect(generation)
+        PROBE.called_collection = True
+        start = time.perf_counter()
+        try:
+            return collect()
+        finally:
+            PROBE.called_collection = False
+            PROBE.collection_seconds = time.perf_counter() - start
+            PROBE.add("freeze_ms", PROBE.collection_seconds)
 
     def counted_freeze() -> None:
+        start = time.perf_counter()
         freeze()
-        PROBE.freezes.append((len(PROBE.steps), gc.get_freeze_count()))
+        seconds = time.perf_counter() - start
+        PROBE.add("freeze_ms", seconds)
+        frozen = gc.get_freeze_count()
+        PROBE.counting_seconds += time.perf_counter() - start - seconds
+        total = round(PROBE.collection_seconds + seconds, 4)
+        PROBE.freezes.append((len(PROBE.steps), frozen, total))
+        PROBE.collection_seconds = 0.0
 
-    gc.freeze = counted_freeze
+    gc.collect, gc.freeze = timed_collect, counted_freeze
 
 
 class _TimedIterator:
@@ -216,6 +259,9 @@ def _write(path: Path, rank: int, mode: str) -> None:
         },
         "gc_events": PROBE.gc_events,
         "freezes": PROBE.freezes,
+        # At exit: the objects the collector tracks and walks, and the frozen ones it skips.
+        # `train` unfreezes what the loop froze, so a run with the loop's freeze has 0 frozen
+        # here and its frozen counts in `freezes`. The two add up to all tracked objects
         "gc_objects": len(gc.get_objects()),
         "gc_frozen": gc.get_freeze_count(),
         "compilations": _compilations(),
@@ -248,7 +294,7 @@ def main() -> None:
     if mode == "off":
         gc.disable()
     gc.callbacks.append(PROBE.on_gc)
-    _wrap_freeze()
+    _wrap_collector()
     _wrap_optimizer_step(mode, freeze_at)
     torch.nn.utils.clip_grad_norm_ = _timed("clip_ms", torch.nn.utils.clip_grad_norm_)
     loop.group_norms = _timed("norms_ms", loop.group_norms)
