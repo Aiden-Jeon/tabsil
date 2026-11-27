@@ -1,9 +1,11 @@
 """Checkpoints of training runs: MLflow run artifacts (`runs:/...`) and the model structure a run
 logged as params. Hub repos, `save_pretrained` folders and checkpoint files are read by
-`tabsil.hub` (`load_model` here passes them on).
+`tabsil.hub` (`load_model` here passes them on); `hub_init_checkpoint` writes Hub weights as the
+checkpoint file a training run starts from.
 
     model, borders = load_model("runs:/<run_id>/checkpoints/latest.pt", "classification", out_dir)
     structure = run_architecture(run.data.params)  # replace(config, **structure)
+    path = hub_init_checkpoint("owner/name@revision", config, out_dir / "init.pt")  # init_from
 """
 
 from __future__ import annotations
@@ -16,7 +18,13 @@ import torch
 from torch import nn
 
 from tabsil import hub
-from tabsil.models import DEFAULT_MODEL_TYPE, canonical_model_type, config_fields, info_fields
+from tabsil.models import (
+    DEFAULT_MODEL_TYPE,
+    canonical_model_type,
+    config_fields,
+    info_fields,
+    save_checkpoint,
+)
 from tabsil_train.training.config import TrainConfig
 
 # file where `download_artifact` records the downloaded artifact (to skip re-downloading into the
@@ -103,3 +111,23 @@ def run_architecture(params: dict[str, str]) -> dict:
             for name in names
         },
     }
+
+
+def hub_init_checkpoint(spec: str, config: TrainConfig, path: Path) -> Path:
+    """The weights and regression borders of a Hub repo (`repo@revision`) or a local
+    `save_pretrained` folder, written to `path` as a `save_checkpoint` file for `init_from`, after
+    checking that the model matches the config (before the MLflow run is opened)."""
+    # The checkpoint check belongs to the training loop. It is imported here, where a training run
+    # starts from Hub weights, and not at the top: evaluation and the Hub upload import this module
+    # to load models and must not load the training loop
+    from tabsil_train.training.loop import check_checkpoint
+
+    model, borders = hub.from_pretrained(spec)
+    if borders is None:
+        raise SystemExit(f"--init-hub {spec} has no regression borders")
+    save_checkpoint(path, model, borders)
+    try:
+        check_checkpoint(torch.load(path, map_location="cpu", weights_only=True), config, spec)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    return path

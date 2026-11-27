@@ -5,7 +5,8 @@
 - `benchmarks`: evaluation (AMLB/CTR23, TabArena, BeyondArena, uncertainty metrics)
 - `recipe`: TabSil's training curriculum (the structure and inference defaults are in
   `tabsil.recipe`)
-- `hub`: checkpoints of training runs (MLflow `runs:/` artifacts, the structure in run params)
+- `hub`: checkpoints of training runs (MLflow `runs:/` artifacts, the structure in run params,
+  Hub weights as the checkpoint a run starts from)
 - `utils`: MLflow run logging, the learning rate schedule, torchrun setup
 
 The scripts are in `training/scripts` (`train.py`, `eval.py`) and `training/hub` (Hub upload).

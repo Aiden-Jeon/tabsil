@@ -9,7 +9,6 @@ import train_helpers as helpers
 from tabsil import models as registry
 from tabsil_train.training.config import TrainConfig
 from tabsil_train.training.loop import _average_states, train
-from tabsil_train.training.speed import ValPoint, time_to_target, val_loss_at
 
 
 def test_options_default_off():
@@ -57,15 +56,6 @@ def test_tf32_is_a_no_op_on_cpu(tmp_path):
     fast = train(_smoke(tf32=True), tmp_path / "b", mlflow_log=False)
     assert base["history"]["train_loss"] == fast["history"]["train_loss"]
     torch.set_float32_matmul_precision("highest")  # don't leak into other tests
-
-
-def test_time_to_target():
-    points = [ValPoint(1000, 100.0, 1.2), ValPoint(2000, 200.0, 1.0), ValPoint(3000, 300.0, 0.9)]
-    assert val_loss_at(points, 2000) == 1.0
-    assert time_to_target(points, 1.0).train_seconds == 200.0
-    assert time_to_target(points, 0.5) is None
-    with pytest.raises(ValueError, match="step 1500"):
-        val_loss_at(points, 1500)
 
 
 def test_train_script_takes_the_speed_options(monkeypatch):

@@ -1,9 +1,12 @@
 """Loading MLflow run checkpoints (`runs:/`, `tabsil_train.hub.load_model`; no MLflow server)."""
 
+import subprocess
+import sys
+
 import mlflow
 import pytest
 import torch
-from train_helpers import tabsil_smoke
+from train_helpers import TRAINING_DIR, tabsil_smoke
 
 from tabsil import hub
 from tabsil_train import hub as train_hub
@@ -74,3 +77,26 @@ def test_run_uri_of_the_wrong_task_is_named_in_the_error(tmp_path, monkeypatch):
     )
     with pytest.raises(SystemExit, match="runs:/abc/model is a classification model"):
         train_hub.load_model("runs:/abc/model", "regression", tmp_path)
+
+
+def test_loading_models_does_not_import_the_training_loop():
+    # Evaluation and the Hub upload import `tabsil_train.hub` to load models. Only
+    # `hub_init_checkpoint` (a training run that starts from Hub weights) needs the training loop,
+    # and imports it when called. A new process, because this one has the loop loaded already
+    code = """
+import importlib.util
+import sys
+
+import tabsil_train.hub
+
+assert "tabsil_train.training.loop" not in sys.modules, "tabsil_train.hub imports the loop"
+spec = importlib.util.spec_from_file_location("eval_script", sys.argv[1])
+spec.loader.exec_module(importlib.util.module_from_spec(spec))
+assert "tabsil_train.training.loop" not in sys.modules, "eval.py imports the loop"
+"""
+    done = subprocess.run(
+        [sys.executable, "-c", code, str(TRAINING_DIR / "scripts" / "eval.py")],
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
