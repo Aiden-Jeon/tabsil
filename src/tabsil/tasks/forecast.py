@@ -33,8 +33,9 @@ Context handling (our choices, following the TabPFN-TS fev wrapper where it has 
   forecast (the model is not run: z-normalizing a constant target is undefined)
 
 Prediction: the quantiles come from the mixture distribution of
-`tabsil.recipe.TabSilRegressor.predict_distribution` (bucket probabilities on the common borders),
-inverting its CDF with the density taken as uniform within a bucket. The point forecast is the
+`TabSilRegressor.predict_distribution` (bucket probabilities on the common borders), inverting its
+CDF with the density taken as uniform within a bucket
+(`tabsil.models.quantile_distribution.bucket_quantiles`). The point forecast is the
 median of that distribution (`point_forecast="median"`, the forecast MASE and fev's median metrics
 assume) or the regressor's mean (`"mean"`, `TabSilRegressor.predict`). The two outermost buckets
 of TabSil's borders are wide (z beyond about ±4.3, up to ±22.6 of the context target), so a
@@ -51,6 +52,8 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+
+from tabsil.models.quantile_distribution import bucket_quantiles
 
 DEFAULT_QUANTILE_LEVELS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 DEFAULT_MAX_CONTEXT_LENGTH = 4096
@@ -166,35 +169,6 @@ def time_features(
 
 
 # ---------------------------------------------------------------------------
-# Quantiles of the bucket distribution
-# ---------------------------------------------------------------------------
-def bucket_quantiles(
-    log_probs: torch.Tensor | np.ndarray, borders: torch.Tensor | np.ndarray, levels: Any
-) -> np.ndarray:
-    """Quantiles (n, m) of bucket distributions: log probabilities (n, K) on `borders`
-    (K + 1,), with the density uniform within each bucket (the CDF is linear between borders).
-    `levels` is m levels shared by every row, or an (n, m) array of levels per row (uniform
-    levels give draws: `tabsil.unsupervised.NumericConditional.sample`). A level q falls in the
-    bucket k with cdf[k] < q <= cdf[k + 1], so a bucket without probability is never chosen."""
-    probs = np.exp(np.asarray(log_probs, dtype=np.float64))
-    probs = probs / probs.sum(-1, keepdims=True)
-    b = np.asarray(borders, dtype=np.float64)
-    cdf = np.concatenate([np.zeros((len(probs), 1)), np.cumsum(probs, -1)], axis=-1)
-    cdf[:, -1] = 1.0
-    levels = np.asarray(levels, dtype=np.float64)
-    per_row = levels.ndim == 2
-    rows = np.arange(len(probs))
-    out = np.empty((len(probs), levels.shape[-1]))
-    for j in range(levels.shape[-1]):
-        q = levels[:, j] if per_row else np.full(len(probs), levels[j])
-        k = np.clip((cdf < q[:, None]).sum(-1) - 1, 0, len(b) - 2)
-        p = probs[rows, k]
-        share = np.where(p > 0, (q - cdf[rows, k]) / np.where(p > 0, p, 1.0), 0.0)
-        out[:, j] = b[k] + np.clip(share, 0.0, 1.0) * (b[k + 1] - b[k])
-    return out
-
-
-# ---------------------------------------------------------------------------
 # Forecaster
 # ---------------------------------------------------------------------------
 def _fill(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
@@ -208,10 +182,11 @@ class TabSilForecaster:
     """Zero-shot forecasting with TabSil regression (module docstring for the features, context
     handling and quantiles).
 
-    `model` and `borders` are given as for `tabsil.recipe.TabSilRegressor` (None: the default Hub
-    repo at the v1 tag; a Hub repo id or a local folder; or a model with its `borders`); the
-    weights are loaded once and shared by every series. `n_estimators` and the other keyword
-    arguments go to each series' `TabSilRegressor` (default: the model's settings).
+    `model` and `borders` are given as for `TabSilRegressor` (None: the default Hub
+    repo at the tag `tabsil.recipe.HUB_REVISION`; a Hub repo id or a local folder; or a model
+    with its `borders`); the weights are loaded once and shared by every series. `n_estimators`
+    and the other keyword arguments go to each series' `TabSilRegressor` (default: the model's
+    settings).
 
         fc = TabSilForecaster(device="cuda").fit(context)
         pred = fc.predict(24)
@@ -231,6 +206,7 @@ class TabSilForecaster:
         **regressor_kwargs: Any,
     ) -> None:
         from tabsil.recipe import HUB_REPOS, SUPPORTED_SIZE
+        from tabsil.tasks.regression import check_borders
 
         if point_forecast not in POINT_FORECASTS:
             raise ValueError(f"point_forecast is one of {POINT_FORECASTS}: {point_forecast}")
@@ -242,12 +218,8 @@ class TabSilForecaster:
                 f"max_context_length must be between 1 and TabSil's supported size ({limit}"
                 f" training rows): {max_context_length}"
             )
-        if isinstance(model, nn.Module):
-            if borders is None:
-                raise ValueError("pass the regression borders together with a model")
-        else:
-            if borders is not None:
-                raise ValueError("borders are only given with a model (downloads include them)")
+        check_borders(model, borders)
+        if not isinstance(model, nn.Module):
             from tabsil.hub import model_or_pretrained
 
             model, borders = model_or_pretrained(model, HUB_REPOS["regression"], "regression")
@@ -360,7 +332,7 @@ class TabSilForecaster:
     def _predict_series(
         self, past: pd.DataFrame, steps: pd.DataFrame, levels: list[float]
     ) -> tuple[np.ndarray, np.ndarray]:
-        from tabsil.recipe import TabSilRegressor
+        from tabsil.tasks.regression import TabSilRegressor
 
         target, ts = self.target_column, self.timestamp_column
         covariates = [c for c in self.covariates_ if c in steps.columns]

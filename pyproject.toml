@@ -1,8 +1,9 @@
 [project]
 name = "tabsil"
-version = "0.1.1"
+version = "0.2.0"
 description = "TabSil: a tabular foundation model for classification and regression, trained on synthetic priors"
-readme = "README.md"
+# The PyPI page: text only, since README.md shows its logo and charts by relative path
+readme = "docs/pypi.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSES/TabICL-BSD-3-Clause.txt"]
 authors = [

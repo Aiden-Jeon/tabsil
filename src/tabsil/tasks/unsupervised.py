@@ -14,7 +14,7 @@ A row's log density is the chain rule over a column order, log p(x) = Σ_i log p
 averaged over several random orders as the log of the arithmetic mean of the densities
 (log-sum-exp). The outlier score is the negative log density (higher = more anomalous).
 
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil import TabSilUnsupervised
 
     model = TabSilUnsupervised().fit(x_train)  # the default Hub weights (`tabsil.recipe`)
     scores = model.outlier_score(x_test)       # (n,), higher = more anomalous
@@ -107,7 +107,7 @@ import pandas as pd
 import torch
 from torch import nn
 
-from tabsil.forecast import bucket_quantiles
+from tabsil.models.quantile_distribution import bucket_quantiles
 
 # Probability given to an outcome the model gives no mass: a category not in the context, a numeric
 # value outside the borders. Same as the clamp of `EnsembleRegressor.predict_distribution`
@@ -175,7 +175,7 @@ class NumericConditional:
 
     def quantile(self, q: float) -> np.ndarray:
         """The `q` quantile (n,) of each row's distribution (uniform within each bucket,
-        `tabsil.forecast.bucket_quantiles`)."""
+        `bucket_quantiles`)."""
         return bucket_quantiles(self.log_probs, self.borders, [float(q)])[:, 0]
 
     def class_mode(self, classes: np.ndarray) -> np.ndarray:
@@ -286,13 +286,10 @@ class TabSilUnsupervised:
     ) -> None:
         from tabsil.hub import model_or_pretrained
         from tabsil.recipe import HUB_DEFAULT
+        from tabsil.tasks.regression import check_borders
 
-        if isinstance(model, nn.Module):
-            if borders is None:
-                raise ValueError("pass the regression borders together with a model")
-        else:
-            if borders is not None:
-                raise ValueError("borders are only given with a model (downloads include them)")
+        check_borders(model, borders)
+        if not isinstance(model, nn.Module):
             model, borders = model_or_pretrained(model, HUB_DEFAULT, "regression")
             if "classification" not in model.tasks:
                 raise ValueError("the model must serve classification as well as regression")
@@ -338,7 +335,8 @@ class TabSilUnsupervised:
         return column in self.classes_ and len(self.classes_[column]) <= max_classes_of(self.model)
 
     def _estimator(self, classifier: bool, categorical: list[int]):
-        from tabsil.recipe import TabSilClassifier, TabSilRegressor
+        from tabsil.tasks.classification import TabSilClassifier
+        from tabsil.tasks.regression import TabSilRegressor
 
         kwargs = {
             "n_estimators": self.n_estimators,

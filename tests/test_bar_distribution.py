@@ -2,8 +2,11 @@ import math
 
 import torch
 
-from tabsil import FullSupportBarDistribution, get_bucket_borders
-from tabsil.models.bar_distribution import BarDistribution
+from tabsil.models.bar_distribution import (
+    BarDistribution,
+    FullSupportBarDistribution,
+    get_bucket_borders,
+)
 
 
 def test_uniform_logits_give_log_width_nll():

@@ -262,7 +262,7 @@ def test_classification_metrics_are_nan_when_no_row_is_left():
 def test_regressor_predict_full_matches_predict_and_distribution():
     from train_helpers import tiny_model
 
-    from tabsil.recipe import TabSilRegressor
+    from tabsil.tasks.regression import TabSilRegressor
 
     model = tiny_model()
     x, y = load_diabetes(return_X_y=True)

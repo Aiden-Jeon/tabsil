@@ -1,9 +1,16 @@
-"""Checkpoints of training runs: MLflow run artifacts (`runs:/...`) and the model structure a run
-logged as params. Hub repos, `save_pretrained` folders and checkpoint files are read by
-`tabsil.hub` (`load_model` here passes them on).
+"""Checkpoints for the training, evaluation and upload scripts. `load_model` reads a Hub repo, a
+local `save_pretrained` folder, a checkpoint file or an MLflow run artifact (`runs:/...`) the same
+way; `run_architecture` gives the model structure a training run logged as params.
 
     model, borders = load_model("runs:/<run_id>/checkpoints/latest.pt", "classification", out_dir)
+    model, borders = load_model("hf://aiden-jeon/tabsil@stage2-10k", "regression", out_dir)
     structure = run_architecture(run.data.params)  # replace(config, **structure)
+
+Hub repos are written as `hf://owner/name`, so a mistyped local path is not sent to the Hub and
+a local folder named like the repo is not read in its place. Intermediate checkpoints live on
+branches of the same repo (`stage1-150k`, `stage2-10k`) and are loaded as
+`hf://owner/name@stage2-10k`. The Hub format (`save_pretrained`, `from_pretrained`) is in
+`tabsil.hub`.
 """
 
 from __future__ import annotations
@@ -16,9 +23,19 @@ import torch
 from torch import nn
 
 from tabsil import hub
-from tabsil.models import DEFAULT_MODEL_TYPE, canonical_model_type, config_fields, info_fields
+from tabsil.models import (
+    DEFAULT_MODEL_TYPE,
+    canonical_model_type,
+    config_fields,
+    info_fields,
+    model_from_state,
+    state_config,
+)
 from tabsil_train.training.config import TrainConfig
 
+HUB_PREFIX = "hf://"
+# MLflow run artifacts
+RUNS_PREFIX = "runs:/"
 # file where `download_artifact` records the downloaded artifact (to skip re-downloading into the
 # same folder)
 DOWNLOADED_NAME = ".downloaded.json"
@@ -71,17 +88,35 @@ def load_model(
     - `runs:/<run_id>/<path>`: a file or folder a training run logged to MLflow (downloaded into
       `dst`; an earlier download in the same `dst` is reused, see `download_artifact`)
     - `hf://owner/name`: a Hub repo (uploaded with `save_pretrained`). Append `@<revision>` to
-      load a branch, tag or commit (e.g. `hf://owner/name@step-100k`)
+      load a branch, tag or commit (e.g. `hf://owner/name@step-100k`). It is downloaded from the
+      Hub also when the working directory has a folder `owner/name`
     - a local `save_pretrained` folder, or a file saved with `tabsil.models.save_checkpoint`
 
     Checkpoints written during training (`checkpoints/step_XXXXXXX.pt`, `latest.pt`) build the
-    model from the model type and config stored in them. Everything but `runs:/` is read by
-    `tabsil.hub.load_model`.
+    model from the model type and config stored in them. A path that does not exist, a checkpoint
+    without a model config and a model that does not serve `task` end the script (SystemExit)
+    with a message naming `spec`.
     """
     spec = str(spec)
-    if spec.startswith(hub.RUNS_PREFIX):
-        return hub.load_model(download_artifact(spec, dst), task, name=spec)
-    return hub.load_model(spec, task)
+    if spec.startswith(HUB_PREFIX):
+        repo_id, _, revision = spec.removeprefix(HUB_PREFIX).partition("@")
+        loaded = hub.from_pretrained(repo_id, revision=revision or None, from_hub=True)
+    else:
+        path = download_artifact(spec, dst) if spec.startswith(RUNS_PREFIX) else Path(spec)
+        if not path.exists():
+            raise SystemExit(f"{spec} does not exist (pass a Hub repo as {HUB_PREFIX}owner/name).")
+        if path.is_dir():
+            loaded = hub.from_pretrained(path)
+        else:
+            state = torch.load(path, map_location="cpu", weights_only=True)
+            if state_config(state) is None:
+                raise SystemExit(
+                    f"{spec} has no model config (saved before checkpoints recorded one)."
+                )
+            loaded = model_from_state(state)
+    if task not in (served := hub.served_tasks(*loaded)):
+        raise SystemExit(f"{spec} is a {'·'.join(served)} model (needs a {task} model).")
+    return loaded
 
 
 def run_architecture(params: dict[str, str]) -> dict:
@@ -103,3 +138,20 @@ def run_architecture(params: dict[str, str]) -> dict:
             for name in names
         },
     }
+
+
+def weights_digest(model: nn.Module, borders: torch.Tensor | None = None) -> str:
+    """SHA-1 of a model's weights (every state_dict tensor's name, dtype, shape and bytes, in
+    name order) and of the regression borders: two checkpoints at different paths with the same
+    weights get the same digest, and new weights at an old path a new one."""
+    import hashlib
+
+    digest = hashlib.sha1()
+    tensors = sorted(model.state_dict().items())
+    if borders is not None:
+        tensors.append(("<borders>", torch.as_tensor(borders)))
+    for name, t in tensors:
+        t = t.detach().cpu().contiguous()
+        digest.update(f"{name}|{t.dtype}|{tuple(t.shape)}|".encode())
+        digest.update(t.reshape(-1).view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()

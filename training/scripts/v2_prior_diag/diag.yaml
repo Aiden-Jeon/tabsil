@@ -1,8 +1,8 @@
 # v2 prior diagnostics (README.md in this folder) on Databricks AI Runtime, 1x H100, about 4
-# minutes. Needs `tabsil.forecast` and `tabsil.unsupervised` (main, #17 and #19) and the 0.1.1
-# inference code: on dev-v2 this runs only after main (with release/0.1.1) is merged in. The
-# reported numbers used main f5b26a7 (which includes release/0.1.1) and DIAG_MODEL below. From the
-# repository root:
+# minutes. Needs `tabsil.tasks.forecast` and `tabsil.tasks.unsupervised` (main, #17 and #19) and
+# the 0.1.1 inference code: on dev-v2 this runs only after main (with release/0.1.1) is merged in.
+# The reported numbers used main f5b26a7 (which includes release/0.1.1) and DIAG_MODEL below.
+# From the repository root:
 #   databricks air run -f training/scripts/v2_prior_diag/diag.yaml --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR
 # One diagnostic: --override "env_variables.DIAG_ARGS=d3_contamination"
 experiment_name: tabsil

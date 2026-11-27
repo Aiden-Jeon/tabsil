@@ -1,5 +1,5 @@
 """Treatment effect benchmarks: IHDP (100 realizations) and ACIC 2016 (10 simulations), TabSil
-meta-learners (`tabsil.causal.TabSilCATE`) against EconML baselines run on the same splits.
+meta-learners (`tabsil.TabSilCATE`) against EconML baselines run on the same splits.
 
 Benchmarks (`BENCHMARKS`):
 
@@ -38,17 +38,17 @@ checked against `SHA256`; it is not redistributed (IHDP has no stated data licen
 are under CDLA-Sharing-1.0, LICENSES/ACIC2016-CDLA-Sharing-1.0.txt).
 
 `run` appends one row per (benchmark, realization, method) to `results.csv` as it goes and skips
-rows already there, so a rerun resumes. A failed cell (an exception or a non-finite effect) is
-recorded in `failures.json`, the others still run, and the caller ends with an error; nothing is
-imputed.
+rows already there, so a rerun resumes. A row is reused only with the settings it was computed
+with (`opts`; for TabSil the weights, member count, seed and saved inference settings,
+`_files.model_settings`): a rerun with another model into the same folder stops, and EconML rows
+are reused whatever the model. A failed cell (an exception or a non-finite effect) is recorded in
+`failures.json`, the others still run, and the caller ends with an error; nothing is imputed.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import time
-import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -201,7 +201,7 @@ def check_methods(methods: list[str]) -> list[str]:
 def tabsil_estimator(model, borders, learner: str, n_estimators: int | None, device: str,
                      seed_offset: int = 0) -> Estimator:  # fmt: skip
     """`TabSilCATE(learner)` fitted on the training rows; random_state = seed + `seed_offset`."""
-    from tabsil.causal import TabSilCATE
+    from tabsil.tasks.causal import TabSilCATE
 
     def estimate(split: Split, seed: int):
         est = TabSilCATE(
@@ -304,20 +304,14 @@ def run(
     log: Callable[[str], None] = print,
 ) -> tuple[pd.DataFrame, list[dict]]:
     """Every (benchmark, realization, method) of `plan` (benchmark -> realizations) not yet in
-    `out_dir/results.csv`, appending a row as each finishes. Returns (all rows, failures)."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "results.csv"
-    done = read_results(path)
-    # resume only rows computed with the same settings (`opts`: model, members, seed)
-    current = done.method.map(lambda m: (opts or {}).get(m, ""))
-    stale = done[done.method.isin(methods) & (done.opts.fillna("").astype(str) != current)]
-    if len(stale):
-        raise ValueError(
-            f"{path} has {sorted(set(stale.method))} results with other settings"
-            f" ({stale.opts.iloc[0]!r}); use another output directory"
-        )
+    `out_dir/results.csv`, appending a row as each finishes. `opts[method]` is the settings
+    string written with its rows; rows of `methods` already there with another string stop the
+    run (`_files.check_settings`). Returns (all rows, failures)."""
+    # resume only rows computed with the same settings (`opts`: weights, members, seed, ...)
+    settings = {m: (opts or {}).get(m, "") for m in methods}
+    results = _files.Results(out_dir, RESULT_COLUMNS, settings, "causal", log)
+    done = results.done
     finished = set(zip(done.benchmark, done.realization.astype(int), done.method, strict=True))
-    failures = []
     for benchmark, realizations in plan.items():
         todo = [r for r in realizations if any((benchmark, r, m) not in finished for m in methods)]
         for r, split in splits(benchmark, todo):
@@ -328,10 +322,7 @@ def run(
                 try:
                     row = metrics(split, *estimators[method](split, r))
                 except Exception as e:  # noqa: BLE001 - record and go on; the run fails at the end
-                    failures.append(
-                        dict(benchmark=benchmark, realization=r, method=method, error=repr(e))
-                    )
-                    log(f"[causal] {benchmark} {r} {method} FAILED:\n{traceback.format_exc()}")
+                    results.fail(dict(benchmark=benchmark, realization=r, method=method), e)
                     continue
                 row |= dict(
                     benchmark=benchmark, realization=r, method=method,
@@ -339,17 +330,13 @@ def run(
                     n_test=len(split.X_test), n_treated=int(split.t_train.sum()),
                     n_features=split.X_train.shape[1], opts=(opts or {}).get(method, ""),
                 )  # fmt: skip
-                pd.DataFrame([row], columns=RESULT_COLUMNS).to_csv(
-                    path, mode="a", header=not path.exists() or not path.stat().st_size, index=False
-                )
+                results.append([row])
                 log(
                     f"[causal] {benchmark} {r} {method}: sqrt PEHE in {row['pehe_in']:.3f} out "
                     f"{row['pehe_out']:.3f}, ATE err in {row['ate_err_in']:.3f} out "
                     f"{row['ate_err_out']:.3f} ({row['seconds']:.1f}s)"
                 )
-    if failures:
-        (out_dir / "failures.json").write_text(json.dumps(failures, indent=1))
-    return read_results(path), failures
+    return results.finish()
 
 
 # --- report -------------------------------------------------------------------------------------
