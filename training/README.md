@@ -17,19 +17,15 @@ The Databricks job specs upload `src/` and `training/src/` and put them on `PYTH
 
 ## Environments
 
-Each `uv sync` makes the environment match that command exactly (it removes what the command does not install). From the repository root:
+From the repository root:
 
 ```bash
-uv sync                           # tabsil + dev tools, Jupyter (inference tests: uv run pytest tests)
-uv sync --all-packages            # tabsil + tabsil-train (training, priors, AMLB evaluation) + dev tools, Jupyter
-uv sync --package tabsil-train    # tabsil-train and its test tools only (tests: uv run --package tabsil-train pytest training/tests)
-uv sync --package tabsil-train --no-dev --extra arena --group arena-dev   # TabArena / BeyondArena evaluation
-uv sync --package tabsil-train --no-dev --extra fev --group arena-dev     # fev-bench forecasting evaluation
-uv sync --package tabsil-train --extra causal                             # treatment effect evaluation (EconML baselines)
-uv sync --all-packages --extra impute                                     # + the TabPFN baselines of the imputation evaluation
+uv sync --all-packages                                # tabsil + tabsil-train + dev tools
+uv run pytest tests                                   # inference tests
+uv run --package tabsil-train pytest training/tests   # training, prior and evaluation tests
 ```
 
-`--package tabsil-train` leaves out the root dev tools such as Jupyter, so use `--all-packages` to have both. The `arena` extra needs pandas 2.3, so it is installed without the dev groups (pandas 3). The `fev` extra (fev 0.10.0) needs `huggingface-hub<2`, so it is installed without the dev groups too.
+A suite with an extra in the [Evaluation](#evaluation) table needs it: `uv sync --package tabsil-train --extra causal`, `uv sync --all-packages --extra impute`. The `arena` and `fev` extras need pandas 2.3 and `huggingface-hub<2`, which the dev tools do not allow, so they go without them: `uv sync --package tabsil-train --no-dev --extra arena --group arena-dev` (or `--extra fev`). Each `uv sync` removes what that command does not install.
 
 ## Training
 
