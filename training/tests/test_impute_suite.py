@@ -1,6 +1,6 @@
 """Imputation suite: ARFF parsing and the sha256 check, split and mask protocol, metrics, the CPU
-baselines, run bookkeeping (resume, failures) and the report. No download: tables are synthetic
-or monkeypatched."""
+baselines, run bookkeeping (resume, failures, rows reused only with the same weights and
+settings) and the report. No download: tables are synthetic or monkeypatched."""
 
 from __future__ import annotations
 
@@ -262,6 +262,113 @@ def test_eval_suite_impute(tmp_path, monkeypatch):
     monkeypatch.setitem(bi.CPU_IMPUTERS, "knn", lambda X, c, s: 1 / 0)  # a method that raises
     with pytest.raises(SystemExit, match="impute: 4 failed"):  # 2 tables x 2 seeds
         script.main([*grid, "--impute-methods", "mean,knn"])
+
+
+def _args(out, model, *more):
+    return ["--suite", "impute", "--regressor-path", str(model), "--datasets", "cmc",
+            "--impute-rates", "0.3", "--impute-seeds", "0", "--impute-methods", "tabsil,mean",
+            "--n-estimators", "1", "--device", "cpu", "--out-dir", str(out), *more]  # fmt: skip
+
+
+@pytest.fixture
+def suite(tmp_path, monkeypatch):
+    """`eval.py` on a synthetic table: (script, output folder, results.csv, calls of the mean
+    imputer)."""
+    monkeypatch.setattr(bi, "load", _fake_load)
+    monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
+    calls = []
+    monkeypatch.setitem(bi.CPU_IMPUTERS, "mean", lambda *a: calls.append(1) or bi.impute_mean(*a))
+    out = tmp_path / "eval"
+    yield _eval_script(), out, out / "impute" / "results.csv", calls
+    bi.n_columns.cache_clear()  # the job cost cached the synthetic table's columns
+
+
+def test_eval_suite_impute_reuses_rows_of_the_same_weights_and_settings(suite, tmp_path):
+    from train_helpers import tiny_checkpoint
+
+    from tabsil_train.hub import load_model, weights_digest
+
+    script, out, results, mean_calls = suite
+    model = tiny_checkpoint(tmp_path / "a.pt")
+    script.main(_args(out, model))
+    rows = pd.read_csv(results)
+    assert sorted(rows.method) == ["mean", "tabsil", "tabsil_median"]
+    ours = rows[rows.method != "mean"]
+    digest = weights_digest(*load_model(model, "regression", tmp_path))
+    assert ours.opts.str.startswith(f"weights={digest} n_estimators=1 seed=0 ").all()
+    assert ours.opts.nunique() == 1  # tabsil_median rows have the tabsil job's settings
+    assert rows[rows.method == "mean"].opts.isna().all()
+    first = results.read_text()
+
+    # the same weights at another path: the rerun resumes, nothing is computed again
+    script.main(_args(out, tiny_checkpoint(tmp_path / "copy.pt")))
+    assert results.read_text() == first and len(mean_calls) == 1
+
+    # other weights stop the run, also when they replace the file at the first path
+    for path in (tmp_path / "b.pt", tmp_path / "a.pt"):
+        with pytest.raises(ValueError, match="other settings"):
+            script.main(_args(out, tiny_checkpoint(path, seed=1)))
+    # and so do other settings of the same weights
+    for flags in (["--seed", "1"], ["--n-estimators", "2"]):
+        with pytest.raises(ValueError, match="other settings"):
+            script.main(_args(out, tmp_path / "copy.pt", *flags))
+
+    # the mean row does not depend on the model: it is reused with other weights
+    script.main(_args(out, tmp_path / "b.pt", "--impute-methods", "mean"))
+    assert results.read_text() == first and len(mean_calls) == 1
+
+
+def test_eval_suite_impute_shards_check_the_settings_before_the_workers(
+    suite, tmp_path, monkeypatch
+):
+    import mlflow
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, mean_calls = suite
+    local = tiny_checkpoint(tmp_path / "a.pt")
+    # the parent gets a runs:/ URI and hands its download, a local path, to the workers
+    monkeypatch.setattr(
+        mlflow.artifacts, "download_artifacts", lambda artifact_uri, dst_path: local
+    )
+    uri = "runs:/abc123/checkpoints/latest.pt"
+    workers = in_process_workers(script, monkeypatch)
+    script.main(_args(out, uri, "--shards", "2"))
+    # one GPU job with the local path, and the CPU methods' process without a model
+    gpu, cpu = sorted(workers, key=lambda argv: "--regressor-path" not in argv)
+    assert len(workers) == 2 and "--regressor-path" not in cpu
+    assert local in gpu and uri not in gpu
+    rows = pd.read_csv(results)
+    assert sorted(rows.method) == ["mean", "tabsil", "tabsil_median"]
+    assert rows[rows.method != "mean"].opts.nunique() == 1
+    first = results.read_text()
+
+    # the worker's rows carry the settings the parent expects: reruns find the job finished
+    # (only the CPU methods' process starts again, and resumes)
+    script.main(_args(out, uri, "--shards", "2"))
+    script.main(_args(out, local))
+    assert len(workers) == 3 and "--regressor-path" not in workers[2]
+    assert results.read_text() == first and len(mean_calls) == 1
+
+    # other weights: the parent stops before it filters the finished jobs and starts workers
+    with pytest.raises(ValueError, match="other settings"):
+        script.main(_args(out, tiny_checkpoint(tmp_path / "b.pt", seed=1), "--shards", "2"))
+    assert len(workers) == 3 and results.read_text() == first
+
+
+def test_eval_suite_impute_shards_do_not_merge_rows_of_other_settings(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+    # an earlier run with other weights was cut short: its rows are in the worker's folder only
+    job_dir = out / "impute" / "shards" / "cmc_0.3_tabsil"
+    other = tiny_checkpoint(tmp_path / "b.pt", seed=1)
+    script.main(_args(job_dir, other, "--impute-methods", "tabsil"))
+    assert len(pd.read_csv(job_dir / "impute" / "results.csv")) == 2
+    in_process_workers(script, monkeypatch)
+    with pytest.raises(SystemExit, match="impute: 1 failed"):  # the worker stops on those rows
+        script.main(_args(out, tiny_checkpoint(tmp_path / "a.pt"), "--shards", "2"))
+    assert set(pd.read_csv(results).method) == {"mean"}
+    assert "other settings" in (out / "impute" / "shards" / "cmc_0.3_tabsil.log").read_text()
 
 
 def test_worker_threads_split_the_cores(monkeypatch):

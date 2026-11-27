@@ -1,11 +1,17 @@
-"""Pinned benchmark downloads and result tables shared by the suites (`benchmarks._files`)."""
+"""Pinned benchmark downloads and result tables shared by the suites (`benchmarks._files`): the
+settings string of a model's rows (with `tabsil_train.hub.weights_digest`) and its check."""
 
 import hashlib
 import io
 
+import pandas as pd
 import pytest
+import torch
+from train_helpers import tiny_checkpoint, tiny_model
 
+from tabsil.recipe import default_inference
 from tabsil_train.benchmarks import _files, adbench
+from tabsil_train.hub import load_model, weights_digest
 
 GOOD = b"benchmark bytes"
 PIN = hashlib.sha256(GOOD).hexdigest()
@@ -69,3 +75,82 @@ def test_read_results(tmp_path):
     assert _files.read_results(tmp_path / "results.csv", ["a", "b"]).to_dict("records") == [
         {"a": 1, "b": 2}
     ]
+
+
+def _linear():
+    model = torch.nn.Linear(2, 1)
+    with torch.no_grad():
+        model.weight.copy_(torch.tensor([[1.0, -2.0]]))
+        model.bias.copy_(torch.tensor([0.5]))
+    return model
+
+
+def test_weights_digest_value():
+    # the definition is shared with the arena cache key: the same weights must keep their digest
+    assert weights_digest(_linear()) == "9d90b5d8bf1471b05a4b836ce924b02e57f53004"
+    borders = torch.tensor([0.0, 1.0, 2.0])
+    assert weights_digest(_linear(), borders) == "225f440d777bddaa0987a45a83f24947afbad948"
+
+
+def test_weights_digest_follows_the_weights_not_the_path(tmp_path):
+    first = load_model(tiny_checkpoint(tmp_path / "a.pt"), "regression", tmp_path)
+    copy = load_model(tiny_checkpoint(tmp_path / "copy.pt"), "regression", tmp_path)
+    other = load_model(tiny_checkpoint(tmp_path / "b.pt", seed=1), "regression", tmp_path)
+    assert weights_digest(*first) == weights_digest(*copy)
+    assert weights_digest(*first) != weights_digest(*other)
+    model, borders = first
+    assert weights_digest(model, borders) != weights_digest(model, borders + 1)  # borders count
+    assert weights_digest(model, borders) != weights_digest(model)
+
+
+def test_model_settings_name_the_weights_and_the_saved_inference_settings():
+    model, borders = tiny_model(), torch.linspace(-4, 4, 33)
+    text = _files.model_settings(model, borders, 2, 3, n_permutations=5)
+    assert text.startswith(
+        f"weights={weights_digest(model, borders)} n_estimators=2 seed=3 n_permutations=5 "
+    )
+    inference = default_inference(model, "classification")
+    assert f"member_kinds={'/'.join(inference['member_kinds'])}" in text
+    for key in ("max_features_per_member", "feature_subsampling", "categories"):
+        assert f" {key}={inference[key]}" in text
+    assert text.endswith(f"softmax_temperature={inference['softmax_temperature']}")
+    assert _files.model_settings(model, borders, 2, 3, n_permutations=5) == text
+    for changed in (
+        _files.model_settings(model, borders, 4, 3, n_permutations=5),
+        _files.model_settings(model, borders, 2, 0, n_permutations=5),
+        _files.model_settings(model, borders, 2, 3, n_permutations=10),
+        _files.model_settings(tiny_model(seed=1), borders, 2, 3, n_permutations=5),
+    ):
+        assert changed != text
+    # two Hub tags of the same weights with other settings in config.json (v1 and v1.1)
+    model.inference_config = {"member_kinds": ["standard"], "softmax_temperature": 0.9}
+    tagged = _files.model_settings(model, borders, 2, 3, n_permutations=5)
+    assert tagged != text and tagged.split()[0] == text.split()[0]  # same weights
+    assert " member_kinds=standard " in tagged and tagged.endswith("softmax_temperature=0.9")
+
+
+def _rows(*rows):
+    return pd.DataFrame(rows, columns=["method", "opts"])
+
+
+def test_check_settings(tmp_path):
+    path = tmp_path / "results.csv"
+    settings = {"ours": "weights=a seed=0", "ours_median": "weights=a seed=0", "baseline": ""}
+    done = _rows(
+        ("ours", "weights=a seed=0"),
+        ("ours_median", "weights=a seed=0"),
+        ("baseline", float("nan")),  # an empty cell
+        ("not_requested", "weights=b"),  # a method this run does not ask for
+    )
+    assert not _files.other_settings(done, settings).any()
+    _files.check_settings(done, settings, path)
+    _files.check_settings(_files.read_results(path, ["method", "opts"]), settings, path)  # no file
+    for stale in (("ours_median", "weights=b seed=0"), ("ours", float("nan")), ("baseline", "x")):
+        rows = pd.concat([done, _rows(stale)], ignore_index=True)
+        assert _files.other_settings(rows, settings).tolist() == [False] * 4 + [True]
+        with pytest.raises(ValueError, match="other settings") as error:
+            _files.check_settings(rows, settings, path)
+        assert stale[0] in str(error.value) and "another output directory" in str(error.value)
+    # the message shows the row's settings and this run's
+    with pytest.raises(ValueError, match=r"'weights=b seed=0'; this run: 'weights=a seed=0'"):
+        _files.check_settings(_rows(("ours", "weights=b seed=0")), settings, path)

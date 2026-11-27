@@ -1,5 +1,5 @@
 """Benchmark data files pinned by SHA256, and per-cell result tables, shared by the suites that
-download their data at run time and write one result row per cell (`adbench`, `causal`).
+download their data at run time and write one result row per cell (`adbench`, `causal`, `impute`).
 
 - `download_verified`: a file is downloaded once into a cache. The download goes to `<name>.part`
   and is moved into place only when its SHA256 is the pinned one, so a truncated download or an
@@ -7,6 +7,12 @@ download their data at run time and write one result row per cell (`adbench`, `c
   every use
 - `read_results`: a suite's `results.csv` (appended one row per finished cell, so a rerun resumes),
   or an empty table with the suite's columns
+- `check_settings`: a rerun reuses a row only if it was computed with the same settings. Every row
+  carries its method's settings string (`opts`); a row of a requested method with another string
+  stops the run. A TabSil method's string is `model_settings` (the weights by digest, the member
+  count, the seed, the inference settings saved with the weights), so another checkpoint in the
+  same output folder is an error; a baseline's string does not name the model, so its rows are
+  reused whatever the model
 """
 
 from __future__ import annotations
@@ -49,3 +55,60 @@ def read_results(path: Path, columns: list[str]) -> pd.DataFrame:
     if path.exists() and path.stat().st_size:
         return pd.read_csv(path)
     return pd.DataFrame(columns=columns)
+
+
+def model_settings(model, borders, n_estimators: int, seed: int, **options) -> str:
+    """The settings string (`opts`) of the rows a TabSil method computes with `model`: everything
+    that changes them, as `key=value` words.
+
+    - `weights`: the digest of the weights and borders (`tabsil_train.hub.weights_digest`), not
+      the checkpoint path. New weights at an old path (`runs:/<id>/checkpoints/latest.pt`) give
+      another string; the same weights at another path (the local copy `--shards` workers get)
+      give the same one
+    - `n_estimators` (the member count the estimators get), `seed` (the `--seed` offset) and the
+      suite's own `options` (ADBench: `n_permutations`)
+    - the inference settings saved with the weights (`tabsil.recipe.default_inference`), which
+      `TabSilClassifier` and `TabSilRegressor` read: two Hub tags can hold the same weights with
+      other settings
+    """
+    from tabsil.recipe import default_inference
+    from tabsil_train.hub import weights_digest
+
+    values = {
+        "weights": weights_digest(model, borders),
+        "n_estimators": int(n_estimators),
+        "seed": int(seed),
+        **options,
+    }
+    # the same for both tasks, except the member count (given above) and the softmax temperature
+    # (classification only)
+    for key, value in default_inference(model, "classification").items():
+        if key != "n_estimators":
+            values[key] = "/".join(value) if isinstance(value, tuple | list) else value
+    return " ".join(f"{key}={value}" for key, value in values.items())
+
+
+def _opts(rows: pd.DataFrame) -> pd.Series:
+    # an empty cell reads back as NaN; a method without settings has ""
+    return rows.opts.astype(object).where(rows.opts.notna(), "").astype(str)
+
+
+def other_settings(rows: pd.DataFrame, settings: dict[str, str]) -> pd.Series:
+    """Per row: whether its method is in `settings` (result method -> its settings string in
+    this run) and its `opts` is another string."""
+    current = rows.method.map(lambda m: settings.get(m, ""))
+    return rows.method.isin(list(settings)) & (_opts(rows) != current)
+
+
+def check_settings(done: pd.DataFrame, settings: dict[str, str], path: Path) -> None:
+    """ValueError if `done` (the rows of `path`) has a row of a method in `settings` (result
+    method -> its settings string in this run) with another string: the row is of another model
+    or other options, and resuming would mix it with this run's rows."""
+    stale = other_settings(done, settings)
+    if stale.any():
+        method = done.method[stale].iloc[0]
+        raise ValueError(
+            f"{path} has {sorted(set(done.method[stale]))} results with other settings"
+            f" ({_opts(done)[stale].iloc[0]!r}; this run: {settings[method]!r});"
+            " use another output directory"
+        )

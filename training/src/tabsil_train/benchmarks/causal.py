@@ -38,9 +38,11 @@ checked against `SHA256`; it is not redistributed (IHDP has no stated data licen
 are under CDLA-Sharing-1.0, LICENSES/ACIC2016-CDLA-Sharing-1.0.txt).
 
 `run` appends one row per (benchmark, realization, method) to `results.csv` as it goes and skips
-rows already there, so a rerun resumes. A failed cell (an exception or a non-finite effect) is
-recorded in `failures.json`, the others still run, and the caller ends with an error; nothing is
-imputed.
+rows already there, so a rerun resumes. A row is reused only with the settings it was computed
+with (`opts`; for TabSil the weights, member count, seed and saved inference settings,
+`_files.model_settings`): a rerun with another model into the same folder stops, and EconML rows
+are reused whatever the model. A failed cell (an exception or a non-finite effect) is recorded in
+`failures.json`, the others still run, and the caller ends with an error; nothing is imputed.
 """
 
 from __future__ import annotations
@@ -304,18 +306,14 @@ def run(
     log: Callable[[str], None] = print,
 ) -> tuple[pd.DataFrame, list[dict]]:
     """Every (benchmark, realization, method) of `plan` (benchmark -> realizations) not yet in
-    `out_dir/results.csv`, appending a row as each finishes. Returns (all rows, failures)."""
+    `out_dir/results.csv`, appending a row as each finishes. `opts[method]` is the settings
+    string written with its rows; rows of `methods` already there with another string stop the
+    run (`_files.check_settings`). Returns (all rows, failures)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "results.csv"
     done = read_results(path)
-    # resume only rows computed with the same settings (`opts`: model, members, seed)
-    current = done.method.map(lambda m: (opts or {}).get(m, ""))
-    stale = done[done.method.isin(methods) & (done.opts.fillna("").astype(str) != current)]
-    if len(stale):
-        raise ValueError(
-            f"{path} has {sorted(set(stale.method))} results with other settings"
-            f" ({stale.opts.iloc[0]!r}); use another output directory"
-        )
+    # resume only rows computed with the same settings (`opts`: weights, members, seed, ...)
+    _files.check_settings(done, {m: (opts or {}).get(m, "") for m in methods}, path)
     finished = set(zip(done.benchmark, done.realization.astype(int), done.method, strict=True))
     failures = []
     for benchmark, realizations in plan.items():

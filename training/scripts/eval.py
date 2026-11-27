@@ -115,6 +115,12 @@ its `results.csv`.
   $RUN --extra impute python $EVAL --suite impute --regressor-path hf://aiden-jeon/tabsil@v1 \
     --datasets airfoil_self_noise --impute-rates 0.3 --impute-seeds 0
 
+The ADBench, causal and impute suites reuse a `results.csv` row of a TabSil method only when it
+was computed with this run's settings (the row's `opts`: a digest of the weights rather than the
+checkpoint path, the member count, `--seed`, the suite's options and the inference settings saved
+with the weights). Otherwise the run stops: use another `--out-dir`. Rows of the baselines
+(IsolationForest, EconML, mean, KNN, ...) are reused whatever the model.
+
 On AI Runtime (`training/scripts/eval.yaml`, `training/scripts/eval_arena.yaml`) results are
 logged to the platform's MLflow run (`MLFLOW_RUN_ID`). Locally, `--mlflow` creates a new run in the
 `TABSIL_EXPERIMENT` experiment (default `tabsil`).
@@ -1385,7 +1391,7 @@ def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
 def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
     """ADBench unsupervised outlier detection (`tabsil_train.benchmarks.adbench`). Ends with an
     error if any (table, split, method) failed, after the others ran and the report was written."""
-    from tabsil_train.benchmarks import adbench
+    from tabsil_train.benchmarks import _files, adbench
 
     datasets = list(adbench.DATASETS) if args.datasets is None else args.datasets.split(",")
     splits = args.adbench_splits.split(",")
@@ -1413,7 +1419,9 @@ def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> No
         scorers[adbench.OURS] = adbench.tabsil_scorer(
             model, borders, args.n_permutations, n_estimators, args.device, 100 * args.seed
         )
-        opts[adbench.OURS] = f"n_permutations={args.n_permutations} n_estimators={n_estimators}"
+        opts[adbench.OURS] = _files.model_settings(
+            model, borders, n_estimators, args.seed, n_permutations=args.n_permutations
+        )
         params |= {"model": path, "n_permutations": args.n_permutations,
                    "n_estimators": n_estimators, "seed": args.seed}  # fmt: skip
     print(f"adbench: {len(datasets)} tables x {splits} x {methods}, {args.device}", flush=True)
@@ -1426,7 +1434,7 @@ def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> No
         cpu = [m for m in methods if adbench.base(m) != adbench.OURS]
         _, failures = adbench.run(scorers, datasets, splits, cpu, suite_dir, opts)
         gpu = [m for m in methods if adbench.base(m) == adbench.OURS]
-        failures += run_adbench_shards(args, datasets, splits, gpu, suite_dir, out_dir)
+        failures += run_adbench_shards(args, datasets, splits, gpu, suite_dir, out_dir, opts)
         rows = adbench.read_results(suite_dir / "results.csv")
     else:
         rows, failures = adbench.run(scorers, datasets, splits, methods, suite_dir, opts)
@@ -1535,15 +1543,19 @@ def run_adbench_shards(
     methods: list[str],
     suite_dir: Path,
     out_dir: Path,
+    opts: dict[str, str] | None = None,
 ) -> list[dict]:
     """ADBench `--shards`: one job per (table, split, method) not yet in `results.csv`, most
     expensive first, each a worker process (`eval.py --suite adbench` on one GPU, without MLflow)
     started as soon as a GPU is free (`_run_shard_queue`). A finished job's rows are appended to
-    `results.csv`; a failed job is returned as a failure (with its log under `shards/`)."""
-    from tabsil_train.benchmarks import adbench
+    `results.csv`; a failed job is returned as a failure (with its log under `shards/`). Rows of
+    `methods` with other settings than `opts` (base method -> settings string) stop the run."""
+    from tabsil_train.benchmarks import _files, adbench
     from tabsil_train.hub import download_artifact
 
     done = adbench.read_results(suite_dir / "results.csv")
+    # here as well as in `adbench.run`: a job whose row is already there never reaches a worker
+    _files.check_settings(done, adbench.row_settings(methods, opts), suite_dir / "results.csv")
     finished = set(zip(done.dataset, done.split, done.method, strict=True))
     jobs = [
         (d, s, m) for d in datasets for s in splits for m in methods if (d, s, m) not in finished
@@ -1601,7 +1613,7 @@ def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
     """Treatment effects on IHDP and ACIC 2016 (`tabsil_train.benchmarks.causal`). Ends with an
     error if any (benchmark, realization, method) failed or has no result, after the others ran
     and the summary was written."""
-    from tabsil_train.benchmarks import causal
+    from tabsil_train.benchmarks import _files, causal
 
     benchmarks = args.datasets.split(",") if args.datasets else list(causal.BENCHMARKS)
     if bad := [b for b in benchmarks if b not in causal.BENCHMARKS]:
@@ -1630,11 +1642,12 @@ def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
         if "classification" not in model.tasks:
             raise SystemExit(f"{args.regressor_path} does not serve classification (propensity).")
         n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
+        settings = _files.model_settings(model, borders, n_estimators, args.seed)
         for m in ours:
             estimators[m] = causal.tabsil_estimator(
                 model, borders, causal.TABSIL[m], n_estimators, args.device, 1000 * args.seed
             )
-            opts[m] = f"model={args.regressor_path} n_estimators={n_estimators} seed={args.seed}"
+            opts[m] = settings
         params |= {"model": args.regressor_path, "n_estimators": n_estimators, "seed": args.seed}
     print(f"causal: {plan if args.causal_realizations else benchmarks} x {methods}, "
           f"{args.device}", flush=True)  # fmt: skip
@@ -1688,7 +1701,7 @@ def impute_grid(args: argparse.Namespace):
 def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
     """Missing value imputation (`tabsil_train.benchmarks.impute`). Ends with an error if a
     (table, rate, seed, method) failed."""
-    from tabsil_train.benchmarks import impute
+    from tabsil_train.benchmarks import _files, impute
 
     datasets, rates, seeds, methods = impute_grid(args)
     imputers: dict = dict(impute.CPU_IMPUTERS)
@@ -1707,18 +1720,22 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
     path = args.regressor_path or args.classifier_path
     if ours and not path:
         raise SystemExit("impute needs --regressor-path (a model serving both tasks).")
-    if ours and args.shards == 1:  # with --shards the workers load the model
+    if ours:
+        # with --shards the workers impute; this process loads the model for its settings string
         model, borders = load_model(path, "regression", out_dir / "checkpoints" / "regression")
         if "classification" not in model.tasks:
             raise SystemExit(f"{path} does not serve classification (categorical columns).")
         n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
+        settings = _files.model_settings(model, borders, n_estimators, args.seed)
         for m in ours:
-            imputers[m] = impute.tabsil_imputer(
-                model, borders, n_estimators, args.device, 100 * args.seed,
-                extension_kinds=m == "tabsil_inferred",
-            )  # fmt: skip
-            opts[m] = f"n_estimators={n_estimators}"
+            if args.shards == 1:
+                imputers[m] = impute.tabsil_imputer(
+                    model, borders, n_estimators, args.device, 100 * args.seed,
+                    extension_kinds=m == "tabsil_inferred",
+                )  # fmt: skip
+            opts[m] = settings
         params |= {"model": path, "n_estimators": n_estimators, "seed": args.seed}
+        del model, borders  # the imputers hold them (none with --shards)
     print(f"impute: {len(datasets)} tables x rates {rates} x seeds {seeds} x {methods}, "
           f"{args.device}", flush=True)  # fmt: skip
     if use_mlflow:
@@ -1727,7 +1744,7 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
     t0 = time.time()
     if args.shards > 1:
         failures = run_impute_shards(
-            args, datasets, rates, seeds, methods, suite_dir, out_dir, use_mlflow
+            args, datasets, rates, seeds, methods, suite_dir, out_dir, use_mlflow, opts
         )
     else:
         _, failures = impute.run(imputers, datasets, rates, seeds, methods, suite_dir, opts)
@@ -1787,6 +1804,7 @@ def run_impute_shards(
     suite_dir: Path,
     out_dir: Path,
     use_mlflow: bool = False,
+    opts: dict[str, str] | None = None,
 ) -> list[dict]:
     """`--suite impute --shards N`: the GPU methods as one job per (table, rate, method) not yet
     complete in `results.csv`, most expensive first, each a worker process (`eval.py --suite
@@ -1796,11 +1814,16 @@ def run_impute_shards(
     and torch's CPU work run on the CPU, and N workers each using every core oversubscribe it
     (the GPUs then sit idle). A finished job's rows are appended to `results.csv` (and logged to
     MLflow, so a run cut short keeps them); a failed job is returned as a failure (log under
-    `shards/`)."""
-    from tabsil_train.benchmarks import impute
+    `shards/`). Rows of `methods` with other settings than `opts` (job method -> settings string)
+    stop the run."""
+    from tabsil_train.benchmarks import _files, impute
     from tabsil_train.hub import download_artifact
 
-    finished = impute.finished_keys(impute.read_results(suite_dir / "results.csv"))
+    done = impute.read_results(suite_dir / "results.csv")
+    # here as well as in `impute.run`: a job whose rows are already there never reaches a worker
+    settings = impute.row_settings(methods, opts)
+    _files.check_settings(done, settings, suite_dir / "results.csv")
+    finished = impute.finished_keys(done)
 
     def complete(d: str, r: float, m: str) -> bool:
         return all((d, round(r, 4), s, out) in finished for s in seeds for out in impute.METHODS[m])
@@ -1837,6 +1860,8 @@ def run_impute_shards(
         # a worker resumes from its folder under shards/, which stays between runs, so its file
         # can hold rows merged by an earlier run: append only the new ones
         rows = impute.new_rows(rows, impute.read_results(path_out))
+        # nor rows of other settings an earlier run left there (the worker stops on them)
+        rows = rows[~_files.other_settings(rows, settings)]
         if len(rows):  # rows a failed job finished still count
             rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
             if use_mlflow:
