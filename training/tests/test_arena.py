@@ -3,6 +3,7 @@ baseline results are downloaded. System tests wrapping the estimator run only wi
 (tabarena)."""
 
 import argparse
+import json
 import types
 from pathlib import Path
 
@@ -131,18 +132,37 @@ def test_default_arena_fingerprint_and_run_id_are_pinned(monkeypatch, tmp_path):
     script = _eval_script()
     model = helpers.tiny_model()
     monkeypatch.setattr(script, "load_model", lambda *a, **k: (model, None))
+    # the weights' digest follows the tiny model's random init, so it is fixed here (its own
+    # test: test_weights_digest_follows_the_weights_not_the_path)
+    digest = "0" * 40
+    monkeypatch.setattr(script, "weights_digest", lambda model, borders=None: digest)
     hub = "hf://aiden-jeon/tabsil"
     argv = ["--suite", "tabarena-lite", "--classifier-path", hub, "--regressor-path", hub]
     args = script.parse_args([*argv, "--out-dir", str(tmp_path)])
     paths = {"classification": hub, "regression": hub}
     _, factories = script.arena_estimator_factory(args, paths)
     fingerprint = script.arena_fingerprint(args, paths, factories)
-    assert fingerprint == (
-        '{"max_features_per_member": 768, "n_estimators": {"classification": 8, "regression": 8},'
-        ' "paths": {"classification": "hf://aiden-jeon/tabsil", "regression":'
-        ' "hf://aiden-jeon/tabsil"}}'
-    )
-    assert arena._run_id(fingerprint, "tabsil") == "569e39a3f162"
+    value = json.loads(fingerprint)
+    kinds = ["standard", "power", "robust", "quantile"]
+    common = {
+        "categories": "counts",
+        "feature_subsampling": "balanced",
+        "max_features_per_member": 768,
+        "member_kinds": kinds,
+        "n_estimators": 8,
+    }
+    assert value == {
+        "inference": {
+            "classification": {**common, "softmax_temperature": 1.0},
+            "regression": common,
+        },
+        "max_features_per_member": 768,
+        "n_estimators": {"classification": 8, "regression": 8},
+        "paths": {"classification": hub, "regression": hub},
+        "weights": {"classification": digest, "regression": digest},
+    }
+    # the id follows the fingerprint's text (key order, separators), not only its content
+    assert arena._run_id(fingerprint, "tabsil") == "70635c9c5fac"
 
 
 def test_summary_and_cache_folder_record_method_and_fingerprint(monkeypatch, tmp_path):
