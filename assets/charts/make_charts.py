@@ -5,9 +5,9 @@
 """Generate the README charts (the SVGs next to this script) from the result tables.
 
 The numbers are read from the Markdown tables of ``README.md`` and ``docs/task-results.md``, which
-stay the single source of truth: a chart cannot disagree with its table. Edit the table, then run
-this script again. Every chart is written twice, ``<name>-light.svg`` and ``<name>-dark.svg``, for
-the README's ``<picture>`` (the same pattern as the logo).
+stay the single source of truth. Edit the table, then run this script again; ``--check`` reports
+SVGs that no longer match their tables (no CI job runs it). Every chart is written twice,
+``<name>-light.svg`` and ``<name>-dark.svg``, for the README's ``<picture>`` (as the logo is).
 
 TabSil is the accent color (the logo's thread) and every other method is gray: one series is the
 point, the rest is context. Text is live (a system sans stack) so the SVGs carry no font files; the
@@ -20,6 +20,7 @@ Usage (standard library only):
 """
 
 import argparse
+import functools
 import math
 import re
 import sys
@@ -66,6 +67,7 @@ THEMES = {
 # -- reading the tables -----------------------------------------------------------------------
 
 
+@functools.cache
 def read_tables(path: Path) -> dict[str, list[list[str]]]:
     """The first Markdown table under each heading: a header row, then the data rows.
 
@@ -215,10 +217,11 @@ def tabarena_lite(mode: str) -> str:
         data.append(
             {"name": r[0], "place": int(r[1]), "elo": elo, "lo": elo - down, "hi": elo + up}
         )
-    focal = next(d for d in data if d["name"] == "TabSil")
+    focal = next((d for d in data if d["name"] == "TabSil"), None)
+    if focal is None:
+        raise SystemExit("README.md: the TabArena-Lite table has no row named TabSil")
 
-    svg_probe = Svg(1, 1, mode, "", "")
-    c = svg_probe.c
+    c = THEMES[mode]
     width, pitch, top = 840, 26, 92
     x0, x1 = 300, 796
     lo_v, hi_v = 900, 2300
@@ -226,8 +229,7 @@ def tabarena_lite(mode: str) -> str:
     axis_y = top + (n - 1) * pitch + pitch / 2 + 8
     height = int(axis_y + 58)
 
-    def x_of(v: float) -> float:
-        return x0 + (v - lo_v) / (hi_v - lo_v) * (x1 - x0)
+    x_of = lin_scale(lo_v, hi_v, x0, x1)
 
     title = "TabArena-Lite Elo"
     desc = (
@@ -278,11 +280,9 @@ def tabarena_lite(mode: str) -> str:
         svg.dot(x_of(d["elo"]), cy, 6 if is_focal else 4.5, color)
 
     # selective value labels: the story (TabSil), the top and the anchor
-    for d, label, weight in (
-        (focal, f"{focal['elo']:.0f} · {ordinal(focal['place'])} of {pool}", 700),
-        (data[0], f"{data[0]['elo']:.0f}", 400),
-        (data[-1], f"{data[-1]['elo']:.0f}", 400),
-    ):
+    labelled = [(focal, f"{focal['elo']:.0f} · {ordinal(focal['place'])} of {pool}", 700)]
+    labelled += [(d, f"{d['elo']:.0f}", 400) for d in (data[0], data[-1]) if d is not focal]
+    for d, label, weight in labelled:
         cy = top + data.index(d) * pitch
         svg.text(x_of(d["hi"]) + 10, cy + 4, label, 12, c["ink"], weight, tabular=True)
 
@@ -306,13 +306,37 @@ SHORT_NAMES = {
 }
 
 
-def lin_scale(v0: float, v1: float, p0: float, p1: float):
-    return lambda v: p0 + (v - v0) / (v1 - v0) * (p1 - p0)
+class Scale:
+    """Data value -> pixel, on a linear or log axis; values outside ``v0``-``v1`` raise."""
+
+    def __init__(self, v0: float, v1: float, p0: float, p1: float, log: bool = False):
+        self.v0, self.v1, self.p0, self.p1, self.log = v0, v1, p0, p1, log
+
+    def __call__(self, v: float) -> float:
+        if not self.v0 <= v <= self.v1:
+            raise SystemExit(
+                f"value {v} is outside the axis {self.v0}-{self.v1}; widen it in make_charts.py"
+            )
+        f = math.log if self.log else (lambda u: u)
+        return self.p0 + (f(v) - f(self.v0)) / (f(self.v1) - f(self.v0)) * (self.p1 - self.p0)
 
 
-def log_scale(v0: float, v1: float, p0: float, p1: float):
-    a, b = math.log(v0), math.log(v1)
-    return lambda v: p0 + (math.log(v) - a) / (b - a) * (p1 - p0)
+def lin_scale(v0: float, v1: float, p0: float, p1: float) -> Scale:
+    return Scale(v0, v1, p0, p1)
+
+
+def log_scale(v0: float, v1: float, p0: float, p1: float) -> Scale:
+    return Scale(v0, v1, p0, p1, log=True)
+
+
+WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+
+
+def require(found: str, what: str) -> str:
+    """A TabSil row the chart describes must exist; a renamed row fails here, not silently."""
+    if not found:
+        raise SystemExit(f"no TabSil row found for {what}; update make_charts.py")
+    return found
 
 
 def dotplot(svg: Svg, x: float, y: float, labels: list[str], plots: list[dict], pitch: int = 21):
@@ -439,11 +463,18 @@ def other_tasks(mode: str) -> str:
             d_rows[-1]["tag"] = f"{r[1]} → {r[3]}"
             d_desc = f"NRMSE {r[1]} at 10% to {r[3]} at 50% masked"
 
+    a_desc = require(a_desc, name_a)
+    b_desc = require(b_desc, name_b)
+    c_desc = require(c_desc, name_c)
+    d_desc = require(d_desc, name_d)
+
     width, pad, col_w, gap = 840, 24, 372, 48
     x_left, x_right = pad, pad + col_w + gap
     pitch, head = 21, 46
-    row1_y, row2_y = 22, 22 + head + 10 * pitch + 34 + 30
-    height = row2_y + head + 7 * pitch + 34 + 44
+    top_rows = max(len(a_labels) * pitch, len(c_labels) * pitch + 14)
+    bottom_rows = max(len(d_labels) * pitch, len(b_labels) * pitch + 16)
+    row1_y, row2_y = 22, 22 + head + top_rows + 34 + 30
+    height = row2_y + head + bottom_rows + 34 + 44
 
     title = "TabSil on other tasks, zero-shot"
     desc = (
@@ -520,10 +551,15 @@ def other_tasks(mode: str) -> str:
             }
         ],
     )
+    n_shown = len(b_labels) - 1
     note = f"TabSil places {ordinal(int(place[1]))} of {place[2]} methods by Elo."
     svg.text(x_left, axis_b + 40, note, 11, c["muted"])
     svg.text(
-        x_left, axis_b + 56, "Shown: the three highest-Elo methods and TabSil.", 11, c["muted"]
+        x_left,
+        axis_b + 56,
+        f"Shown: the {WORDS.get(n_shown, n_shown)} highest-Elo methods and TabSil.",
+        11,
+        c["muted"],
     )
 
     # D: imputation

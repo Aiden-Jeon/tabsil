@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/logo/tabsil-logo-dark.svg">
-    <img alt="TabSil" src="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/logo/tabsil-logo.svg" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/tabsil-logo-dark.svg">
+    <img alt="TabSil" src="assets/logo/tabsil-logo.svg" width="320">
   </picture>
 </p>
 
@@ -24,8 +24,8 @@ This repository has everything needed to reproduce TabSil. It holds two packages
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/charts/tabarena-lite-dark.svg">
-    <img alt="Dot plot of TabArena-Lite Elo with 95% confidence intervals for TabSil and the compared methods; the table below it has the numbers." src="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/charts/tabarena-lite-light.svg" width="840">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/charts/tabarena-lite-dark.svg">
+    <img alt="Dot plot of TabArena-Lite Elo with 95% confidence intervals for TabSil and the compared methods; the table below it has the numbers." src="assets/charts/tabarena-lite-light.svg" width="840">
   </picture>
 </p>
 
@@ -60,8 +60,8 @@ The same weights also run four more tasks zero-shot (tabsil ≥ 0.1.2); TabSil i
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/charts/other-tasks-dark.svg">
-    <img alt="Four small charts comparing TabSil with the baselines of each benchmark: forecasting (fev-bench), outlier detection (ADBench), treatment effects (IHDP, ACIC 2016) and imputation (OpenML, MCAR). The tables in docs/task-results.md have the numbers." src="https://raw.githubusercontent.com/Aiden-Jeon/tabsil/main/assets/charts/other-tasks-light.svg" width="840">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/charts/other-tasks-dark.svg">
+    <img alt="Four small charts comparing TabSil with the baselines of each benchmark: forecasting (fev-bench), outlier detection (ADBench), treatment effects (IHDP, ACIC 2016) and imputation (OpenML, MCAR). The tables in docs/task-results.md have the numbers." src="assets/charts/other-tasks-light.svg" width="840">
   </picture>
 </p>
 

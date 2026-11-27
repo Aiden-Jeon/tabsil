@@ -53,7 +53,7 @@ The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps
 
 ```bash
 # local check (CPU, about a minute)
-uv run --package tabsil-train python training/scripts/train.py --config-name smoke
+PYTHONHASHSEED=0 uv run --package tabsil-train python training/scripts/train.py --config-name smoke
 
 # full training: Databricks AI Runtime job specs in training/scripts/train.yaml
 uv run --package tabsil-train python training/scripts/train.py --config-name stage1
