@@ -19,6 +19,8 @@
 #                --override env_variables.TABSIL_GC_FREEZE=0 turns that off.
 #                --override env_variables.TABSIL_EFF_GC=freeze:100 (or off) turns it off as well and
 #                freezes once after 100 steps (or disables the collector)
+#                --override env_variables.TABSIL_EFF_PREFORK_FREEZE=1 also freezes right before the
+#                prior workers are forked (not something the loop does: what it would give)
 experiment_name: tabsil
 mlflow_run_name: tabsil-v2-eff-s1-m-mb4-probe
 environment:

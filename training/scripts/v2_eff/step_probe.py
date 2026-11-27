@@ -7,7 +7,11 @@ training code. It runs `training/scripts/train.py` in this process after wrappin
 - Python's garbage collector (`gc.callbacks`): the pause of every collection, per generation,
 - the training loop's own full collection and `gc.freeze()` at its log steps
   (`TrainConfig.gc_freeze`, on by default): their time, apart from the collector's pauses, and
-  the number of frozen objects after each freeze.
+  the number of frozen objects after each freeze,
+- the prior workers of every GPU: the passes of each worker's collector and, on Linux, the memory
+  that is the worker's own. A worker is forked from its GPU's process and inherits all of its
+  objects, and its collector walks those in every full pass unless they were frozen before the
+  fork.
 
 The wrapped calls sit where the loop already waits for the GPU (the gradient all-reduce before
 them, the loss read after them), so the timing does not move work. The training computation is
@@ -22,6 +26,9 @@ Options (environment variables):
   optimizer steps, so that the two halves of the run compare the loop without a freeze and with
   one (the first measurement of the collector's pauses). `off` disables the collector for the
   run.
+- `TABSIL_EFF_PREFORK_FREEZE=1`: the GPU's process collects and freezes right before each prior
+  DataLoader forks its workers, so that the workers inherit a frozen heap. The training loop does
+  not do this; the option measures what it would give.
 
     torchrun --standalone --nproc_per_node=8 training/scripts/v2_eff/step_probe.py
 
@@ -32,6 +39,7 @@ from __future__ import annotations
 
 import gc
 import json
+import multiprocessing
 import os
 import runpy
 import sys
@@ -39,7 +47,7 @@ import time
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, get_worker_info
 
 from tabsil_train.training import loop, muon
 
@@ -50,6 +58,8 @@ TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "train.py"
 # falls into the record of the step after its log step. Records made before the loop froze have no
 # `freeze_ms`, and their `gc_ms` holds the probe's one collection
 FIELDS = ("wall_s", "opt_ms", "clip_ms", "norms_ms", "wait_ms", "gc_ms", "freeze_ms")
+# the folder where the prior workers of this process write their records (`_worker_init`)
+WORKER_DIR = "TABSIL_EFF_WORKER_DIR"
 
 
 class Probe:
@@ -69,6 +79,10 @@ class Probe:
         # (optimizer steps done, frozen objects, seconds of the collection and the freeze). Frozen
         # objects that only grow would be a leak
         self.freezes: list[tuple[int, int, float]] = []
+        # Every time a prior DataLoader forks its workers: (optimizer steps done, objects the
+        # collector tracks and walks, frozen objects). The workers inherit both
+        self.forks: list[tuple[int, int, int]] = []
+        self.prefork_freeze = False  # `TABSIL_EFF_PREFORK_FREEZE`
         self.called_collection = False  # inside a full collection called by the code
         self.collection_seconds = 0.0  # the one before the next freeze
         self.counting_seconds = 0.0  # spent counting frozen objects: taken off this probe's clock
@@ -210,8 +224,142 @@ class _TimedIterator:
         return batch
 
 
+def _own_memory(source: str = "/proc/self/smaps_rollup") -> dict | None:
+    """The memory of this process in megabytes (Linux, `/proc/self/smaps_rollup`). `rss` holds
+    the pages it still shares with the process it was forked from. `private` is its own: what it
+    allocated, and the inherited pages it wrote to, such as those of the objects its collector
+    walked."""
+    try:
+        lines = Path(source).read_text().splitlines()
+    except OSError:
+        return None
+    kb = {}
+    for line in lines:
+        name, _, rest = line.partition(":")
+        parts = rest.split()
+        if len(parts) == 2 and parts[1] == "kB":
+            kb[name] = int(parts[0])
+    private = kb.get("Private_Dirty", 0) + kb.get("Private_Clean", 0)
+    megabytes = {"rss": kb.get("Rss", 0), "pss": kb.get("Pss", 0), "private": private}
+    return {name: round(value / 1024, 1) for name, value in megabytes.items()}
+
+
+class _WorkerProbe:
+    """The collector of one prior worker (`_worker_init`): its passes per generation, its CPU
+    time and its memory. The record is rewritten after every full pass and, after another
+    collection, at most every 15 s; the memory is read at most that often too."""
+
+    def __init__(self, path: Path, header: dict) -> None:
+        self.path = path
+        self.header = header
+        self.start = time.perf_counter()
+        self.stats = {g: [0, 0.0, 0.0] for g in range(3)}
+        self.gc_start = 0.0
+        self.written = 0.0
+        self.memory_read = self.start
+        self.memory_start = self.memory = _own_memory()
+        self.write()
+
+    def on_gc(self, phase: str, info: dict) -> None:
+        if phase == "start":
+            self.gc_start = time.perf_counter()
+            return
+        now = time.perf_counter()
+        seconds = now - self.gc_start
+        stats = self.stats[info["generation"]]
+        stats[0] += 1
+        stats[1] += seconds
+        stats[2] = max(stats[2], seconds)
+        if info["generation"] == 2 or now - self.written > 15:
+            self.write()
+
+    def write(self) -> None:
+        self.written = time.perf_counter()
+        if self.written - self.memory_read > 15:
+            self.memory_read, self.memory = self.written, _own_memory()
+        record = {
+            **self.header,
+            "seconds": round(self.written - self.start, 1),
+            "cpu_seconds": round(time.process_time(), 2),
+            "gc": {
+                str(generation): {
+                    "collections": n,
+                    "seconds": round(total, 4),
+                    "longest": round(top, 4),
+                }
+                for generation, (n, total, top) in self.stats.items()
+            },
+            "memory_start_mb": self.memory_start,
+            "memory_mb": self.memory,
+        }
+        scratch = self.path.with_suffix(".tmp")
+        try:
+            scratch.write_text(json.dumps(record))
+            scratch.replace(self.path)
+        except OSError:  # the folder is gone (the run is ending): keep the last record
+            pass
+
+
+def _worker_init(worker_id: int) -> None:
+    """The `worker_init_fn` of the prior DataLoaders: in place of the callback this worker
+    inherited from its GPU's process, record the worker's own collector (`_WorkerProbe`)."""
+    gc.callbacks[:] = [c for c in gc.callbacks if getattr(c, "__self__", None) is not PROBE]
+    folder = os.environ.get(WORKER_DIR)
+    if not folder:
+        return
+    try:
+        rank = int(os.environ.get("RANK", "0"))
+        task = getattr(get_worker_info().dataset, "task", None)
+        header = {
+            "rank": rank,
+            "task": task,
+            "worker": worker_id,
+            "pid": os.getpid(),
+            # what it inherited: the frozen objects, and the collector's counts per generation.
+            # Counting the objects it tracks would write to every one of them
+            "frozen_at_start": gc.get_freeze_count(),
+            "gc_count_at_start": gc.get_count(),
+        }
+        name = f"eff_probe_worker_rank{rank}_{task}_{worker_id}_{os.getpid()}.json"
+        gc.callbacks.append(_WorkerProbe(Path(folder) / name, header).on_gc)
+    except Exception as error:  # the record is an extra: a worker must not stop for it
+        print(f"EFF_PROBE no worker record: {type(error).__name__}: {error}", flush=True)
+
+
+def _worker_records(folder: Path, rank: int) -> list[dict]:
+    """The records of this GPU's prior workers, as each one last wrote it."""
+    out = []
+    for path in sorted(folder.glob(f"eff_probe_worker_rank{rank}_*.json")):
+        try:
+            out.append(json.loads(path.read_text()))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 class _TimedLoader(DataLoader):
+    """The training loop's prior DataLoader with its data wait timed and its workers recorded
+    (`_worker_init`). With `TABSIL_EFF_PREFORK_FREEZE=1` the process collects and freezes right
+    before the workers are forked."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        # Only forked workers inherit the process's objects (and take a function that is not
+        # importable by name: `train.py` runs as `__main__` here)
+        self.forked_workers = bool(kwargs.get("num_workers")) and (
+            multiprocessing.get_start_method() == "fork"
+        )
+        if self.forked_workers:
+            kwargs.setdefault("worker_init_fn", _worker_init)
+        super().__init__(*args, **kwargs)
+
     def __iter__(self):
+        if self.forked_workers:
+            if PROBE.prefork_freeze:
+                gc.collect()
+                gc.freeze()
+            start = time.perf_counter()
+            PROBE.forks.append((len(PROBE.steps), len(gc.get_objects()), gc.get_freeze_count()))
+            PROBE.counting_seconds += time.perf_counter() - start
         return _TimedIterator(super().__iter__())
 
 
@@ -259,6 +407,9 @@ def _write(path: Path, rank: int, mode: str) -> None:
         },
         "gc_events": PROBE.gc_events,
         "freezes": PROBE.freezes,
+        "prefork_freeze": PROBE.prefork_freeze,
+        "forks": PROBE.forks,
+        "workers": _worker_records(path.parent, rank),
         # At exit: the objects the collector tracks and walks, and the frozen ones it skips.
         # `train` unfreezes what the loop froze, so a run with the loop's freeze has 0 frozen
         # here and its frozen counts in `freezes`. The two add up to all tracked objects
@@ -302,11 +453,14 @@ def main() -> None:
 
     rank = int(os.environ.get("RANK", "0"))
     out_dir = Path(os.environ.get("TABSIL_OUT_DIR", "tabsil_run"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    os.environ[WORKER_DIR] = str(out_dir.resolve())
+    prefork = os.environ.get("TABSIL_EFF_PREFORK_FREEZE", "").strip().lower()
+    PROBE.prefork_freeze = prefork in ("1", "true", "yes", "on")
     run_id = os.environ.get("MLFLOW_RUN_ID")
     try:
         runpy.run_path(str(TRAIN_SCRIPT), run_name="__main__")
     finally:
-        out_dir.mkdir(parents=True, exist_ok=True)
         _write(out_dir / f"eff_probe_rank{rank}.json", rank, mode)
     if rank == 0:
         _log_to_mlflow(out_dir, int(os.environ.get("WORLD_SIZE", "1")), run_id)

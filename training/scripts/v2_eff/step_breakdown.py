@@ -229,6 +229,30 @@ def main() -> None:
                 f" {min(last):,}-{max(last):,} after the last; the first collection and freeze"
                 f" took {took[:, 0].max():.3f} s{later} (the slowest GPU)"
             )
+        # the prior workers' own collectors (records of forked workers only)
+        workers = [worker for p in probes for worker in p.get("workers", [])]
+        if workers:
+            full = [worker["gc"]["2"] for worker in workers]
+            passes = sum(g["collections"] for g in full)
+            in_full = sum(g["seconds"] for g in full)
+            in_all = sum(g["seconds"] for worker in workers for g in worker["gc"].values())
+            cpu = max(sum(worker["cpu_seconds"] for worker in workers), 1e-9)
+            line = (
+                f"prior workers: {len(workers)} over {len(probes)} GPUs; full passes of their"
+                f" collectors {passes / len(workers):.1f} per worker, {in_full / cpu:.2%} of their"
+                f" CPU time (every collection {in_all / cpu:.2%}), longest"
+                f" {max(g['longest'] for g in full):.3f} s"
+            )
+            own = [worker["memory_mb"]["private"] for worker in workers if worker.get("memory_mb")]
+            if own:
+                line += f"; memory of its own {np.mean(own):,.0f} MB per worker"
+            forks = probes[0].get("forks") or []
+            if forks:
+                line += (
+                    f"; at their fork the GPU's process tracked {forks[0][1]:,} objects and had"
+                    f" {forks[0][2]:,} frozen"
+                )
+            print(line)
 
 
 if __name__ == "__main__":
