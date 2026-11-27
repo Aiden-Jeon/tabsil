@@ -41,7 +41,9 @@ Synthetic tables come from the TabICLv2 graph SCM prior (`tabicl` package) with 
 | 2 | 400–10,240 (80%) | 20K | 1e-4 | stage 1 weights |
 | 3 | 400–60,000 (80%) | 5K | 2e-5 | stage 2 weights |
 
-The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps (`--steps`; warmup and cosine follow the stage length): a separate 250K stage-1 run, measured up to 225K, did no better than 150K on TabArena-Lite (measured with `training/scripts/eval.py`, without bagging). Their intermediate stages are branches of the Hub repo (`stage1-150k`, `stage2-10k`); see the [model card](https://huggingface.co/aiden-jeon/tabsil).
+The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps (`--steps`; warmup and cosine follow the stage length): a separate 250K stage-1 run, measured up to 225K, did no better than 150K on TabArena-Lite (measured with `training/scripts/eval.py`, without bagging). Their intermediate stages are branches of the Hub repo (`stage1-150k`, `stage2-10k`).
+
+How v1 was trained (the stage table it used with grad clip, what differs from the TabICLv2 scripts, compute, validation loss, weight hashes and the scores of each stage) is in the model card's [Training](https://huggingface.co/aiden-jeon/tabsil#training) and [Intermediate checkpoints](https://huggingface.co/aiden-jeon/tabsil#intermediate-checkpoints) sections (source: [`hub/tabsil/README.md`](hub/tabsil/README.md)).
 
 ```bash
 # local check (CPU, about a minute)
