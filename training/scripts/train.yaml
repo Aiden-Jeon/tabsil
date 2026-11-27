@@ -28,6 +28,9 @@
 #   Muon:         --override env_variables.TABSIL_MUON_DISTRIBUTED=all (Newton-Schulz split over the GPUs,
 #                 same results and checkpoint format; `node` splits within a node, `off` turns it off)
 #   diagnostics:  --override env_variables.TABSIL_GRAD_COSINE=1, --override env_variables.TABSIL_RANK_TIMING=1
+#   collector:    on by default: every GPU's process freezes its live objects at each log step, so that
+#                 Python's garbage collector stops pausing one GPU while the others wait (same results).
+#                 --override env_variables.TABSIL_GC_FREEZE=0 turns it off
 #   v2 recipe options (training/README.md "v2 recipe options"; all off by default, a resumed run keeps
 #   its own values):
 #     reference validation set: --override env_variables.TABSIL_REFERENCE_VAL_TABLES=512 (tables per task,
