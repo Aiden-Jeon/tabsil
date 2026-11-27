@@ -158,3 +158,60 @@ Paired comparisons (G (95% CI), p, better / worse). "Pooled" puts the 51 + 48 = 
 **Phase 1B.** The readout, the controls and the FP16 question are settled, so phase 1B can start as designed except for its cost. On XS it costs 1.8 times the plan's estimate, and at M size only 1.24 times the XS cost. The size of the 1B model (XS or M) is a decision to make before the runs. One XS timing run at micro batch 8 (about 1.5 H100-h) would make the XS number firmer.
 
 **Phase 1A.** The development suite does not confirm #14's prior gain. N10 and R10 should be judged on the pooled report, not on TabArena alone.
+
+## Phase 1B
+
+Stage-1 recipe arms trained from scratch (plan §4, "Phase 1B"), run on 2026-11-27 and 28. Every training run uses the code of dev-v2 `67c0c94` (PR #32) and is named `tabsil-v2-1b-<arm>-s<seed>`. The readout is the capped evaluation of plan §3 on TabArena with 3 splits and on the development suite, with the reference validation loss next to it.
+
+### What differs from the plan
+
+| | Plan | Run |
+|---|---|---|
+| Model size | XS (`--emsize 128`, 56M) | v1's size (221.5M) |
+| GPUs per run | 32 H100 | 8 H100 (one `GPU_8xH100` node) |
+| One run | 56 H100-h | 15.0 hours and 120 H100-h for C (1.80 s per step) |
+| Arms | C, YCTX, OPTK, PS1 | C, YCTX, OPTK. PS1 was stopped |
+
+- **Size.** Phase 0.3 measured XS at 0.81 times M's cost per step, not the 0.29 of the FLOPs estimate. At v1's size the arms cost 1.24 times as much as on XS, and the plan's first risk (§7, "the small model may not stand for the large one") does not apply.
+- **GPUs.** 8 H100 with batch 256 and micro batch 4 is the configuration timed in 0.3. It takes fewer H100-h per step than v1's record on 32 H100.
+- **PS1 was stopped on 2026-11-27 08:08 UTC, a decision of the user to save about 200 H100-h.** The plan expected PS1 to be neutral at 30K steps and ran it to catch harm, with v1's stage-1 prior as the fallback, and it is the slowest arm. Nothing is concluded about it. What is left of its runs:
+
+  | Run | MLflow run | Stopped at | Checkpoint | Reference loss at step 10,000 (classification / regression) |
+  |---|---|---|---|---|
+  | `tabsil-v2-1b-ps1-s0` | `8d64487b2d2a42b5805fe640f62d7e82` | step 10,500 | `checkpoints/latest.pt`, step 10,000 | 0.3086 / 0.0674 (C seed 0: 0.3061 / 0.0669) |
+  | `tabsil-v2-1b-ps1-s1` | `343f0ceae9b74c7181f26124aa915eaf` | step 5,000 | none (stopped before the first checkpoint was uploaded) | — |
+
+  A resumed run keeps its seed, steps, prior and options (`TABSIL_RESUME_RUN_ID=8d64487b…`), so seed 0 can be continued from step 10,000 with `TABSIL_PREFETCH_FACTOR=16`.
+
+### The training code: review and GPU smoke (PR #32)
+
+The review checked the code against the plan and against Kumo-Tabular's source (`NVIDIA/structured-data-models`, `train/kumo/tabular/optim.py`, `loader.py`, `prior.py` and the stage-1 commands).
+
+- **The control is v1's recipe.** `tests/data/default_behavior.json` (batches of three priors, the regression borders, the validation batches, and the losses and weights of a 6-step run) was regenerated from an export of 01973a5 and is identical to the committed file. Every new option is off by default.
+- **YCTX** standardizes the regression target again with the train rows (mean, sd with ddof 0) after the prior's clip and draws a table again if that sd is at most 0.1, as Kumo's loader does. The regression borders are drawn with it. One difference: Kumo redraws the single table, and TabSil the group of tables that holds it.
+- **OPTK** puts every `nn.Linear` weight on Muon except those of the target encoders, the output and the attention scales, which go to AdamW with the other parameters (weight decay 0.01 on matrices and scales, 0 on the other 1-d parameters), one lr of 3e-4 for both, Muon momentum 0.95. Kumo's `head` is `Linear(d, 2d)`, GELU, `Linear(2d, out)`, so TabSil's `pre_head` and `heads` are its counterpart. Warmup stays at 1% (Kumo: 2%), so that only the optimizer differs from C.
+- **The reference validation set** is drawn from `graph_scm` with v1's prior settings and fixed seeds, whatever the run's seed and prior. Every run of this phase has the `reference_val_digest` `e7bf78955d9037ab` and `tabicl_version` 2.2.0.
+- **Fixed in the review:** a regression loss that gives every run its targets as inference does (`ref_loss_regression_train_rows`; `ref_loss_regression` gives C targets standardized over all rows, which YCTX never sees), a resumed run keeps its seed and step count, the values a prior module fixes are logged (`prior_options`), `tabicl` is pinned, and the attention temperatures are logged per stage and for the first row ICL layer (`head_scale_*`).
+
+GPU smoke, 300 steps each on one 8xH100 node with the settings of the runs (seconds per step at steps 200 and 300):
+
+| Run | MLflow run | s / step | Note |
+|---|---|---|---|
+| `tabsil-p0-timing-m` (phase 0.3) | `e9d825c1…` | 1.808, 1.820 | |
+| `tabsil-v2-1b-smoke-c` | `31e176052e574bf18f7cb76c45a2e7c4` | 1.798, 1.800 | as the timing run |
+| `tabsil-v2-1b-smoke-yctx` | `f649beb44ece430aac26cd2b6776d902` | 1.782, 1.781 | |
+| `tabsil-v2-1b-smoke-optk` | `b6d2ed58d0df47109292c3b22f0edbc8` | 1.732, 1.741 | DDP and distributed Muon over NCCL |
+| `tabsil-v2-1b-smoke-ps1` | `acd7b4f3b4574ecfae1cf36f3b9e8be1` | 2.021, 2.463 | prefetch 4 |
+| `tabsil-v2-1b-diag-ps1-w22` | `5a99ca4fde36419a99199f96f8fad470` | 2.066, 1.991 | 22 prior workers per GPU instead of 16 |
+| `tabsil-v2-1b-diag-ps1-prefetch16` | `7bf2d2a4ba7f459da158c924d27209f0` | 1.949, 1.982 | prefetch 16 |
+| `tabsil-v2-1b-diag-ps1-prefetch32` | `8871f85444224500950b9b5e1b184a9d` | 1.972, 1.976 | prefetch 32 |
+| `tabsil-v2-1b-diag-c-prefetch16` | `db3de71932aa495e9482cc4b6b7633b9` | 1.793, 1.789 | C is unchanged by the prefetch |
+
+**PS1 was slow for the reason R10 was** (Phase 1A, "Why R10 was slow"), here at stage-1 table sizes on 8 GPUs. With `TABSIL_RANK_TIMING=1` (`tabsil-v2-1b-diag-ps1-timing`, `d165f429ac454eb597f90c14517bdb06`, against `tabsil-v2-1b-diag-c-timing`, `be7970c655dd42baa694123a691b66ac`):
+
+- In 6 of 200 steps one GPU arrived 3 to 30 s late with normal forward and backward times, and the other seven waited for it in the all-reduce. C had no such step. Rank 0's `data_wait_frac` stayed under 1%.
+- The loader hands micro batches over in request order, 32 micro batches ahead, which is about 14 s here. PS1's prior (`corrected_cat_sizes`, `corrected_num_converters`) has micro batches that take longer.
+- More workers did not help. `TABSIL_PREFETCH_FACTOR=16` (a head start of about 58 s, the same tables in the same order) removed the late steps: the correlation across GPUs of backward and forward time is −0.999, as for C.
+- PS1 stayed 9% slower than C (1.97 against 1.80 s per step): forward and backward take 12% and 6% longer at the same table sizes. This was not traced further. The node's CPU use is 48% with PS1 and 36% with C.
+
+The smoke and diagnostic runs cost about 13 H100-h (ten 300-step runs).
