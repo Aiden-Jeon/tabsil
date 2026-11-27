@@ -18,7 +18,8 @@ Every fold row (`eval_rows.csv`) also has TabArena's error (`metric_error`: 1 - 
 log loss for multiclass, RMSE for regression) and `problem_type`, which the paired report
 (`training/scripts/paired_report.py`) compares between two runs. `--suite dev` is the development
 suite of the v2 experiment plan: the 57 tasks without the 9 whose data is also in TabArena's 51
-(`tabsil_train.benchmarks.amlb.TABARENA_OVERLAP`), 23 classification and 25 regression tasks.
+(`tabsil_train.benchmarks.tabular.amlb.TABARENA_OVERLAP`), 23 classification and 25 regression
+tasks.
 
 The ensemble member count and preprocessing come from the model (`tabsil.recipe.default_inference`:
 the Hub config.json `inference` entry first, otherwise 8 `standard` members with at most 768
@@ -30,18 +31,18 @@ each task ran with are logged as the MLflow params `inference_classification` an
 `inference_regression` (JSON).
 
 `--uncertainty` (AMLB) adds predictive distribution and uncertainty metrics per fold
-(`tabsil_train.benchmarks.uncertainty`): for regression CRPS, central interval (50/80/90/95%)
-coverage, width and interval score, the minimum coverage over width quintiles and the PIT KS
-statistic; for classification ECE, log loss, Brier and split conformal (LAC, APS, alpha = 0.1)
-coverage, set size, SSCS and class-conditional coverage gap. The per-dataset table is
+(`tabsil_train.benchmarks.tabular.uncertainty`): for regression CRPS, central interval
+(50/80/90/95%) coverage, width and interval score, the minimum coverage over width quintiles and the
+PIT KS statistic; for classification ECE, log loss, Brier and split conformal (LAC, APS,
+alpha = 0.1) coverage, set size, SSCS and class-conditional coverage gap. The per-dataset table is
 `eval_uncertainty_per_dataset.csv` and the suite means are `<suite>_mean_<metric>` (regression CRPS,
 widths and interval scores are averaged only as `_scaled`, divided by the training target standard
 deviation).
 
 `--suite tabarena-lite`, `tabarena-3split`, `beyondarena` and `beyondarena-lite` are TabArena-Lite,
 the same 51 datasets with their first 3 splits (153 splits; every baseline is scored on the same
-splits) and BeyondArena (`tabsil_train.benchmarks.arena`, needs the `arena` extra, which needs
-pandas 2.3 and is installed apart from the dev group:
+splits) and BeyondArena (`tabsil_train.benchmarks.tabular.arena`, needs the `arena` extra, which
+needs pandas 2.3 and is installed apart from the dev group:
 `uv sync --package tabsil-train --no-dev --extra arena --group arena-dev`, with the same options
 for `uv run`). The official splits run and Elo, normalized score,
 improvability and win rates are computed as on the public leaderboard. Splits of a task without a
@@ -59,26 +60,27 @@ the arena feature limit is then the supported size). With a cap, the TabArena / 
 limit is lifted, so splits wider than the supported size run.
 
 `--subsample-train-rows N` uses at most N random training rows per fit as the context
-(`tabsil.inference.subsample`; stratified by class for classification with at least one row per
-class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters splits by
-their original training row count.
+(`tabsil_train.benchmarks.tabular.subsample`; stratified by class for classification with at least
+one row per class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters
+splits by their original training row count.
 
-`--suite fev` is time series forecasting on 10 fev-bench tasks (`tabsil_train.benchmarks.fevbench`,
-needs the `fev` extra, installed apart from the dev group like the arena extra: `uv sync --package
-tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.forecast.TabSilForecaster` with the
-`--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in an Elo
-pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7 methods. Our
-Seasonal Naive is recomputed on the same windows and must match those. `--datasets` picks tasks,
-`--fev-windows N` only the last N windows of each (a quick check; the task-mean Elo pool then
-drops out). A failed series, window or task stops the run (nothing is imputed). Results go to
-`<out-dir>/fev/`.
+`--suite fev` is time series forecasting on 10 fev-bench tasks
+(`tabsil_train.benchmarks.forecast.fevbench`, needs the `fev` extra, installed apart from the dev
+group like the arena extra:
+`uv sync --package tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.TabSilForecaster`
+with the `--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in
+an Elo pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7
+methods. Our Seasonal Naive is recomputed on the same windows and must match those. `--datasets`
+picks tasks, `--fev-windows N` only the last N windows of each (a quick check; the task-mean Elo
+pool then drops out). A failed series, window or task stops the run (nothing is imputed). Results go
+to `<out-dir>/fev/`.
 
   $RUN --no-dev --extra fev --group arena-dev python $EVAL --suite fev \
     --regressor-path hf://aiden-jeon/tabsil@v1 --datasets ecdc_ili --fev-windows 2
 
 `--suite causal` is treatment effect estimation on IHDP (100 realizations) and ACIC 2016 (10
-simulations) (`tabsil_train.benchmarks.causal`, needs the `causal` extra for the EconML baselines:
-`uv sync --package tabsil-train --extra causal`): `tabsil.causal.TabSilCATE` with the S-, T-, X-
+simulations) (`tabsil_train.benchmarks.causal.causal`, needs the `causal` extra for the EconML
+baselines: `uv sync --package tabsil-train --extra causal`): `tabsil.TabSilCATE` with the S-, T-, X-
 and DR-learner on the `--regressor-path` model (it must serve classification too, for the
 propensity), and EconML's causal forest and GBM-based meta-learners on the same splits. √PEHE and
 the ATE error within-sample and out-of-sample. `--datasets` picks the benchmarks (ihdp, acic2016),
@@ -99,7 +101,7 @@ and the baselines' value on the same splits, `time_baselines`) and `comparison.c
 each fold's fit and prediction time to `<out-dir>/fits_<suite>.jsonl` and `eval_rows.csv`.
 
 `--suite adbench` is unsupervised outlier detection on 12 ADBench tables x 3 seeds
-(`tabsil_train.benchmarks.adbench`): `tabsil.unsupervised.TabSilUnsupervised` fitted on the
+(`tabsil_train.benchmarks.unsupervised.adbench`): `tabsil.TabSilUnsupervised` fitted on the
 unlabeled (contaminated) training rows scores the test rows, next to the official TabPFN v2
 extension and pyod's methods from the fm-agent-bench run, with IsolationForest = 1000 Elo. One
 multitask model serves both column kinds (`--regressor-path`, or `--classifier-path`).
@@ -112,11 +114,11 @@ diagnostic (context = training rows labeled normal; kept out of the Elo); `--dat
     --datasets yeast --adbench-splits s1
 
 `--suite impute` is missing value imputation on 10 OpenML tables x MCAR rates 10/30/50% x 3 seeds
-(`tabsil_train.benchmarks.impute`): `TabSilUnsupervised.impute` (zero-shot, the `--regressor-path`
-model serving both column kinds; mean and median from one evaluation) against the official TabPFN
-v2 extension (`impute` and `simple_impute`, needs the `impute` extra: `uv sync --all-packages
---extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on the same rows and
-masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
+(`tabsil_train.benchmarks.unsupervised.impute`): `TabSilUnsupervised.impute` (zero-shot, the
+`--regressor-path` model serving both column kinds; mean and median from one evaluation) against the
+official TabPFN v2 extension (`impute` and `simple_impute`, needs the `impute` extra:
+`uv sync --all-packages --extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on
+the same rows and masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
 `--impute-methods`, `--impute-rates`, `--impute-seeds` and `--datasets` pick the grid. A failed
 (table, rate, seed, method) is reported and the run ends with an error (nothing is filled in).
 With `--shards N` the GPU methods run as (table, rate, method) jobs on N GPUs and the CPU
@@ -125,6 +127,16 @@ its `results.csv`.
 
   $RUN --extra impute python $EVAL --suite impute --regressor-path hf://aiden-jeon/tabsil@v1 \
     --datasets airfoil_self_noise --impute-rates 0.3 --impute-seeds 0
+
+The ADBench, causal and impute suites reuse a `results.csv` row of a TabSil method only when it
+was computed with this run's settings (the row's `opts`: a digest of the weights rather than the
+checkpoint path, the member count, `--seed`, the suite's options and the inference settings saved
+with the weights). Otherwise the run stops: use another `--out-dir`. Rows of the baselines
+(IsolationForest, EconML, mean, KNN, ...) are reused whatever the model.
+
+The fev, ADBench, causal and impute runs are in `tabsil_train.evaluation`, one module per suite
+(`shards` is the `--shards` worker queue of ADBench and impute). The AMLB and TabArena /
+BeyondArena runs are in this file.
 
 On AI Runtime (`training/scripts/eval.yaml`, `training/scripts/eval_arena.yaml`) results are
 logged to the platform's MLflow run (`MLFLOW_RUN_ID`). Locally, `--mlflow` creates a new run in the
@@ -139,7 +151,6 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 import mlflow
@@ -154,11 +165,17 @@ from tabsil.inference.ensemble import (
     max_features_of,
 )
 from tabsil.inference.preprocessing import CATEGORY_ENCODINGS
-from tabsil.inference.subsample import SubsampledEstimator
 from tabsil.recipe import SUPPORTED_SIZE, default_inference, resolve_member_kinds
-from tabsil_train.benchmarks import amlb as bm
-from tabsil_train.benchmarks import uncertainty as unc
-from tabsil_train.hub import load_model
+from tabsil_train.benchmarks.tabular import amlb as bm
+from tabsil_train.benchmarks.tabular import uncertainty as unc
+from tabsil_train.benchmarks.tabular.subsample import SubsampledEstimator
+from tabsil_train.evaluation.adbench import run_adbench
+from tabsil_train.evaluation.causal import run_causal
+from tabsil_train.evaluation.fev import run_fev
+from tabsil_train.evaluation.impute import run_impute
+from tabsil_train.evaluation.shards import clock as _clock
+from tabsil_train.evaluation.shards import strip_flags as _strip_flags
+from tabsil_train.hub import load_model, weights_digest
 from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "tabarena-3split", "beyondarena", "beyondarena-lite")
@@ -365,6 +382,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--max-features-per-member must be >= 0 (0: off).")
     if args.subsample_train_rows is not None and args.subsample_train_rows < 1:
         parser.error("--subsample-train-rows must be >= 1.")
+    if args.fev_windows is not None and args.fev_windows < 1:
+        parser.error("--fev-windows must be >= 1.")
     return args
 
 
@@ -478,23 +497,6 @@ def applied_inference(
     return out
 
 
-def weights_digest(model: torch.nn.Module, borders: torch.Tensor | None = None) -> str:
-    """SHA-1 of a model's weights (every state_dict tensor's name, dtype, shape and bytes, in
-    name order) and of the regression borders: two checkpoints at different paths with the same
-    weights get the same digest, and new weights at an old path a new one."""
-    import hashlib
-
-    digest = hashlib.sha1()
-    tensors = sorted(model.state_dict().items())
-    if borders is not None:
-        tensors.append(("<borders>", torch.as_tensor(borders)))
-    for name, t in tensors:
-        t = t.detach().cpu().contiguous()
-        digest.update(f"{name}|{t.dtype}|{tuple(t.shape)}|".encode())
-        digest.update(t.reshape(-1).view(torch.uint8).numpy().tobytes())
-    return digest.hexdigest()
-
-
 def inference_options(args: argparse.Namespace, suite: str | None = None) -> dict:
     """The inference options given on the command line (`--softmax-temperature`,
     `--categories`) as estimator arguments; options not given are left out (the model's settings
@@ -600,7 +602,7 @@ class RecordedEstimator:
 
 
 def arena_suite(name: str):
-    from tabsil_train.benchmarks import beyondarena, tabarena
+    from tabsil_train.benchmarks.tabular import beyondarena, tabarena
 
     if name == "tabarena-lite":
         return tabarena.SUITE
@@ -616,7 +618,7 @@ def arena_limits(models: dict, args: argparse.Namespace, caps: dict | None = Non
     the output count; column_row_transformer groups label embeddings up to `MAX_CLASSES`). Tasks
     with a columns-per-member cap (`caps`, per task; `--max-features-per-member` if not given)
     have no feature limit."""
-    from tabsil_train.benchmarks.arena import ModelLimits
+    from tabsil_train.benchmarks.tabular.arena import ModelLimits
 
     limits = {}
     for task, (model, _) in models.items():
@@ -702,7 +704,7 @@ def run_arena(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> dict
     """Run TabArena-Lite / BeyondArena and return the scores (the `summary.json` content).
     Estimators come from the same `make_estimator_factory` as the AMLB evaluation (only the
     problem type and categorical columns differ)."""
-    from tabsil_train.benchmarks import arena
+    from tabsil_train.benchmarks.tabular import arena
 
     suite = arena_suite(args.suite)
     paths = {"classification": args.classifier_path, "regression": args.regressor_path}
@@ -760,19 +762,6 @@ def check_failed_splits(summary: dict) -> None:
         )
 
 
-def _strip_flags(argv: list[str], flags: dict[str, int]) -> list[str]:
-    """Remove `flags` (name: value count) from `argv`, including the `--name=value` form."""
-    out, i = [], 0
-    while i < len(argv):
-        name = argv[i].split("=", 1)[0]
-        if name in flags:
-            i += 1 if "=" in argv[i] else 1 + flags[name]
-            continue
-        out.append(argv[i])
-        i += 1
-    return out
-
-
 def shard_worker_command(argv: list[str], worker_dir: Path) -> list[str]:
     """A worker's command arguments: the original ones without the sharding flags and MLflow
     logging, plus its own out-dir and `--shard-worker`. Datasets arrive one at a time on stdin."""
@@ -826,11 +815,6 @@ def shard_jobs(
         if (host_bytes or {}).get(dataset):
             jobs[-1]["host_bytes"] = int(host_bytes[dataset])
     return jobs
-
-
-def _clock(seconds: float) -> str:
-    seconds = int(seconds)
-    return f"{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
 
 
 def _splits_cached(job: dict) -> int:
@@ -1116,6 +1100,19 @@ def host_state_bytes(grid, rows: dict[str, int], estimate) -> dict[str, int]:
     return out
 
 
+def link_checkpoints(worker_dir: Path, checkpoints: Path) -> None:
+    """Point `worker_dir/checkpoints` at the parent's `checkpoints` folder (if there is one), so
+    that a worker reuses what the parent downloaded. A link whose target is gone (the output folder
+    was moved after an earlier run) is replaced."""
+    link = worker_dir / "checkpoints"
+    if not checkpoints.is_dir():
+        return
+    if link.is_symlink() and not link.exists():
+        link.unlink()
+    if not link.exists():
+        link.symlink_to(checkpoints, target_is_directory=True)
+
+
 def run_shards(
     args, suite, limits, datasets, out_dir: Path, cache_id: str = "", host_estimate=None
 ) -> list:
@@ -1132,7 +1129,7 @@ def run_shards(
     import pickle
     import subprocess
 
-    from tabsil_train.benchmarks import arena
+    from tabsil_train.benchmarks.tabular import arena
 
     n_gpus = torch.cuda.device_count()
     if n_gpus and args.shards > n_gpus:
@@ -1175,9 +1172,7 @@ def run_shards(
     def spawn(i: int):
         worker_dir = worker_dirs[i]
         worker_dir.mkdir(parents=True, exist_ok=True)
-        link = worker_dir / "checkpoints"
-        if checkpoints.is_dir() and not link.exists():
-            link.symlink_to(checkpoints, target_is_directory=True)
+        link_checkpoints(worker_dir, checkpoints)
         env = {k: v for k, v in os.environ.items() if k != "MLFLOW_RUN_ID"}
         env.update(CUDA_VISIBLE_DEVICES=devices[i], OMP_NUM_THREADS=str(threads))
         log = open(out_dir / "shards" / f"shard{i}.log", "w")  # noqa: SIM115 (open until the end)
@@ -1345,6 +1340,7 @@ def mlflow_run(use_mlflow: bool):
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     args.argv = list(sys.argv[1:] if argv is None else argv)  # for `--shards` worker commands
+    args.script = __file__  # the script the ADBench / impute `--shards` workers run
     if args.shards < 1:
         raise SystemExit("--shards must be >= 1.")
     if args.shards > 1 and args.suite not in (*ARENA_SUITES, ADBENCH_SUITE, IMPUTE_SUITE):
@@ -1391,555 +1387,6 @@ def main(argv: list[str] | None = None) -> None:
     tasks = selected_tasks(args)  # exit on bad task ids before creating a run
     with mlflow_run(use_mlflow):
         run_amlb(args, out_dir, tasks, use_mlflow)
-
-
-def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
-    """Forecasting on fev-bench (`tabsil_train.benchmarks.fevbench`): every window of each task,
-    our Seasonal Naive check, the comparison table and the Elo pools."""
-    from tabsil.forecast import TabSilForecaster
-    from tabsil_train.benchmarks import fevbench
-
-    if args.regressor_path is None:
-        raise SystemExit("--suite fev needs --regressor-path.")
-    tasks = [t.strip() for t in args.datasets.split(",") if t.strip()] if args.datasets else None
-    model, borders = load_model(args.regressor_path, "regression", out_dir / "checkpoints" / "fev")
-    context = {}
-    if args.max_context_length is not None:
-        context["max_context_length"] = args.max_context_length or None
-    forecaster = TabSilForecaster(
-        model,
-        borders,
-        n_estimators=args.n_estimators,
-        device=args.device,
-        random_state=args.seed,
-        **context,
-    )
-    print(
-        f"fev: tasks {tasks or list(fevbench.TASKS)}, windows {args.fev_windows or 'all'},"
-        f" context {forecaster.max_context_length}, device {args.device}",
-        flush=True,
-    )
-    if use_mlflow:
-        mlflow.log_params(
-            {
-                "suite": args.suite,
-                "regressor_path": args.regressor_path,
-                "seed": args.seed,
-                "n_estimators": args.n_estimators
-                or default_inference(model, "regression")["n_estimators"],
-                "max_context_length": forecaster.max_context_length,
-                "fev_windows": args.fev_windows or "all",
-                "fev_tasks": ",".join(tasks or fevbench.TASKS),
-            }
-        )
-    summary = fevbench.run(
-        forecaster, tasks, args.fev_windows, out_dir / FEV_SUITE, log=lambda s: print(s, flush=True)
-    )
-    table = pd.read_csv(out_dir / FEV_SUITE / "comparison.csv")
-    show = ["TabSil", "Seasonal Naive", "TabPFN-TS (v2)", "TabICL-TS", "Chronos-2"]
-    for metric in ("SQL", "MASE"):
-        wide = table.pivot(index="task", columns="method", values=metric)
-        print(f"\ntask mean {metric}:\n{wide[[m for m in show if m in wide]].round(4)}")
-    elo = pd.read_csv(out_dir / FEV_SUITE / "elo.csv")
-    print(f"\nElo (Seasonal Naive = 1000):\n{elo.round(1).to_string(index=False)}")
-    print(f"TabSil time {summary['tabsil_seconds']:.0f}s, total {summary['seconds']['total']:.0f}s")
-    if use_mlflow:
-        mlflow.log_metrics(
-            {
-                **{f"fev_elo_{k}": v["elo"] for k, v in summary["elo"].items()},
-                **{
-                    f"fev_{m}_{t}": v
-                    for m, by_task in summary["task_mean"].items()
-                    for t, v in by_task.items()
-                },
-                "fev_tabsil_seconds": summary["tabsil_seconds"],
-                "fev_imputed_pct": 100 * summary["imputed"],
-            }
-        )
-        for path in sorted((out_dir / FEV_SUITE).glob("*.csv")):
-            mlflow.log_artifact(str(path), f"eval/{FEV_SUITE}")
-        mlflow.log_artifact(str(out_dir / FEV_SUITE / "summary.json"), f"eval/{FEV_SUITE}")
-
-
-def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
-    """ADBench unsupervised outlier detection (`tabsil_train.benchmarks.adbench`). Ends with an
-    error if any (table, split, method) failed, after the others ran and the report was written."""
-    from tabsil_train.benchmarks import adbench
-
-    datasets = list(adbench.DATASETS) if args.datasets is None else args.datasets.split(",")
-    splits = args.adbench_splits.split(",")
-    methods = adbench.check_methods(args.adbench_methods.split(","))
-    if bad := [d for d in datasets if d not in adbench.DATASETS]:
-        raise SystemExit(f"tables not in ADBench's 12: {bad} (known: {list(adbench.DATASETS)})")
-    if bad := [s for s in splits if s not in adbench.SPLITS]:
-        raise SystemExit(f"splits are {list(adbench.SPLITS)}: {bad}")
-    scorers: dict = {"iforest": adbench.iforest_scores}
-    opts = {"iforest": "sklearn IsolationForest = pyod IForest defaults"}
-    params = {
-        "suite": args.suite,
-        "datasets": ",".join(datasets),
-        "splits": ",".join(splits),
-        "methods": ",".join(methods),
-    }
-    if any(adbench.base(m) == adbench.OURS for m in methods):
-        path = args.regressor_path or args.classifier_path
-        if not path:
-            raise SystemExit("adbench needs --regressor-path (a model serving both tasks).")
-        model, borders = load_model(path, "regression", out_dir / "checkpoints" / "regression")
-        if "classification" not in model.tasks:
-            raise SystemExit(f"{path} does not serve classification (categorical columns).")
-        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
-        scorers[adbench.OURS] = adbench.tabsil_scorer(
-            model, borders, args.n_permutations, n_estimators, args.device, 100 * args.seed
-        )
-        opts[adbench.OURS] = f"n_permutations={args.n_permutations} n_estimators={n_estimators}"
-        params |= {"model": path, "n_permutations": args.n_permutations,
-                   "n_estimators": n_estimators, "seed": args.seed}  # fmt: skip
-    print(f"adbench: {len(datasets)} tables x {splits} x {methods}, {args.device}", flush=True)
-    if use_mlflow:
-        mlflow.log_params(params)
-    suite_dir = out_dir / ADBENCH_SUITE
-    t0 = time.time()
-    if args.shards > 1:
-        # IsolationForest (seconds) here, TabSil's (table, split, method) jobs on the GPUs
-        cpu = [m for m in methods if adbench.base(m) != adbench.OURS]
-        _, failures = adbench.run(scorers, datasets, splits, cpu, suite_dir, opts)
-        gpu = [m for m in methods if adbench.base(m) == adbench.OURS]
-        failures += run_adbench_shards(args, datasets, splits, gpu, suite_dir, out_dir)
-        rows = adbench.read_results(suite_dir / "results.csv")
-    else:
-        rows, failures = adbench.run(scorers, datasets, splits, methods, suite_dir, opts)
-    summary = adbench.report(rows, suite_dir, [m for m in methods if m == adbench.OURS])
-    summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
-    (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
-    print(json.dumps(summary, indent=1, default=str), flush=True)
-    for name in ("summary.csv", "elo.csv"):
-        if (suite_dir / name).exists():
-            print(f"\n{name}\n{pd.read_csv(suite_dir / name).round(4).to_string(index=False)}")
-    if use_mlflow:
-        metrics = {f"adbench_{k}": v for k, v in summary.items() if isinstance(v, int | float)}
-        metrics |= {f"adbench_elo_{k}": v for k, v in summary.get("elo", {}).items()}
-        mlflow.log_metrics({re.sub(r"[^\w\-. /]", "_", k): float(v) for k, v in metrics.items()})
-        mlflow.log_artifacts(str(suite_dir), ADBENCH_SUITE)
-    if failures:
-        raise SystemExit(f"adbench: {len(failures)} failed (table, split, method): {failures}")
-
-
-def shard_devices(args: argparse.Namespace) -> list[str]:
-    """The GPUs of `--shards N`: the first N of CUDA_VISIBLE_DEVICES (it lists every visible
-    GPU), or 0..N-1. N above the GPU count is an error."""
-    n_gpus = torch.cuda.device_count()
-    if n_gpus and args.shards > n_gpus:
-        raise SystemExit(f"--shards {args.shards} exceeds the GPU count {n_gpus}.")
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    return (visible.split(",") if visible else [str(i) for i in range(args.shards)])[: args.shards]
-
-
-def _run_shard_queue(
-    label: str,
-    jobs: list[tuple],
-    job_command: Callable[[tuple], tuple[str, list[str]]],
-    on_done: Callable[[tuple, int, Path], bool],
-    devices: list[str],
-    base: list[str],
-    env: dict[str, str],
-    log_dir: Path,
-    heartbeat_minutes: float,
-    side: list[tuple[tuple, str, list[str]]] = (),
-    progress: Callable[[Path], str] | None = None,
-) -> None:
-    """Run `jobs` (most expensive first) as worker processes (`eval.py` with `base` and the
-    job's arguments, `job_command(job)` -> (name, argv)), one per free GPU of `devices`
-    (CUDA_VISIBLE_DEVICES = that GPU), and the `side` processes ((job, name, argv), no GPU) at
-    the same time. A worker writes to `log_dir/<name>/` and logs to `log_dir/<name>.log`. When it
-    ends, `on_done(job, returncode, job_dir)` merges its results and returns whether it
-    succeeded. Prints each finished or failed job and a heartbeat every `heartbeat_minutes`
-    (`progress(job_dir)` adds a per-job note)."""
-    import subprocess
-
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    def start(name: str, argv: list[str], visible_devices: str):
-        job_dir = log_dir / name
-        cmd = [sys.executable, __file__, *base, *argv, "--out-dir", str(job_dir)]
-        log = open(log_dir / f"{name}.log", "w")  # noqa: SIM115 (closed when done)
-        proc = subprocess.Popen(
-            cmd, stdout=log, stderr=subprocess.STDOUT,
-            env={**env, "CUDA_VISIBLE_DEVICES": visible_devices},
-        )  # fmt: skip
-        return proc, job_dir, time.time(), log
-
-    def finish(job, proc, job_dir, started, log) -> None:
-        log.close()
-        if on_done(job, proc.returncode, job_dir):
-            print(f"{label} shards: {job} done in {_clock(time.time() - started)}", flush=True)
-        else:
-            print(f"{label} shards: {job} FAILED (exit {proc.returncode})", flush=True)
-
-    def note(job_dir: Path) -> str:
-        return f" ({progress(job_dir)})" if progress else ""
-
-    jobs = list(jobs)
-    running: dict[str, tuple] = {}  # device -> (job, process, job dir, start, log file)
-    side_running = {name: (job, *start(name, argv, "")) for job, name, argv in side}
-    t0 = last = time.time()
-    while jobs or running or side_running:
-        for dev in devices:
-            if dev not in running and jobs:
-                job = jobs.pop(0)
-                name, argv = job_command(job)
-                running[dev] = (job, *start(name, argv, dev))
-        time.sleep(5)
-        for table in (running, side_running):
-            for key, (job, proc, job_dir, started, log) in list(table.items()):
-                if proc.poll() is not None:
-                    del table[key]
-                    finish(job, proc, job_dir, started, log)
-        if time.time() - last >= heartbeat_minutes * 60:
-            last = time.time()
-            busy = ", ".join(
-                f"GPU {dev}: {j[0]} {_clock(last - j[3])}{note(j[2])}" for dev, j in running.items()
-            )
-            others = "".join(
-                f"; {name} {_clock(last - j[3])}{note(j[2])}" for name, j in side_running.items()
-            )
-            print(f"{label} shards [{_clock(last - t0)}] {len(jobs)} queued; {busy}{others}",
-                  flush=True)  # fmt: skip
-
-
-def run_adbench_shards(
-    args: argparse.Namespace,
-    datasets: list[str],
-    splits: list[str],
-    methods: list[str],
-    suite_dir: Path,
-    out_dir: Path,
-) -> list[dict]:
-    """ADBench `--shards`: one job per (table, split, method) not yet in `results.csv`, most
-    expensive first, each a worker process (`eval.py --suite adbench` on one GPU, without MLflow)
-    started as soon as a GPU is free (`_run_shard_queue`). A finished job's rows are appended to
-    `results.csv`; a failed job is returned as a failure (with its log under `shards/`)."""
-    from tabsil_train.benchmarks import adbench
-    from tabsil_train.hub import download_artifact
-
-    done = adbench.read_results(suite_dir / "results.csv")
-    finished = set(zip(done.dataset, done.split, done.method, strict=True))
-    jobs = [
-        (d, s, m) for d in datasets for s in splits for m in methods if (d, s, m) not in finished
-    ]
-    jobs.sort(key=lambda j: -adbench.job_cost(j[0], j[2]))
-    devices = shard_devices(args)
-    path = args.regressor_path or args.classifier_path
-    if path.startswith("runs:/"):  # the parent's download, reused by every worker
-        path = str(download_artifact(path, out_dir / "checkpoints" / "regression"))
-    base = _strip_flags(
-        args.argv,
-        {
-            "--shards": 1,
-            "--datasets": 1,
-            "--adbench-splits": 1,
-            "--adbench-methods": 1,
-            "--out-dir": 1,
-            "--device": 1,
-            "--mlflow": 0,
-            "--regressor-path": 1,
-            "--classifier-path": 1,
-            "--heartbeat-minutes": 1,
-        },
-    )
-    # a worker sees one GPU (CUDA_VISIBLE_DEVICES), so cuda:<i> becomes cuda
-    device = "cuda" if args.device.startswith("cuda") else args.device
-    env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_RUN")}
-    failures: list[dict] = []
-
-    def command(job: tuple) -> tuple[str, list[str]]:
-        d, s, m = job
-        return f"{d}_{s}_{m}", ["--regressor-path", path, "--datasets", d,
-                                "--adbench-splits", s, "--adbench-methods", m,
-                                "--device", device]  # fmt: skip
-
-    def on_done(job: tuple, returncode: int, job_dir: Path) -> bool:
-        rows = adbench.read_results(job_dir / ADBENCH_SUITE / "results.csv")
-        if returncode == 0 and len(rows):
-            path_out = suite_dir / "results.csv"
-            rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
-            return True
-        d, s, m = job
-        failures.append(dict(dataset=d, split=s, method=m, error=f"exit {returncode}"))
-        return False
-
-    print(f"adbench shards: {len(jobs)} jobs -> {len(devices)} GPUs", flush=True)
-    _run_shard_queue(
-        "adbench", jobs, command, on_done, devices, base, env, suite_dir / "shards",
-        args.heartbeat_minutes,
-    )  # fmt: skip
-    return failures
-
-
-def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
-    """Treatment effects on IHDP and ACIC 2016 (`tabsil_train.benchmarks.causal`). Ends with an
-    error if any (benchmark, realization, method) failed or has no result, after the others ran
-    and the summary was written."""
-    from tabsil_train.benchmarks import causal
-
-    benchmarks = args.datasets.split(",") if args.datasets else list(causal.BENCHMARKS)
-    if bad := [b for b in benchmarks if b not in causal.BENCHMARKS]:
-        raise SystemExit(f"causal benchmarks are {list(causal.BENCHMARKS)}: {bad}")
-    try:
-        plan = {b: causal.parse_realizations(args.causal_realizations, b) for b in benchmarks}
-        methods = causal.check_methods(
-            args.causal_methods.split(",") if args.causal_methods else list(causal.METHODS)
-        )
-    except ValueError as e:
-        raise SystemExit(str(e)) from None
-    estimators: dict = {m: causal.econml_estimator(m) for m in methods if m in causal.ECONML}
-    opts = {m: "EconML defaults, GBM base models" for m in estimators}
-    params = {
-        "suite": args.suite,
-        "benchmarks": ",".join(benchmarks),
-        "realizations": args.causal_realizations or "all",
-        "methods": ",".join(methods),
-    }
-    if ours := [m for m in methods if m in causal.TABSIL]:
-        if not args.regressor_path:
-            raise SystemExit("--suite causal needs --regressor-path (a model serving both tasks).")
-        model, borders = load_model(
-            args.regressor_path, "regression", out_dir / "checkpoints" / "regression"
-        )
-        if "classification" not in model.tasks:
-            raise SystemExit(f"{args.regressor_path} does not serve classification (propensity).")
-        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
-        for m in ours:
-            estimators[m] = causal.tabsil_estimator(
-                model, borders, causal.TABSIL[m], n_estimators, args.device, 1000 * args.seed
-            )
-            opts[m] = f"model={args.regressor_path} n_estimators={n_estimators} seed={args.seed}"
-        params |= {"model": args.regressor_path, "n_estimators": n_estimators, "seed": args.seed}
-    print(f"causal: {plan if args.causal_realizations else benchmarks} x {methods}, "
-          f"{args.device}", flush=True)  # fmt: skip
-    if use_mlflow:
-        mlflow.log_params(params)
-    suite_dir = out_dir / CAUSAL_SUITE
-    t0 = time.time()
-    rows, failures = causal.run(
-        estimators, plan, methods, suite_dir, opts, log=lambda s: print(s, flush=True)
-    )
-    summary = causal.report(rows, suite_dir, plan, methods)
-    summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
-    (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
-    table = pd.read_csv(suite_dir / "summary.csv")
-    print(f"\n{table.round(3).to_string(index=False)}", flush=True)
-    print(f"missing {summary['missing_pct']:.1f}%, imputed {summary['imputed_pct']:.1f}%, "
-          f"failures {len(failures)}, {summary['seconds']:.0f}s", flush=True)  # fmt: skip
-    if use_mlflow:
-        metrics = {
-            f"causal_{key.replace('/', '_')}_{m}": float(v)
-            for key, by_metric in summary["methods"].items()
-            for m, v in by_metric.items()
-        }
-        metrics |= {"causal_missing_pct": summary["missing_pct"], "causal_failures": len(failures)}
-        mlflow.log_metrics(metrics)
-        mlflow.log_artifacts(str(suite_dir), CAUSAL_SUITE)
-    if failures:
-        raise SystemExit(f"causal: {len(failures)} failed cells: {failures}")
-    if summary["missing_pct"]:
-        raise SystemExit(f"causal: {summary['missing_pct']:.1f}% of the planned cells are missing")
-
-
-def impute_grid(args: argparse.Namespace):
-    """(tables, rates, seeds, methods) of `--suite impute`, checked."""
-    from tabsil_train.benchmarks import impute
-
-    datasets = list(impute.TABLES) if args.datasets is None else args.datasets.split(",")
-    if bad := [d for d in datasets if d not in impute.TABLES]:
-        raise SystemExit(f"tables not in the impute suite: {bad} (known: {list(impute.TABLES)})")
-    rates = [float(r) for r in args.impute_rates.split(",")]
-    if bad := [r for r in rates if not 0 < r < 1]:
-        raise SystemExit(f"rates must be in (0, 1): {bad}")
-    seeds = [int(s) for s in args.impute_seeds.split(",")]
-    try:
-        methods = impute.check_methods(args.impute_methods.split(","))
-    except ValueError as e:
-        raise SystemExit(str(e)) from None
-    return datasets, rates, seeds, methods
-
-
-def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
-    """Missing value imputation (`tabsil_train.benchmarks.impute`). Ends with an error if a
-    (table, rate, seed, method) failed."""
-    from tabsil_train.benchmarks import impute
-
-    datasets, rates, seeds, methods = impute_grid(args)
-    imputers: dict = dict(impute.CPU_IMPUTERS)
-    opts = {
-        "knn": "KNNImputer(n_neighbors=5), z-scored + one-hot",
-        "mice": "chained: BayesianRidge / LogisticRegression, 10 rounds, z-scored + one-hot",
-        "missforest": "100 trees, max_features=sqrt, max_iter=10",
-    }
-    params = {"suite": args.suite, "datasets": ",".join(datasets),
-              "rates": ",".join(map(str, rates)), "seeds": ",".join(map(str, seeds)),
-              "methods": ",".join(methods)}  # fmt: skip
-    for m in ("tabpfn_impute", "tabpfn_simple"):
-        imputers[m] = impute.tabpfn_imputer(args.device, simple=m == "tabpfn_simple")
-        opts[m] = f"tabpfn-extensions {impute.TABPFN_EXTENSIONS_VERSION}, TabPFN v2 defaults"
-    ours = [m for m in methods if m.startswith(impute.OURS)]
-    path = args.regressor_path or args.classifier_path
-    if ours and not path:
-        raise SystemExit("impute needs --regressor-path (a model serving both tasks).")
-    if ours and args.shards == 1:  # with --shards the workers load the model
-        model, borders = load_model(path, "regression", out_dir / "checkpoints" / "regression")
-        if "classification" not in model.tasks:
-            raise SystemExit(f"{path} does not serve classification (categorical columns).")
-        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
-        for m in ours:
-            imputers[m] = impute.tabsil_imputer(
-                model, borders, n_estimators, args.device, 100 * args.seed,
-                extension_kinds=m == "tabsil_inferred",
-            )  # fmt: skip
-            opts[m] = f"n_estimators={n_estimators}"
-        params |= {"model": path, "n_estimators": n_estimators, "seed": args.seed}
-    print(f"impute: {len(datasets)} tables x rates {rates} x seeds {seeds} x {methods}, "
-          f"{args.device}", flush=True)  # fmt: skip
-    if use_mlflow:
-        mlflow.log_params(params)
-    suite_dir = out_dir / IMPUTE_SUITE
-    t0 = time.time()
-    if args.shards > 1:
-        failures = run_impute_shards(
-            args, datasets, rates, seeds, methods, suite_dir, out_dir, use_mlflow
-        )
-    else:
-        _, failures = impute.run(imputers, datasets, rates, seeds, methods, suite_dir, opts)
-    rows = impute.read_results(suite_dir / "results.csv")
-    summary = impute.report(rows, suite_dir, datasets, rates, seeds, impute.result_methods(methods))
-    summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
-    (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
-    print(json.dumps(summary, indent=1, default=str), flush=True)
-    if (suite_dir / "summary.csv").exists():
-        table = pd.read_csv(suite_dir / "summary.csv").round(4)
-        print(f"\nsummary.csv\n{table.to_string(index=False)}", flush=True)
-    if use_mlflow:
-        metrics = {f"impute_{k}": v for k, v in summary.items() if isinstance(v, int | float)}
-        for metric in ("nrmse", "accuracy"):
-            for rate, by_method in summary.get(metric, {}).items():
-                metrics |= {f"impute_{metric}_{rate}_{m}": v for m, v in by_method.items()}
-        metrics = {k: v for k, v in metrics.items() if np.isfinite(v)}
-        mlflow.log_metrics({re.sub(r"[^\w\-. /]", "_", k): float(v) for k, v in metrics.items()})
-        mlflow.log_artifacts(str(suite_dir), IMPUTE_SUITE)
-    if failures:
-        raise SystemExit(f"impute: {len(failures)} failed (table, rate, seed, method): {failures}")
-
-
-# thread count variables of the numeric libraries a worker uses (torch reads OMP_NUM_THREADS;
-# TABSIL_IMPUTE_N_JOBS is MissForest's n_jobs, `tabsil_train.benchmarks.impute.n_jobs`)
-WORKER_THREAD_VARIABLES = (
-    "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "TABSIL_IMPUTE_N_JOBS",
-)  # fmt: skip
-
-
-def impute_worker_threads(workers: int, cores: int | None = None) -> int:
-    """CPU threads per worker process: the cores (`os.sched_getaffinity` where available, else
-    `os.cpu_count`) split evenly over `workers`, at least 1."""
-    if cores is None:
-        try:
-            cores = len(os.sched_getaffinity(0))
-        except AttributeError:  # macOS
-            cores = os.cpu_count() or 1
-    return max(1, cores // max(workers, 1))
-
-
-def _result_rows(job_dir: Path) -> int:
-    """Result rows a running impute worker has written so far."""
-    path = job_dir / IMPUTE_SUITE / "results.csv"
-    if not path.exists():
-        return 0
-    with open(path) as f:
-        return max(0, sum(1 for _ in f) - 1)
-
-
-def run_impute_shards(
-    args: argparse.Namespace,
-    datasets: list[str],
-    rates: list[float],
-    seeds: list[int],
-    methods: list[str],
-    suite_dir: Path,
-    out_dir: Path,
-    use_mlflow: bool = False,
-) -> list[dict]:
-    """`--suite impute --shards N`: the GPU methods as one job per (table, rate, method) not yet
-    complete in `results.csv`, most expensive first, each a worker process (`eval.py --suite
-    impute` on one GPU, without MLflow) started as soon as a GPU is free, and the CPU methods in
-    one worker process (`--device cpu`) running at the same time (`_run_shard_queue`). Every
-    worker gets an equal share of the CPU cores (`impute_worker_threads`): TabPFN's preprocessing
-    and torch's CPU work run on the CPU, and N workers each using every core oversubscribe it
-    (the GPUs then sit idle). A finished job's rows are appended to `results.csv` (and logged to
-    MLflow, so a run cut short keeps them); a failed job is returned as a failure (log under
-    `shards/`)."""
-    from tabsil_train.benchmarks import impute
-    from tabsil_train.hub import download_artifact
-
-    finished = impute.finished_keys(impute.read_results(suite_dir / "results.csv"))
-
-    def complete(d: str, r: float, m: str) -> bool:
-        return all((d, round(r, 4), s, out) in finished for s in seeds for out in impute.METHODS[m])
-
-    gpu = [m for m in methods if m in impute.GPU_METHODS]
-    cpu = [m for m in methods if m not in impute.GPU_METHODS]
-    jobs = [(d, r, m) for d in datasets for r in rates for m in gpu if not complete(d, r, m)]
-    jobs.sort(key=lambda j: -impute.job_cost(j[0], j[2]))
-    devices = shard_devices(args)
-    path = args.regressor_path or args.classifier_path
-    if path and path.startswith("runs:/"):  # the parent's download, reused by every worker
-        path = str(download_artifact(path, out_dir / "checkpoints" / "regression"))
-    base = _strip_flags(
-        args.argv,
-        {"--shards": 1, "--datasets": 1, "--impute-rates": 1, "--impute-methods": 1,
-         "--out-dir": 1, "--device": 1, "--mlflow": 0, "--regressor-path": 1,
-         "--classifier-path": 1, "--heartbeat-minutes": 1},
-    )  # fmt: skip
-    model_args = ["--regressor-path", path] if path else []
-    device = "cuda" if args.device.startswith("cuda") else args.device
-    threads = impute_worker_threads(len(devices) + (1 if cpu else 0))
-    env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_RUN")}
-    env |= {k: str(threads) for k in WORKER_THREAD_VARIABLES}
-    failures: list[dict] = []
-
-    def command(job: tuple) -> tuple[str, list[str]]:
-        d, r, m = job
-        return f"{d}_{r}_{m}", [*model_args, "--datasets", d, "--impute-rates", str(r),
-                                "--impute-methods", m, "--device", device]  # fmt: skip
-
-    def on_done(job: tuple, returncode: int, job_dir: Path) -> bool:
-        rows = impute.read_results(job_dir / IMPUTE_SUITE / "results.csv")
-        path_out = suite_dir / "results.csv"
-        # a worker resumes from its folder under shards/, which stays between runs, so its file
-        # can hold rows merged by an earlier run: append only the new ones
-        rows = impute.new_rows(rows, impute.read_results(path_out))
-        if len(rows):  # rows a failed job finished still count
-            rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
-            if use_mlflow:
-                mlflow.log_artifact(str(path_out), IMPUTE_SUITE)
-        if returncode != 0:
-            failures.append(dict(job=job, error=f"exit {returncode}"))
-        return returncode == 0
-
-    side = []
-    if cpu:
-        side = [(("cpu", ",".join(cpu)), "cpu", [
-            "--datasets", ",".join(datasets), "--impute-rates", ",".join(map(str, rates)),
-            "--impute-methods", ",".join(cpu), "--device", "cpu",
-        ])]  # fmt: skip
-    print(
-        f"impute shards: {len(jobs)} GPU jobs -> {len(devices)} GPUs, CPU methods {cpu}, "
-        f"{threads} CPU threads per worker",
-        flush=True,
-    )
-    _run_shard_queue(
-        "impute", jobs, command, on_done, devices, base, env, suite_dir / "shards",
-        args.heartbeat_minutes, side=side, progress=lambda d: f"{_result_rows(d)} rows",
-    )  # fmt: skip
-    return failures
 
 
 def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: bool) -> None:
@@ -2037,7 +1484,8 @@ def write_amlb_fits(args: argparse.Namespace, suite: str, task, task_rows: list[
 
 
 def summarize_uncertainty(rows: list[dict]) -> pd.DataFrame:
-    """Per-dataset fold means of the uncertainty metrics (`tabsil_train.benchmarks.uncertainty`)."""
+    """Per-dataset fold means of the uncertainty metrics
+    (`tabsil_train.benchmarks.tabular.uncertainty`)."""
     return unc.dataset_means(rows, exclude=("score", "metric_error", "problem_type", *bm.TIME_KEYS))
 
 

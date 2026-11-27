@@ -4,8 +4,9 @@ model with `forward(x, y_train, task)` (the `tabsil.models` model).
     clf = EnsembleClassifier(model, n_estimators=8).fit(x_train, y_train)
     proba = clf.predict_proba(x_test)
 
-`tabsil.recipe.TabSilClassifier` and `TabSilRegressor` set TabSil's defaults (8 `standard` members,
-at most 768 columns per member chosen `balanced`).
+`TabSilClassifier` and `TabSilRegressor` (importable from `tabsil`) set TabSil's defaults
+(`tabsil.recipe.INFERENCE`: 8 members cycling through the numeric transforms `standard`, `power`,
+`robust` and `quantile`, at most 768 columns per member chosen `balanced`).
 
 `fit` trains no weights. Each member fits its preprocessing to the training rows
 (`tabsil.inference.preprocessing`). With a model that has a train context
@@ -601,8 +602,9 @@ class EnsembleRegressor(_Base):
 
     def predict_full(self, X: Any) -> tuple[np.ndarray, torch.Tensor, torch.Tensor]:
         """(the `predict` mean, the `predict_distribution` log probabilities and borders) from one
-        forward pass. Distribution-quality evaluation (`tabsil_train.benchmarks.uncertainty`) uses
-        the point prediction and the distribution together."""
+        forward pass. Distribution-quality evaluation
+        (`tabsil_train.benchmarks.tabular.uncertainty`) uses the point prediction and the
+        distribution together."""
         means, probs = [], []
         with contextlib.closing(self._member_probs(X)) as members:
             for i, p in members:

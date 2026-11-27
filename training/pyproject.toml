@@ -15,8 +15,10 @@ requires-python = ">=3.11"
 # pandas comes with tabsil (>=2.2) and is raised to >=3.0.6 in the dev group; the arena extra's
 # tabarena (autogluon) needs pandas<2.4, so that install gets 2.3 (tool.uv.conflicts in the
 # workspace root pyproject.toml).
+# tabsil is the workspace member (tool.uv.sources below). This package imports `tabsil.tasks`,
+# which tabsil has from 0.2.0.
 dependencies = [
-    "tabsil",
+    "tabsil>=0.2.0",
     "matplotlib>=3.10",
     "mlflow>=2.15",
     "openml>=0.15",
@@ -26,25 +28,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# TabArena / BeyondArena evaluation (tabsil_train.benchmarks.arena); tabarena and autogluon are
-# pre-releases
+# TabArena / BeyondArena evaluation (tabsil_train.benchmarks.tabular.arena); tabarena and autogluon
+# are pre-releases
 arena = [
     "tabarena[data-foundry]>=0.1.1.dev20261031",
 ]
-# fev-bench forecasting evaluation (tabsil_train.benchmarks.fevbench): the fev package that
+# fev-bench forecasting evaluation (tabsil_train.benchmarks.forecast.fevbench): the fev package that
 # defines the tasks, windows and metrics (it brings `datasets` for the HF data)
 fev = [
     "fev==0.10.0",
 ]
-# treatment effect evaluation (tabsil_train.benchmarks.causal): the EconML baselines run on the
-# same splits (causal forest, GBM-based S/T/X/DR-learners)
+# treatment effect evaluation (tabsil_train.benchmarks.causal.causal): the EconML baselines run on
+# the same splits (causal forest, GBM-based S/T/X/DR-learners)
 causal = [
     "econml==0.17.1",
 ]
-# imputation evaluation (tabsil_train.benchmarks.impute): the official TabPFN extension and
-# TabPFN v2 as baselines, at PriorLabs/tabpfn-extensions a049fd7 (the 0.6.3 release on PyPI writes
-# `impute`'s draws to the CPU table without moving them off the GPU and fails on CUDA; a049fd7 has
-# that fix and is otherwise the same for `TabPFNUnsupervisedModel.impute` and `simple_impute`)
+# imputation evaluation (tabsil_train.benchmarks.unsupervised.impute): the official TabPFN extension
+# and TabPFN v2 as baselines, at PriorLabs/tabpfn-extensions a049fd7 (the 0.6.3 release on PyPI
+# writes `impute`'s draws to the CPU table without moving them off the GPU and fails on CUDA;
+# a049fd7 has that fix and is otherwise the same for `TabPFNUnsupervisedModel.impute` and
+# `simple_impute`)
 impute = [
     "tabpfn-extensions @ git+https://github.com/PriorLabs/tabpfn-extensions@a049fd76afa0593a616156e1008b5482e9c905da",
     "tabpfn==10.2.0",

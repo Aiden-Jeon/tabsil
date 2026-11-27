@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import train_helpers as helpers
 
-from tabsil_train.benchmarks.amlb import score_fold
+from tabsil_train.benchmarks.tabular.amlb import score_fold
 
 
 def test_test_rows_of_classes_unseen_in_training_are_ignored():

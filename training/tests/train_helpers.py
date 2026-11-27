@@ -28,6 +28,46 @@ def tiny_model(seed: int = 0, **changes) -> ColumnRowTransformer:
     return randomize_zero_weights(model).eval()
 
 
+def tiny_checkpoint(path: str | Path, seed: int = 0) -> str:
+    """Save `tiny_model(seed)` and regression borders as a checkpoint file (one model serving
+    both tasks, as `eval.py --regressor-path` takes); returns the path."""
+    from tabsil.models import save_checkpoint
+
+    save_checkpoint(path, tiny_model(seed), torch.linspace(-4, 4, 33))
+    return str(path)
+
+
+def in_process_workers(script, monkeypatch) -> list[list[str]]:
+    """Run the worker processes of `eval.py --shards` (ADBench, impute) in this process: starting
+    `python eval.py <argv>` calls `script.main(argv)` instead, and an exception is exit code 1
+    (written to the worker's log). A worker started with another script than `script` is an
+    error. The queue's waits are skipped. Returns the list the started workers' argv are appended
+    to."""
+    import subprocess
+    import time
+
+    started: list[list[str]] = []
+
+    class Worker:
+        def __init__(self, cmd, stdout, stderr, env):
+            assert cmd[1] == script.__file__, cmd[:2]  # the workers run the script itself
+            argv = list(cmd[2:])  # after the interpreter and the script
+            started.append(argv)
+            try:
+                script.main(argv)
+                self.returncode = 0
+            except (Exception, SystemExit) as error:
+                print(repr(error), file=stdout)
+                self.returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(subprocess, "Popen", Worker)
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    return started
+
+
 def load_script(relative_path: str, module_name: str):
     """Import a script of the tabsil-train package (e.g. `scripts/train.py`, relative to
     `training/`) as a module."""

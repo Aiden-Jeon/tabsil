@@ -1,6 +1,6 @@
-"""Rule tests for the TabArena/BeyondArena harness (`tabsil_train.benchmarks.arena`). No data or
-baseline results are downloaded. System tests wrapping the estimator run only with the `arena` extra
-(tabarena)."""
+"""Rule tests for the TabArena/BeyondArena harness (`tabsil_train.benchmarks.tabular.arena`). No
+data or baseline results are downloaded. System tests wrapping the estimator run only with the
+`arena` extra (tabarena)."""
 
 import argparse
 import json
@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 import train_helpers as helpers
 
-from tabsil_train.benchmarks import arena, beyondarena, tabarena
+from tabsil_train.benchmarks.tabular import arena, beyondarena, tabarena
 
 
 def _row(**kw):
@@ -240,7 +240,7 @@ def test_suites_point_at_the_official_splits_and_public_tables():
 
 def _system():
     pytest.importorskip("tabarena")
-    from tabsil_train.benchmarks import _arena_system
+    from tabsil_train.benchmarks.tabular import _arena_system
 
     return _arena_system
 
@@ -400,6 +400,27 @@ def test_dataset_queue_puts_expensive_datasets_first_and_skips_unrun_splits():
     # --subsample-train-rows: count train rows capped at that value (big is 10k × 50 = 500k cells)
     queue = arena.dataset_queue(grid, subsample_rows=10_000)
     assert queue == [("mid_a", 3), ("mid_b", 3), ("big", 1), ("small", 30), ("tiny", 10)]
+
+
+def test_link_checkpoints_replaces_a_link_whose_target_is_gone(tmp_path):
+    script = _eval_script()
+    worker = tmp_path / "out" / "shards" / "shard0"
+    worker.mkdir(parents=True)
+    checkpoints = tmp_path / "out" / "checkpoints"
+    script.link_checkpoints(worker, checkpoints)  # hf:// or local weights: nothing to point at
+    assert not (worker / "checkpoints").is_symlink()
+    checkpoints.mkdir()
+    (checkpoints / "c.pt").write_text("weights")
+    script.link_checkpoints(worker, checkpoints)
+    script.link_checkpoints(worker, checkpoints)  # a rerun keeps the link
+    assert (worker / "checkpoints" / "c.pt").read_text() == "weights"
+    # the output folder was moved: the link still names the old place, where nothing is left
+    (tmp_path / "out").rename(tmp_path / "moved")
+    worker = tmp_path / "moved" / "shards" / "shard0"
+    checkpoints = tmp_path / "moved" / "checkpoints"
+    assert (worker / "checkpoints").is_symlink() and not (worker / "checkpoints").exists()
+    script.link_checkpoints(worker, checkpoints)
+    assert (worker / "checkpoints" / "c.pt").read_text() == "weights"
 
 
 def test_shard_worker_command_replaces_dataset_and_output_flags(tmp_path):
@@ -773,7 +794,7 @@ def test_split_rows_takes_the_largest_train_plus_test():
 
 def test_register_factory_gives_the_same_key_to_the_same_function():
     pytest.importorskip("tabarena")
-    from tabsil_train.benchmarks import _arena_system as system
+    from tabsil_train.benchmarks.tabular import _arena_system as system
 
     def make(problem_type, categorical):
         return None
