@@ -116,3 +116,10 @@ def test_eval_suite_fev_runs_the_benchmark_with_the_forecaster(tmp_path, monkeyp
     assert "TabSil time 1s, total 2s" in printed
     with pytest.raises(SystemExit, match="regressor-path"):
         script.main(args)
+    # a window count below 1 is refused with the arguments, before the model is loaded and the
+    # run is logged as one over all windows
+    seen.clear()
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        script.main(["--suite", "fev", "--fev-windows", "0", "--regressor-path", model])
+    assert "--fev-windows must be >= 1" in capsys.readouterr().err and not seen

@@ -330,6 +330,25 @@ def test_eval_suite_impute(tmp_path, monkeypatch):
         script.main([*grid, "--impute-methods", "mean,knn"])
 
 
+def test_eval_suite_impute_without_a_row_leaves_no_earlier_report(tmp_path, monkeypatch, capsys):
+    script = _eval_script()
+    monkeypatch.setattr(bi, "load", _fake_load)
+    monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
+    grid = ["--suite", "impute", "--datasets", "cmc", "--impute-rates", "0.3",
+            "--impute-seeds", "0", "--out-dir", str(tmp_path)]  # fmt: skip
+    script.main([*grid, "--impute-methods", "mean"])
+    report = [tmp_path / "impute" / name for name in bi.REPORT_FILES]
+    assert all(path.exists() for path in report)
+    capsys.readouterr()
+    # every cell of the next run fails, so it has no report: the first run's files must not stay
+    # in the folder, where they were printed and uploaded as this run's
+    monkeypatch.setitem(bi.CPU_IMPUTERS, "knn", lambda X, c, s: 1 / 0)
+    with pytest.raises(SystemExit, match="impute: 1 failed"):
+        script.main([*grid, "--impute-methods", "knn"])
+    assert not any(path.exists() for path in report)
+    assert "summary.csv" not in capsys.readouterr().out
+
+
 def _args(out, model, *more):
     return ["--suite", "impute", "--regressor-path", str(model), "--datasets", "cmc",
             "--impute-rates", "0.3", "--impute-seeds", "0", "--impute-methods", "tabsil,mean",
