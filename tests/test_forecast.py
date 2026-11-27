@@ -6,11 +6,11 @@ import pytest
 import torch
 from helpers import tiny_model
 
+from tabsil.models.quantile_distribution import bucket_quantiles
 from tabsil.recipe import SUPPORTED_SIZE
 from tabsil.tasks.forecast import (
     DEFAULT_QUANTILE_LEVELS,
     TabSilForecaster,
-    bucket_quantiles,
     seasonal_periods,
     time_features,
 )
