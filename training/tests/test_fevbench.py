@@ -1,12 +1,12 @@
-"""fev-bench forecasting evaluation helpers (`tabsil_train.benchmarks.fevbench`) that need neither
-the fev package nor the data: reference files, frequency seasonality, the Seasonal Naive check,
-Elo and its pools."""
+"""fev-bench forecasting evaluation helpers (`tabsil_train.benchmarks.forecast.fevbench`) that need
+neither the fev package nor the data: reference files, frequency seasonality, the Seasonal Naive
+check, Elo and its pools, and the arguments `eval.py --suite fev` hands to the benchmark."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import fevbench as fb
+from tabsil_train.benchmarks.forecast import fevbench as fb
 
 
 def _ours(task: str = "ecdc_ili", scale: float = 0.5) -> pd.DataFrame:
@@ -76,3 +76,50 @@ def test_pools_and_comparison():
     assert table.loc[fb.ANCHOR, "SQL_vs_snaive"] == pytest.approx(1.0)
     # with only some windows there is no task-mean pool
     assert set(fb.pools(ours[ours.window >= 8], "SQL")) == {"windows"}
+
+
+def test_eval_suite_fev_runs_the_benchmark_with_the_forecaster(tmp_path, monkeypatch, capsys):
+    # `eval.py --suite fev` (`tabsil_train.evaluation.fev`) with the benchmark's run replaced, so
+    # neither the fev package nor the data is needed: the arguments reach the forecaster and the
+    # run, and the tables it wrote are printed
+    from train_helpers import load_script, tiny_checkpoint
+
+    from tabsil import TabSilForecaster
+
+    script = load_script("scripts/eval.py", "eval_script_fev")
+    seen = {}
+
+    def run(forecaster, tasks, windows, out_dir, log=print):
+        seen.update(forecaster=forecaster, tasks=tasks, windows=windows, out_dir=out_dir)
+        out_dir.mkdir(parents=True)
+        table = pd.DataFrame({"task": ["ecdc_ili"] * 2, "method": [fb.METHOD, fb.ANCHOR]})
+        table = table.assign(SQL=[1.0, 2.0], MASE=[1.5, 2.5])
+        table.to_csv(out_dir / "comparison.csv", index=False)
+        elo = pd.DataFrame({"pool": ["windows"], "metric": ["SQL"], "method": [fb.METHOD]})
+        elo.assign(elo=[1100.0]).to_csv(out_dir / "elo.csv", index=False)
+        return {"tabsil_seconds": 1.0, "seconds": {"total": 2.0}}
+
+    monkeypatch.setattr(fb, "run", run)
+    monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
+    out = tmp_path / "eval"
+    args = ["--suite", "fev", "--datasets", "ecdc_ili", "--fev-windows", "2", "--out-dir", str(out)]
+    model = tiny_checkpoint(tmp_path / "m.pt")
+    script.main([*args, "--regressor-path", model, "--n-estimators", "2", "--seed", "3",
+                 "--max-context-length", "64", "--device", "cpu"])  # fmt: skip
+    assert seen["tasks"] == ["ecdc_ili"] and seen["windows"] == 2
+    assert seen["out_dir"] == out / "fev"
+    forecaster = seen["forecaster"]
+    assert isinstance(forecaster, TabSilForecaster) and forecaster.max_context_length == 64
+    assert (forecaster.n_estimators, forecaster.random_state, forecaster.device) == (2, 3, "cpu")
+    printed = capsys.readouterr().out
+    assert "task mean SQL" in printed and "Elo (Seasonal Naive = 1000)" in printed
+    assert "TabSil time 1s, total 2s" in printed
+    with pytest.raises(SystemExit, match="regressor-path"):
+        script.main(args)
+    # a window count below 1 is refused with the arguments, before the model is loaded and the
+    # run is logged as one over all windows
+    seen.clear()
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        script.main(["--suite", "fev", "--fev-windows", "0", "--regressor-path", model])
+    assert "--fev-windows must be >= 1" in capsys.readouterr().err and not seen

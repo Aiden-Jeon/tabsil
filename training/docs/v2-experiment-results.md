@@ -161,7 +161,7 @@ Paired comparisons (G (95% CI), p, better / worse). "Pooled" puts the 51 + 48 = 
 
 ## Phase 1A
 
-Stage 2 (10K steps) from `aiden-jeon/tabsil@stage1-150k` on 32 H100, with the training code of dev-v2 01973a5. N10, R10 and #14's run have the same settings and differ in the prior and the seed. N10 ran on 2026-11-26, and R10 from 2026-11-26 to 2026-11-27.
+Stage 2 (10K steps) from `aiden-jeon/tabsil@stage1-150k` on 32 H100, with the training code of dev-v2 01973a5. N10, R10 and #14's run have the same settings and differ in the prior and the seed. N10 ran on 2026-11-26, and R10 from 2026-11-26 to 2026-11-27. L20 (20K steps planned) ran on 2026-11-27 on 8 H100 at micro batch 2, with the training code of dev-v2 aab3d9c, and was stopped at step 5,200 by the user's decision; its section lists what differs from these runs.
 
 ### Runs
 
@@ -253,16 +253,78 @@ The three runs against `stage2-10k` (the v1 prior), on 3 splits and the developm
 - **N10's gain on the development suite is that run's, not the prior's.** The other two runs are at 1.000 and 1.001 there.
 - **Against the v1 prior by the branch rule, pooled:** the hicard prior passes with its two seeds together (0.9918 against 0.9944, CI upper end 0.9998) and with N10 alone, and not with #14's run alone (CI 0.980-1.001). R10 does not pass (0.9949, CI up to 1.003). Without polish_companies_bankruptcy nothing passes.
 
-### L20: proposal, not launched
+### L20: stopped at step 5,200, no verdict
 
-L20 is proposed on `graph_scm_hicard_missing`: stage 2 from `stage1-150k` for 20K steps, seed 0, the other settings as N10. It is 614 H100-h at 3.3 s per step (19.1 h on 32 H100, so `timeout_minutes=1440` or two chunks). Its control is the mean of #14's run and N10, and 20K steps are adopted for phase 4 if the pooled G is at most 0.9944 with a CI below 1 and no task more than 0.5% worse. The user decides before it runs.
+L20 asked whether a longer stage 2 helps: stage 2 from `stage1-150k` for 20K steps on `graph_scm_hicard_missing`, seed 0. On 2026-11-27 the user chose this prior from the proposal's three options (this prior, the v1 prior, no L20), and then 8 H100 at micro batch 2 instead of the proposal's 32 H100 at micro batch 1, from the GPU cost measurements ("GPU cost" below). The control was the mean of #14's run and N10. 20K steps were to be adopted for phase 4 if the pooled G was at most 0.9944, the CI lay below 1 and no task was more than 0.5% worse.
+
+**The user stopped L20 on 2026-11-28 (the job was cancelled at 2026-11-27 23:04 UTC, which is 2026-11-28 08:04 KST), shortly after step 5,200 of 20,000.** The gain measured for v2 so far is +20 to +40 Elo on TabArena-Lite, about 1% of error (N10 1788 and #14's run 1808, against 1768 for v1.1). The user judged further experiments for a gain of that size not worth running. L20's own gain was expected to be 0.7% at most. By the same decision phases 3 to 5 are not run (plan §7).
+
+- **There is no verdict.** Nothing was evaluated. Step 5,000 is a quarter of a 20K-step cosine schedule (learning rate 8.6e-5 of the peak 1e-4), not the end of a stage 2, so its weights do not answer the question. Whether a longer stage 2 helps stays open.
+- **The run itself had no fault.** No step was skipped, there was no rewind and no memory error, and the loss was at the controls' level.
+
+| Run | MLflow run | Job run | GPUs | Micro batch | Steps | Seed | Started | Ended | Wall time | H100-h |
+|---|---|---|---|---|---|---|---|---|---|---|
+| L20 `tabsil-v2-s2-l20` | `893293ed7d8d419780be2d178b8cc713` | `364643392108130` | 8 H100 (one node) | 2 | 5,200 of 20,000 | 0 | 2026-11-27 12:28 UTC | 23:04 UTC, cancelled | 10.60 h | 85 |
+
+**What is left.** `checkpoints/step_0005000.pt` and `checkpoints/latest.pt` are in the MLflow run, both at step 5,000 with the optimizer state. There is no `model/final.pt`. The run can be continued from step 5,000 with `TABSIL_RESUME_RUN_ID`, the launch's settings and the code of dev-v2 aab3d9c. No resume is planned.
+
+**The run to step 5,200** (100-step windows after the first, which holds the compilation):
+
+| | L20 | For comparison |
+|---|---|---|
+| s / step, mean (10th-90th percentile) | 7.16 (6.99-7.38) | 7.93 in steps 20-59 of the timing run (`8b954553…`); 3.30 for N10 on 32 H100 |
+| H100-h per 1K steps | 15.9 from the step time; 16.2 for the whole job, with its start, the compilation, one validation and five checkpoints | 17.6 from the timing run; 29.3 for N10 |
+| Train loss, steps 100-1,000 → 4,100-5,200 | 0.1828 → 0.1821 | #14's run 0.1829 → 0.1823; N10 0.1829 → 0.1812 |
+| Skipped steps, rewinds | none | none |
+| GPU memory | 57.6 GB allocated at most (`gpu_mem_gb`); 71.0 GB at most as the driver reports it | 56.4 GB in the timing run; 58.7 GB (driver 68.1 GB) with every table at 10,240 rows |
+| GPU power, utilization | 442 W, 89% | 310 W, 84-88% for the controls |
+| Node CPU use | 18% | 14% for the controls |
+| Data wait on rank 0 | 0.5% on average; 7 of 52 windows above 1%, the largest 5.0% | 0.3% for N10 |
+
+- **The step time held over the 5,200 steps.** Each stretch of about 1,000 steps is between 7.13 and 7.18 s. The 7.93 s of the timing run came from 40 steps. For a stage 2 on one node at micro batch 2, with the code before the collector change and prefetch 4, L20 gives about 162 H100-h per 10K steps, where the plan's phase 4 has 182.
+- **Validation at step 5,000** uses the 64 tables per task that L20 shares with #14's run (the same seed). L20: loss 0.1764 (classification 0.2853, regression 0.0676, accuracy 0.8543). #14's run at its step 5,000: 0.1766 (0.2854, 0.0677, 0.8543). The two are level, at different points of their schedules (learning rate 8.6e-5 for L20 and 5.1e-5 for #14's run), so this judges neither the length nor the setup.
+
+**The design.**
 
 - **Why this prior.** It is the only one that passes the branch rule against the v1 prior pooled. R10 does not improve on it and costs more. It also has two 10K runs from the same code as controls, so L20's difference to them can be set against a measured ν. The v1 prior's `stage2-10k` is one run, written by minipfn's code.
 - **What L20 can resolve.** The pooled CI of one branch against another is about ±0.4% (N10 against #14's run: 0.993-1.001). A length effect below about 0.5% will not pass the rule. The only estimate so far is 0.993 for 5K → 10K steps within one schedule, which overstates the effect of the length (plan §1.1).
 - **What it does not settle.** The prior's gain over the v1 prior is one dataset wide. If phase 4 should rest on a prior with no such caveat, the alternative is 20K steps on `graph_scm` against `stage2-10k`, at the same cost and with the weaker control.
-- **Code.** #14's run and N10 ran on the training code of dev-v2 01973a5. dev-v2 now has #32's training changes. `training/tests/test_default_behavior.py` pins their defaults to 01973a5's behavior (the batches of this prior, the borders and a short training run), so L20 runs from dev-v2 with the default settings. This prior needs no larger prefetch.
 
-For phase 4 this leaves `graph_scm_hicard_missing` as the stage-2 prior, without the parts `graph_scm_realism` adds, and the length open until L20.
+**What differs from the controls.** The configuration that was submitted (`training_config.yaml` of the launch) was compared with N10's. Besides the run name and the timeout (3,300 minutes), L20 differed from #14's run and N10 in these:
+
+| | #14's run and N10 | L20 | Note |
+|---|---|---|---|
+| Steps | 10,000 | 20,000 | The question |
+| Warmup | 100 steps | 200 steps | The recipe sets the warmup to 1% of the stage's steps (`recipe.curriculum`), so it follows `TABSIL_STEPS` |
+| GPUs | 32 H100 (4 nodes) | 8 H100 (1 node) | The batch stays 256: 16 accumulation steps instead of 8 |
+| Micro batch | 1 | 2 | A step has 128 table sizes instead of 256. A table's loss and weight do not depend on the micro batch ("What a larger micro batch changes" below; read from the code, not measured) |
+| Tables | seeds 0 and 1 | seed 0 | The training stream depends on the GPU's rank and the micro batch, so L20 saw other tables than #14's run. The validation set depends on the seed only: L20 and #14's run share their 64 validation tables per task |
+| Training code | dev-v2 01973a5 | dev-v2 aab3d9c | #32's changes, with the default settings (next paragraph) |
+| `tabicl` | `>=2.2`, which installed 2.2.0 (N10's log) | `==2.2.0` | The same version |
+
+- **L20's G against its controls would have held the length, the micro batch and the GPU count together** (plan §7). A clear pass or a clear fail would have read the same either way. Near the threshold on either side, the length could not have been told from the setup without a 10K-step run at micro batch 2.
+
+**Code.** `git diff 01973a5 aab3d9c -- src training/src training/scripts/train.py` is not empty. `src` (the inference package) is unchanged. 20 files under `training/` changed: 4 of the evaluation code (`benchmarks/`, not used in training) and 16 of the training script, the priors and the training loop, from #32. For the default settings, which L20 used, the diff was read:
+
+- `train.py`: the new options (`--prefetch-factor`, `--optimizer`, `--muon-momentum`, `--reference-val-tables`, `--target-train-rows`) are unset by default and then add nothing to the config. The functions that inherit a run's settings act only on a resume.
+- `training/loop.py` and `training/muon.py`: with the default `optimizer="muon"` every parameter stays in the Muon groups and the AdamW step has no group. Validation takes the old path unless the reference set or `target_train_rows` is on. The loader's `prefetch_factor` comes from the config, whose default is the 4 that was fixed before. New and outside the training computation: the attention temperature metrics, the `prior_options` param and the `tabicl_version` tag.
+- `priors/`: `graph_scm_hicard_missing.py` is unchanged. The options added to `graph_scm.py` and its generator (`reject_trivial_prob`, `target_train_rows`, `min_missing_rate`, `correlate_discrete_levels`) are off or at the old value by default, and the default path draws the same random numbers.
+- `training/tests/test_default_behavior.py` compares this prior's batches, the regression borders, the validation batches and a 6-step training run (losses, weights, optimizer state) with values written on 01973a5. It passes on aab3d9c, in the whole suite (`pytest training/tests`: 414 passed, 13 skipped for optional packages or a GPU that the local environment lacks).
+- No unit test runs several GPUs with compilation and TF32 at stage-2 table sizes. The diff changes that path only in the optimizer's group filter above.
+
+**The first 300 steps** (100-step windows; #14's run and N10 give the loss level, on other tables):
+
+| Step | Train loss L20 / #14 / N10 | Classification | Regression | L20 s / step | L20 GPU memory |
+|---|---|---|---|---|---|
+| 100 | 0.1843 / 0.1841 / 0.1850 | 0.304 / 0.306 / 0.307 | 0.0645 / 0.0620 / 0.0631 | 11.18 (with the compilation) | 56.4 GB |
+| 200 | 0.1798 / 0.1857 / 0.1797 | 0.301 / 0.313 / 0.299 | 0.0584 / 0.0584 / 0.0601 | 7.85 | 56.4 GB |
+| 300 | 0.1860 / 0.1792 / 0.1828 | 0.312 / 0.299 / 0.306 | 0.0600 / 0.0589 / 0.0596 | 7.40 | 56.8 GB |
+
+- **The loss is at the controls' level** in both tasks, and no step was skipped.
+- **Speed and memory are those of the timing run** (`8b954553…`: 7.9 s per step and 56.4 GB). The memory is below the 58.7 GB of the check with every table at 10,240 rows. GPU power is 424 W and utilization 89% (310 W and 84-88% for the controls at micro batch 1 on 32 H100).
+- **Data wait:** rank 0 waited 2.6% of the third window and under 0.1% of the first two. `TABSIL_PREFETCH_FACTOR` was left at 4, as in the timing run. With 16 the longest wait was 3 ms per step in a 110-step run ("Data stalls on one node in stage 2" below); that queue size has not run longer than that at stage 2.
+
+**What phase 1A leaves.** The stage-2 prior is answered: `graph_scm_hicard_missing`, without the parts `graph_scm_realism` adds (N10 and R10 above). The stage-2 length is not, because L20 has no verdict. Phase 4 is not run (plan §4, decided 2026-11-28). The v2 candidate stays what 1A has: v1's stage 1 (`stage1-150k`) with 10K steps of stage 2 on this prior, of which #14's run and N10 are the two seeds.
 
 ### Why R10 was slow
 
@@ -395,3 +457,290 @@ GPU smoke, 300 steps each on one 8xH100 node with the settings of the runs (seco
 - PS1 stayed 9% slower than C (1.97 against 1.80 s per step): forward and backward take 12% and 6% longer at the same table sizes. This was not traced further. The node's CPU use is 48% with PS1 and 36% with C.
 
 The smoke and diagnostic runs cost about 13 H100-h (ten 300-step runs).
+
+## GPU cost
+
+Measured on 2026-11-27 with short timing jobs, to redesign phases 2 to 5 of the plan (plan §4, "Cost basis for phases 2 to 5"). No model was trained for a result. Every job is 300 steps of stage 1 or 110 steps of stage 2 on 8 H100, or a one-GPU job of 40 to 2,000 steps, and only its timing is read. Together they used 28.9 H100-h ("Cost of the measurements").
+
+- **Code and settings.** The training code of dev-v2 67c0c94, unchanged, at batch 256 with the speed options of the 0.3 timing runs (`TABSIL_COMPILE=1 TABSIL_TF32=1 TABSIL_MUON_DISTRIBUTED=all TABSIL_NUM_WORKERS=16`) and `TABSIL_RANK_TIMING=1`. Stage 2 starts from `aiden-jeon/tabsil@stage1-150k` on `graph_scm_hicard_missing`, as N10.
+- **Scripts.** `training/scripts/v2_eff/`. `step_probe.py` runs `train.py` in its own process and also times the optimizer step, the clipping, each GPU's data wait and the pauses of Python's garbage collector. `step_breakdown.py` prints the breakdowns below from a run's records.
+- **What is read.** Stage 1: steps 100 to 299, because the first 100 hold the compilation. Stage 2 on 8 H100: steps 20 to 109. A one-GPU run uses batch 32 (stage 1) or batch 8 (stage 2), which gives its GPU the 8 micro batches per step that a GPU has at batch 256 on 8 H100 (stage 1) or on 32 H100 (stage 2).
+- **Sizes.** M is v1's size (221.5M parameters), S is `TABSIL_EMSIZE=192` (125.1M) and XS is `TABSIL_EMSIZE=128` (56.0M).
+- **Units.** GPU-seconds per table is the step time × GPUs / 256. H100-h per 1K steps is the step time × GPUs × 1000 / 3600. Neither holds the start of a run, validation or checkpoints, which add 3-4% in the phase 1B runs (1.85-1.88 s per step over the whole run at a logged 1.80).
+- **The collector change (added 2026-11-27).** Everything above is the code before `TrainConfig.gc_freeze` (PR #40). Four more runs, `tabsil-v2-gcfreeze-*`, measure the change as merged with the same settings: they are in the tables below, in "The collector change as merged" and in "The prior workers' collectors". They used 6.2 H100-h more.
+
+### Runs
+
+Stage 1, prior `graph_scm`. Utilization and power are means over the GPUs during the timed steps. An H100 draws up to 700 W.
+
+| Run | GPUs | Size | Micro batch × accumulation | s / step | GPU-s per table | H100-h per 1K steps | GPU memory | Utilization | Power |
+|---|---|---|---|---|---|---|---|---|---|
+| `tabsil-v2-eff-s1-m-mb4` (`7f3d817711f8474f96b9a69900bd903b`) | 8 | M | 4 × 8 | 1.783 | 0.0557 | 3.96 | 60.9 GB | 85% | 408 W |
+| `tabsil-v2-eff-s1-m-mb4-probe` (`39dbb037c0fc4a86be4d7d37f4354046`), steps 100-199 | 8 | M | 4 × 8 | 1.798 | 0.0562 | 4.00 | 60.9 GB | 85% | 431 W |
+| the same run, steps 200-299, after `gc.freeze()` | 8 | M | 4 × 8 | 1.716 | 0.0536 | 3.81 | | | |
+| `tabsil-v2-gcfreeze-s1-m-mb4` (`7266d80048dc4b4699a6994303b6e373`), with `gc_freeze` (PR #40), steps 101-299 | 8 | M | 4 × 8 | 1.684 | 0.0526 | 3.74 | 60.9 GB | 80% | 453 W |
+| `tabsil-v2-eff-s1-m-mb8` (`f360ede4bdb948d2becb1d4c70accad4`) | 8 | M | 8 × 4 | out of memory | | | 76.6 GiB allocated of 79.2 | | |
+| `tabsil-p0-timing-s` (0.3, `3a846b768b1a4d85a32d273f64847c55`) | 8 | S | 4 × 8 | 1.742 | 0.0544 | 3.87 | 45.2 GB | | |
+| `tabsil-v2-eff-s1-s-mb8` (`9a73d59260054e9d896cd5c94829017d`) | 8 | S | 8 × 4 | out of memory | | | 76.9 GiB allocated of 79.2 | | |
+| `tabsil-v2-eff-s1-xs-mb4` (`f89228d9f1784d2fb24d4d0ea80d8c51`) | 8 | XS | 4 × 8 | 1.485 | 0.0464 | 3.30 | 30.8 GB | 69% | 298 W |
+| `tabsil-v2-eff-s1-xs-mb8` (`60e1cd2dec0140ae81ea56f48fffebbf`) | 8 | XS | 8 × 4 | 1.286 | 0.0402 | 2.86 | 60.3 GB | 80% | 317 W |
+| `tabsil-v2-eff-s1-xs-mb8-pf16` (`2d73b26d771346da8ad742dea737baed`), `TABSIL_PREFETCH_FACTOR=16`, steps 100-199 | 8 | XS | 8 × 4 | 1.179 | 0.0369 | 2.62 | 60.3 GB | 76% | 357 W |
+| the same run, steps 200-299, after `gc.freeze()` | 8 | XS | 8 × 4 | 1.147 | 0.0359 | 2.55 | | | |
+| `tabsil-v2-eff-s1-m-mb4-1gpu` (`a56e5525096d41a88bb34527d9c9516f`) | 1 | M | 4 × 8 (batch 32) | 1.688 | 0.0527 | | 57.5 GB | 59% | 408 W |
+
+Stage 2, size M, prior `graph_scm_hicard_missing`. "Frozen" is the part of a run after `gc.freeze()` (see "Collector pauses").
+
+| Run | GPUs | Micro batch × accumulation | s / step | GPU-s per table | H100-h per 1K steps | GPU memory | Utilization | Power |
+|---|---|---|---|---|---|---|---|---|
+| N10 (phase 1A, `520d88d73cdc4e5ea90cfd27425be00d`) | 32 | 1 × 8 | 3.30 | 0.413 | 29.3 | 31.6 GB | 84% | 314 W |
+| `tabsil-v2-eff-s2-m-mb1` (`bf797ac1f97047ec8a76849336322c02`), steps 20-59 | 8 | 1 × 32 | 9.69 | 0.303 | 21.5 | 30.1 GB | 75% | 346 W |
+| the same run, steps 60-109, frozen | 8 | 1 × 32 | 8.72 | 0.272 | 19.4 | | | |
+| `tabsil-v2-eff-s2-m-mb2` (`8b9545538dbd4bf5b08f1ff4f88072e8`), steps 20-59 | 8 | 2 × 16 | 7.93 | 0.248 | 17.6 | 56.4 GB | 90% | 452 W |
+| the same run, steps 60-109, frozen | 8 | 2 × 16 | 7.25 | 0.227 | 16.1 | | | |
+| `tabsil-v2-eff-s2-m-mb2-pf16` (`adfefd0fcbf54ec9b4bf869a377617ad`), `TABSIL_PREFETCH_FACTOR=16`, frozen from step 20 | 8 | 2 × 16 | 7.36 | 0.230 | 16.3 | 56.4 GB | 94% | 491 W |
+| `tabsil-v2-gcfreeze-s2-m-mb2` (`3bcffc89c2404a6d87ef4e0326f8cbeb`), with `gc_freeze` (PR #40), steps 20-109 | 8 | 2 × 16 | 7.47 | 0.234 | 16.6 | 56.4 GB | 91% | 432 W |
+| `tabsil-v2-eff-s2-m-mb1-1gpu` (`b1272880043645f0a3432e0fbc91accc`) | 1 | 1 × 8 (batch 8) | 1.879 | 0.235 | | 28.1 GB | 82% | 458 W |
+| `tabsil-v2-eff-s2-m-mb2-1gpu` (`92290b3eea294ee6bc89e28df0c924bc`) | 1 | 2 × 4 (batch 8) | 1.484 | 0.186 | | 58.4 GB | 85% | 536 W |
+| `tabsil-v2-gcfreeze-s2-m-mb2-1gpu` (`5ab94259f5774deaa83214a7d469cdd9`), with `gc_freeze` (PR #40), steps 40-299 | 1 | 2 × 4 (batch 8) | 1.442 | 0.180 | | 58.4 GB | 88% | 560 W |
+| `tabsil-v2-gcfreeze-s2-m-mb2-1gpu-prefork` (`7b045296b6684782bb9f2e37a26ec145`), the same with a freeze before the prior workers are forked | 1 | 2 × 4 (batch 8) | 1.471 | 0.184 | | 58.4 GB | 90% | 537 W |
+| `tabsil-v2-eff-s2-xs-mb1-1gpu` (`1d43de23aed3403fa58e8493c5457176`), size XS | 1 | 1 × 8 (batch 8) | 1.632 | 0.204 | | 14.3 GB | 47% | 277 W |
+| `tabsil-v2-eff-s2-xs-mb2-1gpu` (`0d142cbfab9a4eeca93531f39433eb8e`), size XS | 1 | 2 × 4 (batch 8) | 1.180 | 0.147 | | 30.5 GB | 58% | 353 W |
+
+The XS stage-2 runs take their weights from the 300-step run `tabsil-p0-timing-xs`, so only their timing means anything.
+
+The step ranges of the stage-2 rows do not hold the same tables, so two rows compare only over the same steps. Steps 60-109 are 6% lighter than steps 20-59: with `gc_freeze`, where the collector is in the same state in both, they take 7.26 s against 7.75 s. "The collector change as merged" compares runs over the same steps.
+
+Stage 3, size M, one GPU, 150 steps at batch 8 from `aiden-jeon/tabsil@stage2-10k` on `graph_scm_hicard_missing` (steps 40 to 149):
+
+| Run | GPUs | Micro batch × accumulation | s / step | GPU-s per table | GPU memory | Utilization | Power |
+|---|---|---|---|---|---|---|---|
+| `tabsil-v2-eff-s3-m-mb1-1gpu` (`5df481cb6c75457e8de45e82f09d0024`) | 1 | 1 × 8 (batch 8) | 7.25 | 0.906 | 50.1 GB | 78% | 561 W |
+| v1's stage 3 (plan §1, row 11: 2K steps in 9.0 h, older code) | 32 | 1 × 8 | 16.2 | 2.03 | | | |
+
+Memory checks of stage 2 at micro batch 2, one GPU, every table at one row count (`TABSIL_MIN_ROWS` = `TABSIL_MAX_ROWS`), 40 steps:
+
+| Run | Rows | Activation checkpointing | Largest allocation | Largest use seen by the driver |
+|---|---|---|---|---|
+| `tabsil-v2-eff-s2-m-mb2-rows10240-1gpu` (`fb21384235a845ed894a38674aed16f6`) | 10,240 (the largest stage-2 table) | on | 58.7 GB | 68.1 GB |
+| `tabsil-v2-eff-s2-m-mb2-rows2048-1gpu` (`2734a67c0c954e40b146652abbb22ccf`) | 2,048 (the largest table without it) | off | 54.0 GB | 54.7 GB |
+
+`tabsil-v2-eff-s2-m-pertable-1gpu` (`f4c22b5c5627474bb763934e5b9cbb14`) runs stage 2 at batch 1 for 2,000 steps, so that every step is one table. It gives the time of a table by its size ("GPUs per run").
+
+### Where a stage-1 step goes
+
+M on 8 H100 at micro batch 4, in milliseconds per step. Forward is the mean over the GPUs. Backward is that of the GPU that did not wait in the gradient all-reduce, and "waiting" is what the other GPUs' backward holds beyond it.
+
+| Part | M (`39dbb037…`, steps 100-199) | M after `gc.freeze()` (steps 200-299) | XS, micro batch 4 (`f89228d9…`) | XS, micro batch 8 (`60e1cd2d…`) | M on one GPU (`a56e5525…`) |
+|---|---|---|---|---|---|
+| Forward | 500 (27.8%) | 489 | 475 (32.0%) | 295 (22.9%) | 477 |
+| Backward | 1,014 (56.4%) | 1,034 | 705 (47.4%) | 595 (46.3%) | 897 |
+| Waiting for the slowest GPU | 147 (8.2%) | 55 | 179 (12.0%) | 229 (17.8%) | 0 |
+| Optimizer step (Muon, split over the GPUs) | 122 (6.8%) | 115 | | | |
+| Gradient clipping | 6.7 (0.4%) | 5.4 | | | |
+| Per-group norms (rank 0) | 3.0 (0.2%) | 3.5 | | | |
+| Data wait | 1.3 (0.1%) | 1.4 | | | |
+| Other (loss all-reduce, logging) | 5.3 (0.3%) | 12.9 | | | |
+| Optimizer step to other, together | 138 (7.7%) | 139 | 127 (8.5%) | 167 (13.0%) | 314 |
+| Step | 1,798 | 1,716 | 1,486 | 1,286 | 1,688 |
+
+- **Forward and backward are 84% of the step**, the optimizer step 7% and waiting 8%. The data wait is nothing at this size (1.3 ms).
+- **The first M run agrees**: `7f3d8177…` has 495, 1,013, 147 and 128 ms for 1,783.
+- **Muon costs 122 ms a step on 8 H100.** On one GPU, where nothing is split, the optimizer step is 243 ms, and it is 243 ms for XS too (the one-GPU stage-2 runs `92290b3e…` and `1d43de23…`). On 8 H100 XS's optimizer step is 131-137 ms (`2d73b26d…`). So its time is not the Newton-Schulz arithmetic, which shrinks with the size.
+
+### Why a quarter of the parameters costs 83%
+
+XS has 0.25 times M's parameters and 0.29 times its FLOPs, and its step takes 0.83 times as long at the same micro batch (1,486 against 1,783-1,798 ms).
+
+- **The forward takes the same time at both sizes**: 475 against 500 ms, about 60 ms per micro batch.
+- **The forward does not depend on the table either.** On one GPU, where no waiting hides it, the forward of a step is 409 ms + 13 ms per 1M cells + 58 ms per 1K train rows, and the two explain 2% of its variance, over steps of 0.6M to 2.5M cells. The backward is 447 ms + 231 ms per 1M cells + 108 ms per 1K train rows (R² 0.81).
+- So the forward is bound by the cost of issuing its operations, not by the GPU's arithmetic, and a narrower model does not shorten it. This was not profiled: which part of the forward holds the time is not known.
+- **The optimizer step and the rest are also the same** (127 against 128-138 ms).
+- **Only the backward shrinks**, to 0.70 (705 against 1,014 ms).
+- **A larger micro batch spreads the forward's fixed cost.** At micro batch 8, XS's forward is 74 ms per micro batch of 8 tables, against 59 ms for 4 tables. Its step drops by 13% (1,286 ms).
+- **Utilization overstates how full the GPU is.** M shows 85% utilization at 408-431 W of 700, XS 69% at 298 W. The GPU is busy with many short operations.
+
+### Micro batch: what fits and what it saves
+
+Stage 1 (8 H100, batch 256, so the micro batch can be 4, 8, 16 or 32):
+
+| Size | Micro batch 4 | Micro batch 8 | Cheapest setting |
+|---|---|---|---|
+| M | 1.78-1.80 s, 60.9 GB | out of memory | micro batch 4: 3.96-4.00 H100-h per 1K steps |
+| S | 1.74 s, 45.2 GB | out of memory | micro batch 4: 3.87 |
+| XS | 1.49 s, 30.8 GB | 1.29 s, 60.3 GB (16 cannot fit); 1.18 s with `TABSIL_PREFETCH_FACTOR=16` | micro batch 8 with prefetch 16: 2.62 |
+
+- **M and S stay at micro batch 4.** At 8, both fail in the first steps with 76.6-76.9 GiB allocated.
+- **XS at its cheapest setting is 0.66 of M's cost per step** (2.62 against 3.98), against 0.83 at micro batch 4 and a FLOPs ratio of 0.29.
+- **XS at micro batch 8 outruns the data loader.** In 14 of 100 classification steps one GPU waits for its tables (1.6 s on average, up to 4.0 s) and the other seven wait for it. Rank 0's `data_wait_frac` shows 0.1%. A micro batch of 8 tables takes a prior worker twice as long to build, and the loader hands micro batches over in order. With `TABSIL_PREFETCH_FACTOR=16` the stalls are gone (the longest data wait among the GPUs is 1 ms per step) and the step is 1.18 s instead of 1.29.
+
+Stage 2 (M, micro batch 1 against 2):
+
+| | Micro batch 1 | Micro batch 2 | Ratio |
+|---|---|---|---|
+| One GPU, forward + backward per table | 203 ms | 152 ms | 0.75 |
+| One GPU, GPU-seconds per table | 0.235 | 0.186 | 0.79 |
+| 8 H100, H100-h per 1K steps | 21.5 | 17.6 | 0.82 |
+| 8 H100, after `gc.freeze()` | 19.4 | 16.1 | 0.83 |
+| GPU memory | 30.1-31.6 GB | 56.4-58.7 GB | |
+
+- **Micro batch 2 fits and saves 17-21%.** Its largest allocation is 58.7 GB with every table at 10,240 rows, and 54.0 GB at 2,048 rows, the largest table without activation checkpointing. The feature count of these tables is drawn from 1-100 and the 160 micro batches of each check include draws near 100. N10's largest over 10K steps was 31.6 GB at micro batch 1, so about 60 GB is expected over a full run. An H100 has 85 GB (79.2 GiB).
+- **Micro batch 4 does not fit** at v1's size (twice 58.7 GB).
+- **The cheapest stage-2 setting measured** is micro batch 2 with `TABSIL_PREFETCH_FACTOR=16` and the collector frozen: 7.36 s per step, 16.3 H100-h per 1K steps (`adfefd0f…`), against 29.3 for N10's setup. 12% of that step is still waiting for the slowest GPU (889 ms), now from the table sizes alone.
+- **XS in stage 2 costs 0.87 of M at micro batch 1 and 0.79 at micro batch 2** (0.204 against 0.235 and 0.147 against 0.186 GPU-seconds per table on one GPU), with a FLOPs ratio of 0.37 at these table sizes. At micro batch 1 its forward is as long as M's (501 against 535 ms per 8 tables) and its backward 0.76 (827 against 1,092 ms). XS uses 30.5 GB at micro batch 2, so micro batch 4 would fit. It was not run.
+
+### Collector pauses
+
+Python's garbage collector stops each GPU's process for a full collection at intervals. The other GPUs then wait in the gradient all-reduce.
+
+| | Stage 1, M, 8 H100 | Stage 2, M, micro batch 1, 8 H100 | Stage 2, M, micro batch 2, 8 H100 |
+|---|---|---|---|
+| Length of a full collection, mean (longest) | 0.69 s (0.80) | 1.16 s (1.33) | 0.94 s (1.25) |
+| Micro batches of one GPU between two | 267 | 177 | 135 |
+| Tracked objects per process | 1.2-1.4M | 2.0-2.1M | 1.6-1.7M |
+| Steps in which a GPU pauses for more than 0.3 s | 18% | 82% | 68% |
+| s / step as the code is → after `gc.freeze()`, the two halves of one run | 1.798 → 1.716 (−4.6%) | 9.69 → 8.72 (−10.0%) | 7.93 → 7.25 (−8.6%) |
+
+- **What is collected is not garbage.** The collector walks the objects that live for the whole run: the model, the optimizer state and the compiled graphs. `gc.freeze()` moves the objects that exist at that point out of its reach. The probe calls it once, at step 200 (stage 1) or 60 (stage 2), and the two halves of the run are compared.
+- **The stage-1 pauses are regular**: each GPU pauses about every 34 steps, and the forward of the paused GPU is 0.65 s longer in that step (`7f3d8177…`, steps 100-299).
+- **The stage-2 numbers are less exact.** The two halves of a run see different tables, and a 10-step window varies by ±1 s. The micro-batch-1 run also has data stalls in both halves (next section). The waiting itself falls from 2,016 to 1,054 ms (micro batch 1) and from 1,602 to 911 ms (micro batch 2).
+- **(2026-11-27) The stage-2 numbers were too large.** Over the same steps the change gives 2.3% at micro batch 2, not 8.6%: the second half of the run has lighter tables (next section). Micro batch 1 was not measured again.
+- **Stage 2 needs more than one freeze.** After the freeze, full collections go on over the objects made since (0.17-0.23 s each, 4% of steps above 0.3 s), because stage 2 keeps compiling for new table sizes. Freezing again at every log step was not measured here. It removes most of them and does not change the step time (next section).
+- **The training result does not depend on the collector.**
+- **A run on more GPUs loses more**, because a pause on any GPU stops all of them and each GPU has fewer micro batches per step. The estimates are in "GPUs per run". This holds where the GPUs finish a step together, as in stage 1. In stage 2 most pauses fall on a GPU that waits for another anyway (next section).
+
+### The collector change as merged
+
+`TrainConfig.gc_freeze` (PR #40, 2026-11-27, on by default): every GPU's process calls `gc.collect()` and `gc.freeze()` at each log step, right after the loss all-reduce, where all GPUs meet. Two timing runs repeat the runs above with it. Seed and settings are the same, so every step has the same tables as in the earlier run: the cells per GPU and step are identical. Stage 1 logs every 100 steps and stage 2 every 10, as the earlier runs did. The times are from the probe's clock on rank 0. "±" is the standard error of the mean difference over the steps.
+
+| | Stage 1, M, 8 H100 | Stage 2, M, micro batch 2, 8 H100 |
+|---|---|---|
+| Run with the change | `tabsil-v2-gcfreeze-s1-m-mb4` (`7266d80048dc4b4699a6994303b6e373`) | `tabsil-v2-gcfreeze-s2-m-mb2` (`3bcffc89c2404a6d87ef4e0326f8cbeb`) |
+| Earlier run | `39dbb037…`, frozen by the probe at step 200 | `8b954553…`, frozen by the probe at step 60 |
+| Steps where the earlier run is not frozen | 101-199 | 20-59 |
+| s / step on these, as the code was → with the change | 1.797 → 1.677 (−6.7% ± 1.5) | 7.93 → 7.75 (−2.3% ± 0.8) |
+| Waiting for the slowest GPU on these | 145 → 50 ms | 1,602 → 1,294 ms |
+| Steps on these in which a GPU pauses for more than 0.3 s | 18% → 0% | 68% → 5% |
+| Collector pauses per step on these, the longest of the GPUs | 135 → 7 ms | 669 → 83 ms |
+| Steps where the earlier run is frozen once | 201-299 | 61-109 |
+| s / step on these, one freeze → with the change | 1.707 → 1.690 (−1.0% ± 0.4) | 7.24 → 7.26 (+0.3% ± 0.3) |
+| s / step over all timed steps with the change | 1.684 (steps 101-299) | 7.47 (steps 20-109) |
+| The loop's first collection and freeze, on all GPUs at once | 0.6-0.8 s | 0.8-0.9 s |
+| The later ones | 2 ms | 1-3 ms, and 24-51 ms after a compilation |
+| Frozen objects per GPU after the first freeze → after the last | 1.20-1.39M → 1.20-1.39M | 1.53-1.71M → 1.63-1.76M |
+| Largest GPU allocation | 60.9 GB, as before | 56.4 GB, as before |
+
+- **Stage 1 gains 6.7%.** The first measurement had 4.6% from the two halves of one run: its second half has tables that are 0.8% heavier and holds the probe's own pass. Where both runs are frozen (steps 201-299) the new run is 1.0% faster, so about one point of the 6.7 may be the difference between two runs.
+- **Stage 2 gains 2.3%, not 8.6%.** The first measurement compared steps 20-59 with steps 60-109 of one run, and the later steps are lighter. With the change, where the collector is in the same state in both, they take 7.26 s against 7.75 s (6% less). On the same steps the gain is 180 ms of 7,927.
+- **Why stage 2 gains less than its pauses.** The tables of the GPUs differ in stage 2, and at every step most GPUs wait for the one with the most work: 1.3 s of waiting per step is left with the change. A pause on a GPU that would have waited costs nothing. In the earlier run 27 of the steps 20-59 have a pause above 0.3 s, and in 6 of them the paused GPU is the one whose forward is the slowest in the run with the change. In stage 1 every table has 1,024 rows, the GPUs finish together (50 ms of waiting), and a pause delays the step by its whole length.
+- **Freezing again changes nothing that can be measured in stage 2.** On steps 61-109 the run frozen every 10 steps and the run frozen once differ by +0.3% ± 0.3, although the collector's passes above 50 ms fall from 33 to 6 and its pauses from 84 to 51 ms per step (the longest of the GPUs). Compilations are rare after the first steps: nearly all of a GPU's are in its first 10 steps, and 0 to 4 more come in steps 10-109. A run that logs every 100 steps, as the training runs do, is between the two.
+- **The frozen objects do not pile up.** After the first freeze their number changes by at most 272 per freeze in stage 1. In stage 2 it grows by 42,000 to 74,000 on a GPU that has compiled a graph for a new table shape and stays within 200 otherwise. The largest GPU allocation equals the earlier run's at every log step.
+- **Until the first log step nothing is frozen.** In those steps, which hold the compilation, each GPU spends 8-9 s (stage 1, 100 steps) or 12 s (stage 2, 10 steps) in full passes of its own, which the other GPUs may have to wait for. A run pays this once per chunk.
+- **The training result.** Stage 2's logged train loss equals the earlier run's at every log step to within 0.0001, which is the difference between any two of these GPU runs. Stage 1 from scratch has 0.533, 0.346 and 0.294 at steps 100, 200 and 300, where the two earlier runs have 0.534, 0.344, 0.294 and 0.532, 0.349, 0.293. On CPU, where a run repeats exactly, a run with the change and one without have the same losses, weights, optimizer state and schedule bit for bit (`training/tests/test_training_speed.py`), and the fingerprints of 01973a5 pass with the change on (`test_default_behavior.py`).
+- **Where the stage-1 step goes with the change** (steps 101-299, in ms): forward 479, backward 1,027, waiting 51, optimizer step 112, clipping 5, norms 3, data wait 1, other 5. The collector's pauses are 6 ms per GPU and step, nearly all from its young generations.
+- **One GPU.** No GPU waits for another there, and the pauses themselves are what is saved: 28 → 6 ms per step in stage 2 (`92290b3e…` against `5ab94259…`, steps 40-299, 1.484 → 1.442 s). Two one-GPU nodes differ by up to 2% on the same work (next section), so the step times alone do not show it.
+
+### The prior workers' collectors
+
+A prior worker is forked from its GPU's process before the loop's first freeze. It inherits the process's 670,000 tracked objects unfrozen, and every full pass of the worker's own collector walks them. The probe records each worker: its collector's passes, its CPU time and the memory that is its own (`step_probe.py`). With `TABSIL_EFF_PREFORK_FREEZE=1` the probe freezes the GPU's process right before the fork, which the training loop does not do.
+
+| | Stage 1, 8 H100 (`7266d800…`) | Stage 2, 8 H100 (`3bcffc89…`) | Stage 2, one GPU (`5ab94259…`) | Stage 2, one GPU, frozen before the fork (`7b045296…`) |
+|---|---|---|---|---|
+| Workers | 128 | 128 | 16 | 16 |
+| Full passes per worker over the run | 3.0 | 1.0 | 1.0 | 0.1 (classification), 4.0 (regression) |
+| Length of a full pass, mean (longest) | 0.59 s (4.6) | 0.36 s (0.79) | 0.36 s (0.38) | 0.01-0.02 s (0.03) |
+| Share of the workers' CPU time in full passes | 0.7% | 0.2% | 0.3% | below 0.1% |
+| Memory of a worker's own at the end | 292 MB | 421 MB | 720 MB | 574 MB |
+| Data wait per step, mean over the GPUs | 1.4 ms | 33 ms | 0.7 ms | 0.5 ms |
+| s / step | 1.684 | 7.47 | 1.442 | 1.471 |
+
+- **The workers' collectors cost nothing that shows.** A worker makes one to three full passes in a run of 12 to 20 minutes, 0.2-0.7% of its CPU time. The data wait is 1 ms per step in stage 1. In stage 2 on 8 H100 it comes from slow tables ("Data stalls on one node in stage 2"), not from the collector.
+- **Freezing before the fork removes those passes and saves memory, not time.** A worker keeps 146 MB less of its own, which is 2.2 GB per GPU (the node used 20.8 GB instead of 23.0) and would be 18 GB on an 8-H100 node. Such a node uses 7% of its 2.1 TB. The step is 1.471 s against 1.442 s. That 2% is in the forward and backward time measured on the GPU, which a freeze does not touch, so it is the difference between two nodes. The pair was run once.
+- **The pauses before the first log step stay**: 8.8 s per GPU against 9.3 s. Their objects are made by the compilation, after the fork (670,000 → 1.48M objects in the first 10 steps).
+- So the loop does not freeze before the fork.
+
+### Data stalls on one node in stage 2
+
+At micro batch 1 on 8 H100, the longest wait of a GPU for its tables is 1.14 s per step on average (0.89 s after the freeze), and 17% of steps have a wait above 0.3 s. The other GPUs wait for that GPU unless it would have finished early anyway. Rank 0 logs a wait of 0-5%. At micro batch 2 the longest wait is 0.17-0.28 s.
+
+The cause is the one of R10's slowness ("Why R10 was slow" in phase 1A above): the loader hands tables over in request order, and a table is requested 32 micro batches ahead per task. At micro batch 1 on 8 H100 that head start is one step of the task, about 19 s. `graph_scm_hicard_missing` has tables of 10 to 23 s (0.33% of them over 10 s), and a worker builds its four in a row. On 32 H100 the same 32 tables are 4 steps of the task (26 s), and N10 shows little of it (0.3% on rank 0). Micro batch 2 doubles the head start. With `TABSIL_PREFETCH_FACTOR=16` at micro batch 2 the longest data wait among the GPUs is 3 ms per step (`adfefd0f…`).
+
+### GPUs per run
+
+The same work costs more GPU time on more GPUs.
+
+| Stage 2, M, micro batch 1 | GPU-seconds per table | H100-h per 1K steps |
+|---|---|---|
+| 1 GPU | 0.235 | 16.7 |
+| 8 H100 | 0.303 | 21.5 |
+| 32 H100 (N10) | 0.413 | 29.3 |
+
+- **Every GPU waits for the slowest one at every step.** A step ends in the gradient all-reduce, when the GPU with the most work is done. On 32 H100 a GPU has 8 tables per step, and their sizes differ widely between GPUs. On 8 H100 it has 32, which evens out.
+- **A table's time follows from its size.** In the batch-1 run, a table takes 73 ms + 498 ms per 1M cells + 78 ms per 10K rows + 122 ms per (10K rows)², with R² 0.98 and a residual sd of 18 ms over 1,700 tables. The mean is 196 ms, the 99th percentile 626 ms. Tables above 2,048 rows are 51% of the tables and 74% of the time.
+- **Stage 1 loses less to sizes**, since every table has 1,024 rows: after the freeze, waiting is 55 ms of 1,716 (3.2%) on 8 H100.
+- **Stage 3 loses the most.** Its tables have 400 to 60,000 rows. One GPU needs 0.906 GPU-seconds per table, and v1's run on 32 H100 needed 2.03. Stage 3 was not timed on 8 H100. If one node costs 1.3 to 1.5 times the one-GPU time, as in stage 2 (1.29), it is 85 to 100 H100-h per 1K steps against 144.
+
+Estimates for other GPU counts. The simulation draws each GPU's tables (stage 2) or micro batches (stage 1) from the one-GPU records, ends a step with the slowest GPU, and adds the collector pauses at their measured rate and the measured rest of the step. It is scaled to the 8-H100 runs. Against the other measurements it gives 8.21 s for 8.55 s (stage 2 on 8 H100 without its data stalls, −4%), 3.03 s for N10's 3.30 s (−8%) and, for stage 1, 0.71 s for v1's 0.71 s on 32 H100 (older code). These are estimates, not measurements, and probably a few percent low for more than one node.
+
+| | 8 H100 | 16 H100 | 32 H100 |
+|---|---|---|---|
+| Stage 1, M: s / step, as the code is | 1.79 (measured) | about 1.08 | about 0.71 (v1: 0.71) |
+| Stage 1, M: H100-h per 1K steps | 3.98 | about 4.8 | about 6.3 |
+| Stage 1, M, collector frozen: s / step | 1.72 (measured) | about 0.98 | about 0.60 |
+| Stage 1, M, collector frozen: H100-h per 1K steps | 3.81 | about 4.4 | about 5.3 |
+| Stage 2, M, micro batch 1: s / step, as the code is | 9.69 (measured, with 1.1 s of data stalls) | about 5.5 | 3.30 (measured) |
+| Stage 2, M, micro batch 1: H100-h per 1K steps | 21.5 | about 24 | 29.3 |
+| Stage 2, simulated, collector frozen: H100-h per 1K steps | 17.2 | 19.5 | 23.6 |
+| Stage 2, simulated, collector frozen and equal work per GPU: H100-h per 1K steps | 15.1 | 15.6 | 16.6 |
+
+"Equal work per GPU" gives every GPU of a step the same predicted time, as a change to the prior's table sizes would (see "Changes that need code"). It was not run.
+
+(2026-11-27) The collector change as merged measures 1.68 s per step and 3.74 H100-h per 1K steps in stage 1 on 8 H100, where the "collector frozen" rows have 1.72 and 3.81 from one freeze. The rows for 16 and 32 H100 and all "collector frozen" rows of stage 2 rest on the first measurement and were not made again. For stage 2 they are probably too low: over the same tables the change gives 2.3% at micro batch 2 on 8 H100, where the first measurement had 9 to 10% ("The collector change as merged").
+
+### What a larger micro batch changes
+
+From the code (`tabsil_train.priors.graph_scm`, `priors.pipeline`, `training.loop`, `training.data`, `tabsil.models.column_row_transformer`). The batch stays 256, so a larger micro batch means fewer accumulation steps.
+
+- **Fewer table sizes per step.** The prior draws the rows, the train-row share and the feature count once per micro batch (`GraphSCMPrior.sample_batch`), and then each table on its own (its graph, class count and missing values). At batch 256 a step has 64 sizes at micro batch 4 and 32 at 8 (stage 1), 256 at micro batch 1 and 128 at 2 (stage 2). The size distribution of a table is unchanged. The gradient of a step averages over fewer sizes, which is the one statistical difference.
+- **No padding and no shared statistics.** The tables of a micro batch have the same size, so nothing is padded. The model standardizes each table with its own train rows, attention stays inside a table, and there is no dropout or batch norm. A table's loss does not depend on the other tables of its micro batch.
+- **The same weights.** The loss is the mean over the eval rows of a micro batch, whose tables have equal row counts. Each micro batch's loss is divided by the accumulation count and DDP averages the GPUs, so every table has weight 1/256 at any micro batch. Clipping, the non-finite check and the optimizer see the gradient of the whole batch.
+- **Other tables.** The prior's random stream is used per micro batch, and its seed holds the GPU's rank. A run at another micro batch or GPU count sees other tables at the same seed. Such runs compare as draws from one prior, not table by table.
+- **The data loader's head start** is counted in micro batches, and a worker builds a micro batch in one piece. See the stalls above.
+- **Memory** grows with the micro batch. Activation checkpointing depends on the row count only.
+
+### Stage 3 by table size
+
+No run. v1 (stage 3, 2K steps) against `stage2-10k` on the 0.6 baselines, by the training rows of a dataset:
+
+| Training rows | TabArena 3-split | Development suite |
+|---|---|---|
+| all | 1.0000 (0.9988-1.0013), 51 datasets | 0.9991 (0.9969-1.0010), 48 |
+| at most 2,500 | 0.9998 (0.9982-1.0014), 19 | 0.9973 (0.9940-1.0000), 26 |
+| 2,500 to 10,000 | 1.0011 (0.9990-1.0037), 17 | 1.0011 (0.9989-1.0037), 22 |
+| above 10,000 | 0.9990 (0.9970-1.0011), 15 | none: the largest has 9,000 |
+| above 10,000, regression | 0.9977 (0.9949-1.0001), 5 | |
+| above 20,000, regression | 0.9961 (0.9927-0.9998), 3 | |
+| above 50,000 | 1.0003 (0.9965-1.0058), 4 | |
+
+Stage 3 trains on tables of up to 60,000 rows. On the 15 TabArena datasets above 10K training rows it changes the error by 0.1%, within the CI. The only CI below 1 is that of 3 regression datasets (diamonds 0.993, physiochemical_protein 0.996, Food_Delivery_Time 1.000). This is below the noise between two stage-2 runs (ν 0.003, phase 1A).
+
+### Changes that need code
+
+The first is made: `TrainConfig.gc_freeze`, PR #40, merged on 2026-11-27 (plan §7 and §8). The others are proposals with what the measurements above say they would give.
+
+| Change | Where | Expected effect | Evidence |
+|---|---|---|---|
+| **Made.** `gc.collect()` and `gc.freeze()` on every GPU at every log step, the first one after the first log window | `tabsil_train.training.loop` (`TrainConfig.gc_freeze`, on by default; `TABSIL_GC_FREEZE=0` turns it off) | stage 1 on 8 H100 −6.7%, stage 2 on 8 H100 at micro batch 2 −2.3%, over the same tables. Results are unchanged | measured as merged ("The collector change as merged"). The first measurement, one freeze by the probe (`TABSIL_EFF_GC=freeze:<step>`), had −4.6% and −9 to −10% from the two halves of a run. The estimates for 32 H100, about −15% (stage 1) and −12% (stage 2), rest on it and were not made again |
+| Equal work per GPU in a step: the step's table sizes drawn from one stream that all GPUs share and dealt out by predicted time | the prior's size draw (`GraphSCMPrior.sample_shape`) and `tabsil_train.training.data` | stage 2: the waiting that is left after the freeze, 12-13% of the step on 8 H100 and about 30% on 32 H100. With the freeze, 32 H100 would cost about 17-20 H100-h per 1K steps instead of 29.3 | simulation only. It changes which tables a run sees, not their distribution |
+| The largest data wait over the GPUs as a logged metric | `tabsil_train.training.loop` | none on speed. A stall of 1 s per step shows as 0% today | "Data stalls" above |
+| A profile of the forward | — | unknown, at most the forward's share (28-32% of a stage-1 step) | the forward takes 60 ms per micro batch at any width and feature count |
+| A freeze before the prior workers are forked | `tabsil_train.training.loop` | none on the step time. 146 MB less memory per worker | measured on one GPU through the probe ("The prior workers' collectors"). Not made |
+
+Two settings need no code: one node per run where the wall time allows it, and `TABSIL_PREFETCH_FACTOR=16` on one node in stage 2 and for XS at micro batch 8.
+
+### Cost of the measurements
+
+28.9 H100-h in 21 jobs, within the 40 that were set: 25.9 on one 8xH100 node (11 jobs, one at a time) and 3.0 on one-GPU nodes (10 jobs). The four runs of the collector change added 6.2 H100-h on 2026-11-27: 5.7 on one 8xH100 node (stage 1 and stage 2, one after the other) and 0.5 on two one-GPU nodes.
+
+- 1.6 H100-h gave nothing: a one-GPU job that hung (0.4, see below) and the first 8-H100 run with the probe, which was stopped after 9 minutes because the probe did not yet upload its records (1.2). The two out-of-memory checks (2.0) were meant to fail.
+- **A one-GPU stage-1 run from scratch needs `OMP_NUM_THREADS=1`.** torchrun sets it only for more than one process. Without it the process pool that draws the regression borders hangs (`tabsil-v2-eff-s1-m-mb4-1gpu`, first try, stopped after 23 minutes at 4% CPU). `timing.yaml` notes it.
+- **Not measured**: any run on 16 or 32 H100 (one node at a time was allowed), stage 3 on 8 H100, S with the probe, and micro batch 4 for XS in stage 2.

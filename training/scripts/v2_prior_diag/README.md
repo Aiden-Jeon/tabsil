@@ -8,7 +8,7 @@ Small synthetic checks of the v1 weights that decide what the v2 training prior 
 | `d2_calibration.py` | Is the predictive distribution calibrated when y is independent of x (the v1 prior drops unpredictable datasets)? NLL against the true density, a KDE of the train targets and a predictable control |
 | `d3_contamination.py` | How does `TabSilUnsupervised`'s outlier score change with 0-20% outliers in the context, per outlier kind (global, local, cluster, curve), against IsolationForest? |
 
-They need `tabsil.forecast` and `tabsil.unsupervised` (main, #17 and #19) and the 0.1.1 inference code. On dev-v2 they run only after main is merged in. The weights are pinned by `DIAG_MODEL` (default `aiden-jeon/tabsil@v1.1`), and the model is loaded once per diagnostic. The reported numbers used main f5b26a7. Run them on AI Runtime (1x H100, about 4 minutes), not locally:
+They need `tabsil.tasks.forecast` and `tabsil.tasks.unsupervised` (main, #17 and #19) and the 0.1.1 inference code. On dev-v2 they run only after main is merged in. The weights are pinned by `DIAG_MODEL` (default `aiden-jeon/tabsil@v1.1`), and the model is loaded once per diagnostic. The reported numbers used main f5b26a7. Run them on AI Runtime (1x H100, about 4 minutes), not locally:
 
 ```bash
 databricks air run -f training/scripts/v2_prior_diag/diag.yaml \

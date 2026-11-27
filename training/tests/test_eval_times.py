@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from train_helpers import load_script
 
-from tabsil_train.benchmarks import amlb, arena
+from tabsil_train.benchmarks.tabular import amlb, arena
 
 SIZES = pd.DataFrame(
     {"num_instances_train": [1000.0, 2000.0, 500.0], "num_instances_test": [100.0, 400.0, 50.0]},
@@ -273,7 +273,7 @@ def test_amlb_rows_record_fit_and_prediction_time():
 
 
 def test_amlb_fit_rows_follow_subsampling():
-    from tabsil.inference.subsample import SubsampledEstimator
+    from tabsil_train.benchmarks.tabular.subsample import SubsampledEstimator
 
     make = lambda t: SubsampledEstimator(_Mean(), 12, stratify=False)  # noqa: E731
     rows = amlb.evaluate_task(_task(), make, n_folds=1)

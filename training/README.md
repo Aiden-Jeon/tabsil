@@ -6,27 +6,72 @@ Training, the synthetic-data prior, and the benchmark evaluation of [TabSil](../
 |---|---|
 | `src/tabsil_train/priors/` | the TabICLv2 graph SCM prior (`tabicl` package), table size rules, transforms; `graph_scm_hicard_missing` adds high-cardinality categorical columns and structured missing values, and `graph_scm_realism` adds Kumo-Tabular's other realism parts on top; `graph_scm_base_realism` has only Kumo-Tabular's every-stage parts (`--prior-type`) |
 | `src/tabsil_train/training/` | training config (`TrainConfig`), the training loop, Muon (and Muon + AdamW), the reference validation set, losses, stability, diagnostics |
-| `src/tabsil_train/benchmarks/` | AMLB / CTR23, TabArena, BeyondArena, uncertainty metrics |
+| `src/tabsil_train/benchmarks/` | the benchmarks, one folder per task: `tabular/` (AMLB / CTR23, TabArena, BeyondArena, uncertainty metrics), `forecast/` (fev-bench), `unsupervised/` (ADBench, imputation), `causal/` (IHDP, ACIC 2016) |
 | `src/tabsil_train/recipe.py` | the TabICLv2 three-stage curriculum (`curriculum(stage)`) |
-| `src/tabsil_train/hub.py` | MLflow run checkpoints (`runs:/...`) and the model structure in run params |
+| `src/tabsil_train/hub.py` | `load_model` for the scripts (a Hub repo `hf://...`, a `save_pretrained` folder, a checkpoint file or an MLflow run checkpoint `runs:/...`) and the model structure in run params |
+| `src/tabsil_train/benchmarks/tabular/subsample.py` | `SubsampledEstimator`: at most N training rows per fit, for context-length experiments (`eval.py --subsample-train-rows`) |
 | `scripts/` | `train.py`, `eval.py` and their Databricks AI Runtime job specs (`*.yaml`); `paired_report.py`: the paired per-dataset error ratio of two eval runs (v2 plan §3); `dev_suite_overlap.py`: the AMLB / TabArena overlap behind `--suite dev` |
 | `scripts/v2_prior_diag/` | diagnostics of the v1 weights for the v2 prior (forecast extrapolation, calibration, contaminated context); `attention_temperatures.py`: the learned attention temperatures of saved weights |
+| `scripts/v2_eff/` | step-time measurements for the v2 plan's GPU cost: `step_probe.py` (runs `train.py` and times the optimizer step, each GPU's data wait and the garbage collector), `timing.yaml` (its job spec), `step_breakdown.py` (the step time by part from a run's records) |
 | `docs/` | design notes (`v2-experiment-plan.md`: the v2 experiment plan, with the check of the two notes it replaces; `v2-experiment-results.md`: the results of its runs, by phase; `v2-task-priors.md`: task priors and the diagnostics of the v1 weights; `v2-scaling.md`: model size and the stage-1 records) |
 | `hub/` | `push_to_hub.py`, `sync_hub_card.py`: upload weights from a training run and the model card |
 | `tests/` | training, prior, evaluation and upload tests |
 
+The Databricks job specs upload `src/` and `training/src/` and put them on `PYTHONPATH`; their `environment.dependencies` add what the AI v6 base environment does not have (`tabicl` for training, `openml` for AMLB, `tabarena` for the arenas).
+
+## Environments
+
 From the repository root:
 
 ```bash
-uv sync --package tabsil-train
-uv run --package tabsil-train pytest training/tests
-PYTHONHASHSEED=0 uv run --package tabsil-train python training/scripts/train.py --config-name smoke
-
-# TabArena / BeyondArena (pandas 2.3, without the dev group)
-uv sync --package tabsil-train --no-dev --extra arena --group arena-dev
+uv sync --all-packages                                # tabsil + tabsil-train + dev tools
+uv run pytest tests                                   # inference tests
+uv run --package tabsil-train pytest training/tests   # training, prior and evaluation tests
 ```
 
-The Databricks job specs upload `src/` and `training/src/` and put them on `PYTHONPATH`; their `environment.dependencies` add what the AI v6 base environment does not have (`tabicl` for training, `openml` for AMLB, `tabarena` for the arenas).
+A suite with an extra in the [Evaluation](#evaluation) table needs it: `uv sync --package tabsil-train --extra causal`, `uv sync --all-packages --extra impute`. The `arena` and `fev` extras need pandas 2.3 and `huggingface-hub<2`, which the dev tools do not allow, so they go without them: `uv sync --package tabsil-train --no-dev --extra arena --group arena-dev` (or `--extra fev`). Each `uv sync` removes what that command does not install.
+
+## Training
+
+Synthetic tables come from the TabICLv2 graph SCM prior (`tabicl` package) with at most 100 features. Training follows the TabICLv2 three-stage curriculum, with Muon on every parameter, batch 256 on 32 GPUs, and 1% warmup then cosine decay in each stage:
+
+| Stage | Rows per table (train share) | Steps | Peak lr | Starts from |
+|---|---|---|---|---|
+| 1 | 1,024 (30–90%) | 250K | 8e-4 | scratch |
+| 2 | 400–10,240 (80%) | 20K | 1e-4 | stage 1 weights |
+| 3 | 400–60,000 (80%) | 5K | 2e-5 | stage 2 weights |
+
+The published v1 weights were trained with shorter stages, 150K / 10K / 2K steps (`--steps`; warmup and cosine follow the stage length): a separate 250K stage-1 run, measured up to 225K, did no better than 150K on TabArena-Lite (measured with `training/scripts/eval.py`, without bagging). Their intermediate stages are branches of the Hub repo (`stage1-150k`, `stage2-10k`).
+
+How v1 was trained (the stage table it used with grad clip, what differs from the TabICLv2 scripts, compute, validation loss, weight hashes and the scores of each stage) is in the model card's [Training](https://huggingface.co/aiden-jeon/tabsil#training) and [Intermediate checkpoints](https://huggingface.co/aiden-jeon/tabsil#intermediate-checkpoints) sections (source: [`hub/tabsil/README.md`](hub/tabsil/README.md)).
+
+```bash
+# local check (CPU, about a minute)
+PYTHONHASHSEED=0 uv run --package tabsil-train python training/scripts/train.py --config-name smoke
+
+# full training: Databricks AI Runtime job specs in training/scripts/train.yaml
+uv run --package tabsil-train python training/scripts/train.py --config-name stage1
+uv run --package tabsil-train python training/scripts/train.py --config-name stage2 --init-run-id <stage 1 run>
+uv run --package tabsil-train python training/scripts/train.py --config-name stage3 --init-run-id <stage 2 run>
+
+# the v1 weights: the same stages with --steps 150000 / 10000 / 2000
+```
+
+Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a set of strings, so its tables depend on the hash seed.
+
+## Evaluation
+
+`scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model; its module docstring describes every suite, its options and what it needs. The arena suites fit each split once without bagging, a quick check for comparing checkpoints; the official TabArena-Lite result is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The suites and their Databricks AI Runtime job specs (in `scripts/`):
+
+| Suite (`--suite`) | Benchmark | Job spec |
+|---|---|---|
+| `all`, `classification`, `regression` | AMLB (classification / CTR23 regression); `--uncertainty` adds CRPS, coverage, PIT and calibration metrics | `eval.yaml` |
+| `dev` | the development suite of the v2 plan: the AMLB tasks without the 9 whose data is also in TabArena-Lite (23 classification, 25 regression) | `eval.yaml` |
+| `tabarena-lite`, `tabarena-3split`, `beyondarena`, `beyondarena-lite` | TabArena-Lite (`tabarena-3split`: the first 3 splits of its 51 datasets) and BeyondArena (the `arena` extra) | `eval_arena.yaml` |
+| `fev` | forecasting on 10 fev-bench tasks (the `fev` extra) | `eval_fev.yaml` |
+| `adbench` | unsupervised outlier detection on 12 ADBench tables | `eval.yaml` |
+| `causal` | treatment effects on IHDP and ACIC 2016 (the `causal` extra, for the EconML baselines) | `eval_causal.yaml` |
+| `impute` | missing value imputation on 10 OpenML tables (the `impute` extra) | `eval_impute.yaml` |
 
 ## v2 recipe options
 
@@ -37,7 +82,7 @@ Options for the stage-1 recipe arms of [`docs/v2-experiment-plan.md`](docs/v2-ex
 | all | `--reference-val-tables 512` | `TABSIL_REFERENCE_VAL_TABLES=512` | a second validation set (`ref_*` metrics) drawn from `graph_scm` with the v1 prior settings and fixed seeds, at the run's table sizes, independent of the run's seed and prior (`training/reference.py`, run tag `reference_val_digest`) |
 | YCTX | `--target-train-rows` | `TABSIL_TARGET_TRAIN_ROWS=1` | the regression target standardized again with the train rows after the prior's clip, as inference does; tables with a train-row sd of at most 0.1 drawn again; the borders follow (`priors/transforms/target.py`) |
 | OPTK | `--optimizer muon_adamw --lr 3e-4 --muon-momentum 0.95` | `TABSIL_OPTIMIZER=muon_adamw`, `TABSIL_LR=3e-4`, `TABSIL_MUON_MOMENTUM=0.95` | Kumo-Tabular's optimizer: Muon on the Linear weights, AdamW on the target encoders, the output, the attention logit scales and the other parameters (`training/muon.py`) |
-| PS1 | `--prior-type graph_scm_base_realism` | `TABSIL_PRIOR_TYPE=graph_scm_base_realism` | warped columns, 2-200 categories, correlated blocks 0.3, structured missing values 0.2, random missing cells in 1% of the tables at 1-8%, too-easy tables drawn again (`priors/graph_scm_base_realism.py`) |
+| PS1 | `--prior-type graph_scm_base_realism` | `TABSIL_PRIOR_TYPE=graph_scm_base_realism` | warped columns, 2-200 categories, correlated blocks 0.3, structured missing values 0.2, random missing cells in 1% of the tables at 1-8%, too-easy tables drawn again (`priors/graph_scm/variants.py`) |
 
 What the reference loss compares: one task's loss on the same tables across seeds, priors and optimizers, a second readout for arms that share a prior. Across priors it also measures each prior's distance to the reference prior. With YCTX the reference regression targets are scaled with the train rows as in that run's training and the loss is mapped back to the set's units, so `ref_loss_regression` compares YCTX with C in those units (not in the train-row units of inference); its `val_*` regression loss is in train-row units on its own prior and does not compare with C's. The classification metrics are not affected by YCTX.
 

@@ -1,5 +1,5 @@
 """Tests for predictive-distribution and uncertainty metrics
-(tabsil_train.benchmarks.uncertainty)."""
+(tabsil_train.benchmarks.tabular.uncertainty)."""
 
 import numpy as np
 import pytest
@@ -7,7 +7,7 @@ import torch
 from scipy import special
 from sklearn.datasets import load_diabetes
 
-from tabsil_train.benchmarks import uncertainty as unc
+from tabsil_train.benchmarks.tabular import uncertainty as unc
 
 
 def _random_histogram(n=5, buckets=12, seed=0):
@@ -262,7 +262,7 @@ def test_classification_metrics_are_nan_when_no_row_is_left():
 def test_regressor_predict_full_matches_predict_and_distribution():
     from train_helpers import tiny_model
 
-    from tabsil.recipe import TabSilRegressor
+    from tabsil.tasks.regression import TabSilRegressor
 
     model = tiny_model()
     x, y = load_diabetes(return_X_y=True)
@@ -282,7 +282,7 @@ def test_regressor_predict_full_matches_predict_and_distribution():
 def test_evaluate_task_adds_uncertainty_columns():
     import pandas as pd
 
-    from tabsil_train.benchmarks.amlb import OpenMLTask, evaluate_task
+    from tabsil_train.benchmarks.tabular.amlb import OpenMLTask, evaluate_task
 
     class Folds:
         def get_train_test_split_indices(self, fold, repeat, sample):

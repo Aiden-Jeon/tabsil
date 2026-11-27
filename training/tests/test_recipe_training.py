@@ -35,6 +35,7 @@ EXPECTED_COMMON = {
     "seed": 0,
     "num_workers": 8,
     "prefetch_factor": 4,
+    "gc_freeze": True,
     "log_every": 100,
     "val_batch": 8,
     "reference_val_tables": 0,
