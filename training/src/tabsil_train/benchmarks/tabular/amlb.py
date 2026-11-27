@@ -9,9 +9,9 @@ cross-validation defined by the OpenML task (90% train, 10% test). Classificatio
 Tables 1 and 2 (baselines tuned for 4 hours, TabPFN at default settings). Only means are copied;
 standard deviations are omitted.
 
-Each fold also gets TabArena's error (`metric_error`, lower is better; `problem_type`), so a run
-can be compared with another in the paired report (`tabsil_train.benchmarks.paired`): 1 - ROC AUC
-for binary tasks, log loss for multiclass tasks, RMSE for regression.
+Each fold also gets TabArena's error (`metric_error`, lower is better; `problem_type`), so a run can
+be compared with another in the paired report (`tabsil_train.benchmarks.tabular.paired`): 1 - ROC
+AUC for binary tasks, log loss for multiclass tasks, RMSE for regression.
 
 The development suite (`DEV_SUITE`, the eval script's `--suite dev`) is the 57 tasks without the
 datasets that are also among TabArena's 51 (`TABARENA_OVERLAP`): 23 classification and 25
@@ -890,7 +890,7 @@ def time_medians(rows: list[dict]) -> dict[str, float]:
     prediction seconds per 1K of the dataset's mean fold train / test rows, averaged over each
     dataset's folds, then the median over datasets (`time_train_s_per_1K_median`,
     `time_infer_s_per_1K_median`, as `arena.run_times`). Empty dict without rows."""
-    from tabsil_train.benchmarks.arena import PER_1K_ROWS, per_1k_medians
+    from tabsil_train.benchmarks.tabular.arena import PER_1K_ROWS, per_1k_medians
 
     if not rows:
         return {}
@@ -915,15 +915,15 @@ def evaluate_task(
 ) -> list[dict]:
     """One score per fold (`score_fold`) and TabArena's error (`metric_error`, with
     `problem_type`). With `uncertainty=True`, predictive-distribution and uncertainty
-    metrics (`tabsil_train.benchmarks.uncertainty`) are added to the same row. Regression estimators
-    must provide `predict_full` (mean, bin log-probabilities, borders) or `predict_distribution`
-    (log-probabilities, borders).
+    metrics (`tabsil_train.benchmarks.tabular.uncertainty`) are added to the same row. Regression
+    estimators must provide `predict_full` (mean, bin log-probabilities, borders) or
+    `predict_distribution` (log-probabilities, borders).
 
     Each row also has `TIME_KEYS`: the fold's train and test row counts, the rows `fit` actually
     used (`fit_rows`, fewer with `SubsampledEstimator`), the `fit` time and the prediction time in
     seconds (the one call on the test rows that gives the scored prediction; a regressor's
     `predict_full`, used with `uncertainty`, returns the distribution from the same pass)."""
-    from tabsil_train.benchmarks import uncertainty as unc
+    from tabsil_train.benchmarks.tabular import uncertainty as unc
 
     kind = problem_type(task.task_type, task.y.nunique())
     rows = []

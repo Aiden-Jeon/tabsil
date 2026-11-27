@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import impute as bi
+from tabsil_train.benchmarks.unsupervised import impute as bi
 from tabsil_train.evaluation import impute as impute_run
 from tabsil_train.evaluation import shards
 

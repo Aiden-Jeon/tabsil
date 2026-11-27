@@ -1,12 +1,12 @@
-"""fev-bench forecasting evaluation helpers (`tabsil_train.benchmarks.fevbench`) that need neither
-the fev package nor the data: reference files, frequency seasonality, the Seasonal Naive check,
-Elo and its pools, and the arguments `eval.py --suite fev` hands to the benchmark."""
+"""fev-bench forecasting evaluation helpers (`tabsil_train.benchmarks.forecast.fevbench`) that need
+neither the fev package nor the data: reference files, frequency seasonality, the Seasonal Naive
+check, Elo and its pools, and the arguments `eval.py --suite fev` hands to the benchmark."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import fevbench as fb
+from tabsil_train.benchmarks.forecast import fevbench as fb
 
 
 def _ours(task: str = "ecdc_ili", scale: float = 0.5) -> pd.DataFrame:

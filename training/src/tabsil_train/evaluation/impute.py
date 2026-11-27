@@ -1,6 +1,6 @@
 """`eval.py --suite impute`: missing value imputation with the model and the (table, rate, seed,
-method) grid of the command line (`tabsil_train.benchmarks.impute` is the benchmark: data, masks,
-methods, report).
+method) grid of the command line (`tabsil_train.benchmarks.unsupervised.impute` is the benchmark:
+data, masks, methods, report).
 
 - `impute_grid`: the grid, checked
 - `run_impute`: loads the model, runs the grid in this process or, with `--shards`, as worker
@@ -22,7 +22,8 @@ import mlflow
 import numpy as np
 import pandas as pd
 
-from tabsil_train.benchmarks import _files, impute
+from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks.unsupervised import impute
 from tabsil_train.evaluation.model import suite_model
 from tabsil_train.evaluation.shards import run_shard_queue, shard_devices, strip_flags
 from tabsil_train.hub import download_artifact
@@ -48,8 +49,8 @@ def impute_grid(args: argparse.Namespace):
 
 
 def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
-    """Missing value imputation (`tabsil_train.benchmarks.impute`). Ends with an error if a
-    (table, rate, seed, method) failed."""
+    """Missing value imputation (`tabsil_train.benchmarks.unsupervised.impute`). Ends with an error
+    if a (table, rate, seed, method) failed."""
     datasets, rates, seeds, methods = impute_grid(args)
     imputers: dict = dict(impute.CPU_IMPUTERS)
     opts = {
@@ -114,7 +115,7 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
 
 
 # thread count variables of the numeric libraries a worker uses (torch reads OMP_NUM_THREADS;
-# TABSIL_IMPUTE_N_JOBS is MissForest's n_jobs, `tabsil_train.benchmarks.impute.n_jobs`)
+# TABSIL_IMPUTE_N_JOBS is MissForest's n_jobs, `tabsil_train.benchmarks.unsupervised.impute.n_jobs`)
 WORKER_THREAD_VARIABLES = (
     "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "TABSIL_IMPUTE_N_JOBS",
 )  # fmt: skip

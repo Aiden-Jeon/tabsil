@@ -1,4 +1,5 @@
-"""Subsampling training rows at inference (`tabsil_train.subsample`, `--subsample-train-rows`)."""
+"""Subsampling training rows at inference (`tabsil_train.benchmarks.tabular.subsample`,
+`--subsample-train-rows`)."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import pytest
 from train_helpers import tiny_model
 
 from tabsil.inference.ensemble import EnsembleClassifier
-from tabsil_train.subsample import SubsampledEstimator, subsample_indices
+from tabsil_train.benchmarks.tabular.subsample import SubsampledEstimator, subsample_indices
 
 
 def _tiny_model():

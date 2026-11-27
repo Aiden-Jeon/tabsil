@@ -28,25 +28,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# TabArena / BeyondArena evaluation (tabsil_train.benchmarks.arena); tabarena and autogluon are
-# pre-releases
+# TabArena / BeyondArena evaluation (tabsil_train.benchmarks.tabular.arena); tabarena and autogluon
+# are pre-releases
 arena = [
     "tabarena[data-foundry]>=0.1.1.dev20261031",
 ]
-# fev-bench forecasting evaluation (tabsil_train.benchmarks.fevbench): the fev package that
+# fev-bench forecasting evaluation (tabsil_train.benchmarks.forecast.fevbench): the fev package that
 # defines the tasks, windows and metrics (it brings `datasets` for the HF data)
 fev = [
     "fev==0.10.0",
 ]
-# treatment effect evaluation (tabsil_train.benchmarks.causal): the EconML baselines run on the
-# same splits (causal forest, GBM-based S/T/X/DR-learners)
+# treatment effect evaluation (tabsil_train.benchmarks.causal.causal): the EconML baselines run on
+# the same splits (causal forest, GBM-based S/T/X/DR-learners)
 causal = [
     "econml==0.17.1",
 ]
-# imputation evaluation (tabsil_train.benchmarks.impute): the official TabPFN extension and
-# TabPFN v2 as baselines, at PriorLabs/tabpfn-extensions a049fd7 (the 0.6.3 release on PyPI writes
-# `impute`'s draws to the CPU table without moving them off the GPU and fails on CUDA; a049fd7 has
-# that fix and is otherwise the same for `TabPFNUnsupervisedModel.impute` and `simple_impute`)
+# imputation evaluation (tabsil_train.benchmarks.unsupervised.impute): the official TabPFN extension
+# and TabPFN v2 as baselines, at PriorLabs/tabpfn-extensions a049fd7 (the 0.6.3 release on PyPI
+# writes `impute`'s draws to the CPU table without moving them off the GPU and fails on CUDA;
+# a049fd7 has that fix and is otherwise the same for `TabPFNUnsupervisedModel.impute` and
+# `simple_impute`)
 impute = [
     "tabpfn-extensions @ git+https://github.com/PriorLabs/tabpfn-extensions@a049fd76afa0593a616156e1008b5482e9c905da",
     "tabpfn==10.2.0",

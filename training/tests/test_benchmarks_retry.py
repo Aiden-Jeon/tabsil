@@ -114,7 +114,7 @@ def test_retry_attempts(waits):
 def test_load_openml_task_retries(monkeypatch, waits):
     import openml
 
-    from tabsil_train.benchmarks import amlb
+    from tabsil_train.benchmarks.tabular import amlb
 
     class Dataset:
         name = "toy"
@@ -143,7 +143,7 @@ def test_load_openml_task_retries(monkeypatch, waits):
 def test_arena_prefetch_tasks_retries_each_task(monkeypatch, waits):
     from types import SimpleNamespace
 
-    from tabsil_train.benchmarks import arena
+    from tabsil_train.benchmarks.tabular import arena
 
     fetched = []
     materialized = []

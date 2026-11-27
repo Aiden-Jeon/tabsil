@@ -1,6 +1,6 @@
 """`eval.py --suite fev`: fev-bench forecasting with the model, tasks and windows of the command
-line (`tabsil_train.benchmarks.fevbench` is the benchmark: tasks, metrics, reference results,
-Elo)."""
+line (`tabsil_train.benchmarks.forecast.fevbench` is the benchmark: tasks, metrics, reference
+results, Elo)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pandas as pd
 
 from tabsil import TabSilForecaster
 from tabsil.recipe import default_inference
-from tabsil_train.benchmarks import fevbench
+from tabsil_train.benchmarks.forecast import fevbench
 from tabsil_train.hub import load_model
 
 # the `--suite` name: the results folder under --out-dir and the MLflow artifact folder
@@ -20,8 +20,8 @@ SUITE = "fev"
 
 
 def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
-    """Forecasting on fev-bench (`tabsil_train.benchmarks.fevbench`): every window of each task,
-    our Seasonal Naive check, the comparison table and the Elo pools."""
+    """Forecasting on fev-bench (`tabsil_train.benchmarks.forecast.fevbench`): every window of each
+    task, our Seasonal Naive check, the comparison table and the Elo pools."""
     if args.regressor_path is None:
         raise SystemExit("--suite fev needs --regressor-path.")
     tasks = [t.strip() for t in args.datasets.split(",") if t.strip()] if args.datasets else None

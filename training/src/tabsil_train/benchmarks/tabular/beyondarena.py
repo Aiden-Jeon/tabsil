@@ -17,7 +17,7 @@ evaluation).
 
 from __future__ import annotations
 
-from tabsil_train.benchmarks.arena import Suite
+from tabsil_train.benchmarks.tabular.arena import Suite
 
 _PUBLIC = (
     "data_beyondarena/subsets/split_{split}/size_{size}/features_{features}/tasks_all/"

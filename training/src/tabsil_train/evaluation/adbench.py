@@ -1,5 +1,6 @@
-"""`eval.py --suite adbench`: ADBench outlier detection with the model, splits and methods of
-the command line (`tabsil_train.benchmarks.adbench` is the benchmark: data, protocol, report).
+"""`eval.py --suite adbench`: ADBench outlier detection with the model, splits and methods of the
+command line (`tabsil_train.benchmarks.unsupervised.adbench` is the benchmark: data, protocol,
+report).
 
 - `run_adbench`: loads the model, runs the (table, split, method) cells in this process or, with
   `--shards`, the TabSil ones as worker processes, writes the report and logs to MLflow
@@ -18,7 +19,8 @@ from pathlib import Path
 import mlflow
 import pandas as pd
 
-from tabsil_train.benchmarks import _files, adbench
+from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks.unsupervised import adbench
 from tabsil_train.evaluation.model import suite_model
 from tabsil_train.evaluation.shards import run_shard_queue, shard_devices, strip_flags
 from tabsil_train.hub import download_artifact
@@ -28,8 +30,9 @@ SUITE = "adbench"
 
 
 def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
-    """ADBench unsupervised outlier detection (`tabsil_train.benchmarks.adbench`). Ends with an
-    error if any (table, split, method) failed, after the others ran and the report was written."""
+    """ADBench unsupervised outlier detection (`tabsil_train.benchmarks.unsupervised.adbench`). Ends
+    with an error if any (table, split, method) failed, after the others ran and the report was
+    written."""
     datasets = list(adbench.DATASETS) if args.datasets is None else args.datasets.split(",")
     splits = args.adbench_splits.split(",")
     methods = adbench.check_methods(args.adbench_methods.split(","))
