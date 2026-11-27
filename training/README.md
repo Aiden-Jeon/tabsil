@@ -13,14 +13,6 @@ Training, the synthetic-data prior, and the benchmark evaluation of [TabSil](../
 | `hub/` | `push_to_hub.py`, `sync_hub_card.py`: upload weights from a training run and the model card |
 | `tests/` | training, prior, evaluation and upload tests |
 
-From the repository root:
-
-```bash
-uv sync --package tabsil-train
-uv run --package tabsil-train pytest training/tests
-PYTHONHASHSEED=0 uv run --package tabsil-train python training/scripts/train.py --config-name smoke
-```
-
 The Databricks job specs upload `src/` and `training/src/` and put them on `PYTHONPATH`; their `environment.dependencies` add what the AI v6 base environment does not have (`tabicl` for training, `openml` for AMLB, `tabarena` for the arenas).
 
 ## Environments
@@ -67,7 +59,7 @@ Set `PYTHONHASHSEED=0` for reproducible data: the `tabicl` prior iterates over a
 
 ## Evaluation
 
-`scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model; its module docstring describes every suite, its options and what it needs. The suites and their Databricks AI Runtime job specs (in `scripts/`):
+`scripts/eval.py` evaluates a checkpoint, MLflow run, or Hub model; its module docstring describes every suite, its options and what it needs. The arena suites fit each split once without bagging, a quick check for comparing checkpoints; the official TabArena-Lite result is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The suites and their Databricks AI Runtime job specs (in `scripts/`):
 
 | Suite (`--suite`) | Benchmark | Job spec |
 |---|---|---|

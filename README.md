@@ -71,7 +71,7 @@ scores = model.outlier_score(X_test)  # = -model.log_density(X_test); higher = m
 
 ### Imputation
 
-(tabsil ≥ 0.1.2) From the same conditionals, one fit per column with a missing value: the predictive mean for numeric cells (`strategy="median"` for the median), the most probable class for categorical ones.
+(tabsil ≥ 0.1.2) From the same conditionals, one fit per column with a missing value: the predictive mean for numeric cells (`strategy="median"` for the median), the most probable class for categorical ones. Without `categorical_features`, columns with at most 40 distinct values and more than 10 rows per value are treated as categorical.
 
 ```python
 model = TabSilUnsupervised(categorical_features=[3, 5], device="cuda").fit(X)  # X with NaN
@@ -145,7 +145,7 @@ cd tabsil
 uv sync --all-packages            # tabsil + tabsil-train + dev tools
 ```
 
-TabSil is trained on synthetic tables from the TabICLv2 graph SCM prior, in the TabICLv2 three-stage curriculum. `training/scripts/eval.py` runs the benchmarks above (AMLB, TabArena-Lite, BeyondArena and the task suites). The stage table, the training and evaluation commands, the job specs and the other environments are in [`training/README.md`](training/README.md).
+TabSil is trained on synthetic tables from the TabICLv2 graph SCM prior, in the TabICLv2 three-stage curriculum. `training/scripts/eval.py` runs AMLB, TabArena-Lite, BeyondArena and the task suites. Its arena suites fit each split once without bagging, a quick check whose Elo is not the official one; the result above comes from TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)). The stage table, the training and evaluation commands, the job specs and the other environments are in [`training/README.md`](training/README.md).
 
 ### Model
 

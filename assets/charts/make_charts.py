@@ -6,8 +6,9 @@
 
 The numbers are read from the Markdown tables of ``README.md`` and ``docs/task-results.md``, which
 stay the single source of truth. Edit the table, then run this script again; ``--check`` reports
-SVGs that no longer match their tables (no CI job runs it). Every chart is written twice,
-``<name>-light.svg`` and ``<name>-dark.svg``, for the README's ``<picture>`` (as the logo is).
+SVGs that no longer match their tables (``tests/test_readme_charts.py`` runs it). Every chart is
+written twice, ``<name>-light.svg`` and ``<name>-dark.svg``, for the README's ``<picture>`` (as the
+logo is).
 
 TabSil is the accent color (the logo's thread) and every other method is gray: one series is the
 point, the rest is context. Text is live (a system sans stack) so the SVGs carry no font files; the
