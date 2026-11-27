@@ -159,6 +159,186 @@ Paired comparisons (G (95% CI), p, better / worse). "Pooled" puts the 51 + 48 = 
 
 **Phase 1A.** The development suite does not confirm #14's prior gain. N10 and R10 should be judged on the pooled report, not on TabArena alone.
 
+## Phase 1A
+
+Stage 2 (10K steps) from `aiden-jeon/tabsil@stage1-150k` on 32 H100, with the training code of dev-v2 01973a5. N10, R10 and #14's run have the same settings and differ in the prior and the seed. N10 ran on 2026-11-26, and R10 from 2026-11-26 to 2026-11-27.
+
+### Runs
+
+| Run | Prior | Seed | MLflow run | Steps | Wall time | H100-h | s / step |
+|---|---|---|---|---|---|---|---|
+| N10 `tabsil-v2-s2-n10` | `graph_scm_hicard_missing` | 1 | `520d88d73cdc4e5ea90cfd27425be00d` | 10,000 | 9.54 h | 305 | 3.30 |
+| R10 `tabsil-v2-s2-r10` | `graph_scm_realism` | 0 | `b9396104c0664d4e859318f0518a6052` | 10,000 | 14.07 h | 450 | 4.95 |
+| #14 `tabsil-v2prior-stage2-10k` (control, not rerun) | `graph_scm_hicard_missing` | 0 | `277916ec05a3457aa6d07f2bc08a60c4` | 10,000 | 9.56 h | 306 | 3.31 |
+
+No run skipped a step or rewound. The s / step column is the mean of the 100-step windows after the first, which holds the compilation. Each run's `model/final.pt` is evaluated, as for the controls (not `final_avg.pt`), with the settings of the phase 0 baselines (`--member-kinds numeric-cycle --categories counts`, 8 members). Every evaluation has 0% imputed splits and no failed fold.
+
+| Weights | TabArena-Lite (51 splits) | Elo | TabArena 3-split | Elo | Development suite |
+|---|---|---|---|---|---|
+| N10 | `tabsil-p1a-n10-lite` (`e2ff88f0c3644705a5a57b73f73cd35c`) | 1788.3 | `tabsil-p1a-n10-3split` (`a739a72f383c4bc984a232c51a1350ac`) | 1786.9 | `tabsil-p1a-n10-dev` (`04971d6a2a9645e6b3530e02da407cf0`) |
+| R10 | `tabsil-p1a-r10-lite` (`987892ced69c4889b4f063c329d11958`) | 1747.4 | `tabsil-p1a-r10-3split` (`37ef2499dfe54a46bd1b3ecb1b04507d`) | 1757.9 | `tabsil-p1a-r10-dev` (`c8e2eb5f9ea14d4589848b6b12c7c167`) |
+| `stage2-10k` (control) | `tabsil-v011-stage2-arena` (`a8b69941c69844b5a277a5fe55d77815`) | 1762.4 | `fa88e6df…` | 1769.4 | `799d9184…` |
+| #14 (control) | `7cc31c48…` | 1807.6 | `facabb77…` | 1804.2 | `f12907e6…` |
+
+Checks on the per-split errors:
+- TabArena-Lite's 51 splits are split 0 of the 3-split suite (0.5). The Lite runs of N10 and R10 and split 0 of their 3-split runs also have identical errors on all 51. So the Lite rows below are a subset of the 3-split rows, not independent evidence.
+- `a8b69941…` and `7cc31c48…` were run before the applied inference settings were logged, and `a8b69941…` before `--categories counts` was passed explicitly. Both are identical to split 0 of their 3-split runs (`fa88e6df…`, `facabb77…`), which log the settings, so they were evaluated the same way.
+- N10's arena runs used 1 H100 with one shard, because the 8xH100 nodes were taken. The shard count does not change the result: v1's Lite run with one shard (`138151a2…`) is identical on all 51 splits to split 0 of its 8-shard 3-split run (`98c91ea0…`).
+
+### N10: #14's gain repeats, on a few datasets
+
+N10 against `stage2-10k` (G (95% CI), Wilcoxon p, classification / regression, datasets better / worse):
+
+| Suite | G (95% CI) | p | Classification / regression | Better / worse | Elo |
+|---|---|---|---|---|---|
+| TabArena-Lite (51 splits) | 0.992 (0.977-1.000) | 0.35 | 0.989 / 1.002 | 29 / 22 | 1762 → 1788 |
+| TabArena 3-split | 0.990 (0.968-1.001) | 0.67 | 0.986 / 1.000 | 26 / 25 | 1769 → 1787 |
+| Development suite | 0.991 (0.980-1.000) | 0.84 | 0.988 / 0.994 | 22 / 26 | |
+| Pooled (99 datasets) | 0.990 (0.978-0.999) | 0.65 | 0.987 / 0.996 | 48 / 51 | |
+
+The four datasets named in advance, N10 / `stage2-10k`:
+
+| | polish_companies_bankruptcy | anneal | kddcup09_appetency | Amazon_employee_access | Mean | G without the four |
+|---|---|---|---|---|---|---|
+| TabArena-Lite | 0.739 | 0.979 | 0.972 | 1.002 | 0.923 | 0.999 |
+| TabArena 3-split | 0.611 | 0.992 | 0.967 | 0.998 | 0.892 | 1.000 |
+
+**Verdict: #14's gain repeats by the plan's criterion.** On the 51 splits, G is 0.992 (at most 0.995) and the four named datasets have a mean ratio of 0.923 (at most 0.97). What the other suites add:
+- **The gain is a few datasets, not a shift of all of them.** Without the four named datasets, G on TabArena is 0.999 to 1.000. The pooled median ratio is 1.000, and as many datasets get worse as better (48 / 51, p 0.65). 11 datasets improve by more than 1% and 7 get worse by more than 1%.
+- **polish_companies_bankruptcy repeats in both seeds** (0.58 for #14 and 0.61 for N10 on 3 splits). Without it, the pooled G of N10 is 0.995.
+- **On the development suite, N10 is 0.991 where #14 was 1.000.** N10's gain there comes from five datasets (car 0.83, socmob 0.90, Satellite 0.93, kr-vs-kp 0.94, auction_verification 0.94). The difference between the two seeds on this suite is as large as the effect (next section).
+
+### ν: the noise between two stage-2 runs
+
+N10 against #14's run: the same prior, the same stage-1 weights, seeds 1 and 0.
+
+| Suite | G (95% CI) | p | Classification / regression | Better / worse | ν = \|ln G\| | Sd of ln ratio over datasets |
+|---|---|---|---|---|---|---|
+| TabArena-Lite (51 splits) | 1.002 (0.999-1.005) | 0.22 | 1.003 / 1.000 | 22 / 29 | 0.0020 | 0.009 |
+| TabArena 3-split | 1.003 (1.001-1.006) | 0.007 | 1.004 / 1.002 | 17 / 34 | 0.0032 | 0.010 |
+| Development suite | 0.991 (0.982-0.998) | 0.19 | 0.983 / 0.998 | 24 / 24 | 0.0092 | 0.029 |
+| Pooled (99 datasets) | 0.997 (0.993-1.001) | 0.35 | 0.996 / 0.999 | 41 / 58 | 0.0028 | |
+
+- **Two stage-2 runs from the same weights differ by 0.3% on TabArena and 0.9% on the development suite.** The plan's 1.000 with a per-dataset sd of 0.007 (§1.1) was the end of stage 2 against stage 3 of the same run, and understated it. A new seed moves a dataset by 1% on TabArena and 3% on the development suite.
+- **The branch threshold exp(−max(0.005, 2ν))** is 0.9944 pooled, 0.9936 on TabArena 3-split and 0.982 on the development suite.
+- **The development suite alone cannot judge an effect of 1%.** Its two-seed difference (0.991, CI below 1) is as large as #14's gain on TabArena. The pooled report is the one to read, with the two suites next to it.
+- **The two seeds together** (the mean of #14's run and N10 as one arm) against `stage2-10k`: pooled 0.992 (0.980-1.000), classification 0.989 and regression 0.996, 49 / 50. TabArena 3-split 0.988 (0.966-1.000), development suite 0.996 (0.988-1.002). By the branch rule this passes pooled (0.9918 ≤ 0.9944, CI upper end 0.9998, no task worse) and on TabArena, and does not pass on the development suite. Without polish_companies_bankruptcy the pooled G is 0.997.
+
+### R10: Kumo's other stage-2 parts add nothing to #14
+
+R10 against the mean of #14's run and N10. The control's error on a split is the mean of the two runs' errors (`paired_report.py --a runs:/<#14's run>+runs:/<N10's run>`). The threshold is exp(−max(0.005, 2ν)) with the ν of that suite.
+
+| Suite | G (95% CI) | p | Classification / regression | Better / worse | Threshold |
+|---|---|---|---|---|---|
+| TabArena-Lite (51 splits) | 1.003 (0.996-1.009) | 0.17 | 1.004 / 1.001 | 23 / 28 | 0.9950 |
+| TabArena 3-split | 1.001 (0.998-1.004) | 0.42 | 1.002 / 1.001 | 22 / 29 | 0.9936 |
+| Development suite | 1.005 (0.997-1.013) | 0.96 | 1.009 / 1.001 | 23 / 25 | 0.982 |
+| Pooled (99 datasets) | 1.003 (0.999-1.008) | 0.59 | 1.004 / 1.001 | 45 / 54 | 0.9944 |
+
+**Verdict: R10 is not adopted.** Its G is above 1 on every suite, where the rule asks for at most 0.9944 pooled, and no CI lies below 1. The guard holds pooled (classification 0.4% worse, regression 0.1%). On the development suite alone classification is 0.9% worse (CI 0.995-1.025).
+- **R10 is level with the hicard runs.** Its distance to their mean (|ln G| 0.003 pooled) is the distance between the two hicard seeds (ν 0.003). Against each one, R10 is 1.002 (0.999-1.005) for #14's run and 1.005 (0.999-1.011) for N10.
+- **The parts R10 adds** to `graph_scm_hicard_missing` are the Kumaraswamy-warped columns, categorical columns with up to 200 categories, correlated blocks (30% of tables), relabel (10%) and coarsen (10%). At 10K steps they change nothing that these suites measure. Kumo reports that its prior changes "matter more with longer training" (plan §2), which this run does not test.
+- **R10 cost 450 H100-h**, 1.5 times N10, for the reason in the last section.
+
+The three runs against `stage2-10k` (the v1 prior), on 3 splits and the development suite:
+
+| Run | TabArena 3-split | Development suite | Pooled (95% CI) | Pooled better / worse | Pooled without polish | polish | kddcup |
+|---|---|---|---|---|---|---|---|
+| #14 (`graph_scm_hicard_missing`, seed 0) | 0.986 | 1.000 | 0.993 (0.980-1.001) | 48 / 51 | 0.999 | 0.581 | 0.961 |
+| N10 (`graph_scm_hicard_missing`, seed 1) | 0.990 | 0.991 | 0.990 (0.978-0.999) | 48 / 51 | 0.995 | 0.611 | 0.967 |
+| R10 (`graph_scm_realism`, seed 0) | 0.989 | 1.001 | 0.995 (0.982-1.003) | 54 / 45 | 1.000 | 0.591 | 0.966 |
+| Mean of #14 and N10 | 0.988 | 0.996 | 0.992 (0.980-1.000) | 49 / 50 | 0.997 (0.993-1.000) | 0.596 | 0.964 |
+
+- **All three runs lower the error on polish_companies_bankruptcy by about 40% and on kddcup09_appetency by 3-4%**, and are level with the v1 prior on the rest. These are two of the four datasets the structured missing values were made for (#14).
+- **N10's gain on the development suite is that run's, not the prior's.** The other two runs are at 1.000 and 1.001 there.
+- **Against the v1 prior by the branch rule, pooled:** the hicard prior passes with its two seeds together (0.9918 against 0.9944, CI upper end 0.9998) and with N10 alone, and not with #14's run alone (CI 0.980-1.001). R10 does not pass (0.9949, CI up to 1.003). Without polish_companies_bankruptcy nothing passes.
+
+### L20: proposal, not launched
+
+L20 is proposed on `graph_scm_hicard_missing`: stage 2 from `stage1-150k` for 20K steps, seed 0, the other settings as N10. It is 614 H100-h at 3.3 s per step (19.1 h on 32 H100, so `timeout_minutes=1440` or two chunks). Its control is the mean of #14's run and N10, and 20K steps are adopted for phase 4 if the pooled G is at most 0.9944 with a CI below 1 and no task more than 0.5% worse. The user decides before it runs.
+
+- **Why this prior.** It is the only one that passes the branch rule against the v1 prior pooled. R10 does not improve on it and costs more. It also has two 10K runs from the same code as controls, so L20's difference to them can be set against a measured ν. The v1 prior's `stage2-10k` is one run, written by minipfn's code.
+- **What L20 can resolve.** The pooled CI of one branch against another is about ±0.4% (N10 against #14's run: 0.993-1.001). A length effect below about 0.5% will not pass the rule. The only estimate so far is 0.993 for 5K → 10K steps within one schedule, which overstates the effect of the length (plan §1.1).
+- **What it does not settle.** The prior's gain over the v1 prior is one dataset wide. If phase 4 should rest on a prior with no such caveat, the alternative is 20K steps on `graph_scm` against `stage2-10k`, at the same cost and with the weaker control.
+- **Code.** #14's run and N10 ran on the training code of dev-v2 01973a5. dev-v2 now has #32's training changes. `training/tests/test_default_behavior.py` pins their defaults to 01973a5's behavior (the batches of this prior, the borders and a short training run), so L20 runs from dev-v2 with the default settings. This prior needs no larger prefetch.
+
+For phase 4 this leaves `graph_scm_hicard_missing` as the stage-2 prior, without the parts `graph_scm_realism` adds, and the length open until L20.
+
+### Why R10 was slow
+
+R10 took 4.95 s per step against 3.30 for N10, with the same settings, and 450 H100-h against 305. The cause is the time the prior takes to make a few large tables, and the fix is a data loader setting.
+
+**What the runs show.** GPU work is the same, and R10's GPUs wait:
+
+| | N10 | R10 | #14 |
+|---|---|---|---|
+| s / step, mean (10th-90th percentile of the 100-step windows) | 3.30 (3.11-3.58) | 4.95 (3.98-6.42) | 3.31 (3.11-3.55) |
+| GPU power, mean | 310 W | 260 W | 310 W |
+| Node CPU use, mean | 13.9% | 13.5% | 13.9% |
+| `data_wait_frac` (rank 0 only), mean | 0.3% | 1.3% | 0.15% |
+
+`data_wait_frac` is measured on rank 0. When another GPU waits for a table, rank 0 waits in the gradient all-reduce and the metric stays at 0. With 32 GPUs the metric shows about 1/32 of the waiting: R10's 1.3% on rank 0 is about 2.0 s per step over all GPUs if the waits do not overlap, which is the size of the gap to N10 (1.65 s).
+
+**One GPU, the same workers** (stage 2, 300 steps, batch 8, 16 prior workers, `TABSIL_RANK_TIMING=1`, steps 21-300):
+
+| | `graph_scm_hicard_missing` (`d9960871…`) | `graph_scm_realism` (`7a75ee19…`) |
+|---|---|---|
+| s / step | 1.975 | 2.305 |
+| Waiting for data | 2.8 s (0.5%) | 106.1 s (16.4%) |
+| s / step without the wait | 1.964 | 1.926 |
+| Stalls (10-step windows with more than 2% wait) | 1 (2.3 s) | 4 (63.5, 24.9, 13.8 and 3.0 s) |
+| Forward + backward per 1M cells | 1.33-1.41 s | 1.34-1.50 s |
+
+The tables cost the same on the GPU. The realism prior stops the loader for tens of seconds at a time.
+
+**Table generation time** (`v2_prior_diag/prior_timing.py`: 8 single-thread processes on a 16-CPU node, stage-2 table sizes, one table per call as the prior workers make them; the processes never waited for a CPU):
+
+| Prior | Run | Tables | Mean s (classification / regression) | 99th percentile | 99.9th | Longest | Over 10 s | Over 30 s |
+|---|---|---|---|---|---|---|---|---|
+| `graph_scm_hicard_missing` | `ca463835…` | 16,186 | 0.84 / 0.67 | 6.8 / 5.6 | 16.0 / 15.0 | 22.7 s | 0.33% | 0 |
+| `graph_scm_realism` | `a6350681…` | 22,109 | 1.11 / 0.88 | 10.5 / 8.1 | 26.3 / 25.8 | 98.6 s | 0.83% | 0.077% (17 tables) |
+| `graph_scm` + `corrected_cat_sizes` | `3b63e0cc…` | 14,999 | 1.10 / 0.85 | 9.6 / 7.3 | 23.9 / 19.9 | 45.6 s | 0.71% | 0.040% (6) |
+| `graph_scm` + `corrected_num_converters` | `b589b8f1…` | 19,497 | 0.84 / 0.66 | 6.4 / 5.5 | 18.1 / 13.1 | 46.0 s | 0.35% | 0.010% (2) |
+
+- **The slow tables are single draws of the TabICL graph SCM**, not redraws. The realism tables over 20 s have a median of 8K rows and 80 features and a median of one attempt. The SCM draw is 82-86% of the generation time and the unpredictable-dataset filter 13-18%.
+- **The added transforms cost nothing.** Correlated blocks, relabel, coarsen, the high-cardinality recode and the structured missing values together take under 1% of the time.
+- **`corrected_cat_sizes` is the main cause.** Categorical columns with up to 200 categories instead of 9 raise the mean time by 30% and double the share of tables over 10 s. TabICL's code has a note on this: large category sizes are kept to one sampling mode because "runtimes for some datasets can get very large" (`tabicl.prior.graph_lib._properties.sample_categorical_sizes`). `corrected_num_converters` leaves the mean unchanged and adds a few very slow tables. The counts over 30 s are small (17, 6, 2 and 0), so the split of the tail between the two options is not firm.
+
+**Why a few slow tables cost so much.** Each GPU has one DataLoader per task with 8 workers and 4 requests outstanding per worker, and the loader hands tables over in request order. A table is requested 32 tables before it is needed, which is 4 steps of its task, or about 26 s at 3.3 s per step. A table that takes longer than that stops its GPU, and the other 31 wait for it in the all-reduce. A step draws 256 tables, so with 0.077% of the tables over 30 s, about one step in five has one.
+
+`v2_prior_diag/queue_sim.py` replays the measured generation times through this queue for 32 GPUs. Its two constants are 0.215 s of GPU time per table (the one-GPU runs) and 1.58 s per step for the rest, set so that the hicard times give N10's 3.30. Only the generation times differ between the rows:
+
+| Generation times | Workers per task | Prefetch per worker | Order | Simulated s / step (10th-90th percentile) | Measured |
+|---|---|---|---|---|---|
+| `graph_scm_hicard_missing` | 8 | 4 | request | 3.30 (3.30-3.30) | 3.30 (N10) |
+| `graph_scm_realism` | 8 | 4 | request | 5.49 (4.65-6.39) | 4.95 (3.98-6.42) (R10) |
+| `graph_scm` + `corrected_cat_sizes` | 8 | 4 | request | 4.21 | |
+| `graph_scm` + `corrected_num_converters` | 8 | 4 | request | 3.76 | |
+| `graph_scm_realism`, times cut at 20 s | 8 | 4 | request | 3.32 | |
+| `graph_scm_realism` | 16 | 4 | request | 4.01 | |
+| `graph_scm_realism` | 24 | 4 | request | 3.48 | |
+| `graph_scm_realism` | 32 | 4 | request | 3.30 | |
+| `graph_scm_realism` | 8 | 8 | request | 4.03 | |
+| `graph_scm_realism` | 8 | 16 | request | 3.30 | |
+| `graph_scm_realism` | 8 | 4 | any | 3.30 | |
+
+The simulation gives R10's step time from the generation times alone, about 10% too high. The generation times were measured on another node type, and the simulation has no spread in the GPU time.
+
+**Fixes**, for any run on `graph_scm_realism` or on another prior with `corrected_cat_sizes` (phase 1B's `graph_scm_base_realism` has both options, at stage-1 table sizes, which were not timed):
+
+| Fix | Simulated s / step | Code change | Note |
+|---|---|---|---|
+| `TABSIL_PREFETCH_FACTOR=16` (16 requests ahead per worker) | 3.30 | none since #32 (the default stays 4) | The same tables in the same order as today. Up to 256 tables wait per GPU, about 1 GB. It covers a table of up to about 105 s at 3.3 s per step. The longest of 22,109 measured tables took 99 s, and a 10K-step run draws 2.56M, so 32 (210 s, 2 GB) is the safer value |
+| `TABSIL_NUM_WORKERS=64` (32 per task) | 3.30 | none | 512 worker processes on a node with 192 CPUs. They are idle most of the time (N10's nodes run at 14% CPU). 48 gives 3.48 and 32 gives 4.01 |
+| `DataLoader(in_order=False)` | 3.30 | one argument in `training/loop.py` | No limit on the table time: a slow table delays only itself. The order of the tables then depends on timing, so a run's data is no longer reproducible from its seed |
+| A faster SCM draw for large categorical sizes | 3.32 if no table took over 20 s | in the TabICL generator | Not looked into |
+
+- **Recommended: `TABSIL_PREFETCH_FACTOR=16` or 32** for a stage-2 run on these priors. #32 added the setting after phase 1B's `graph_scm_base_realism` runs stalled the same way at stage 1. None of the fixes was run at stage 2 on 32 GPUs, so the first such run should be checked at its first few hundred steps: 3.3 s per step and a GPU power near 310 W mean the stalls are gone.
+- **Read `data_wait_frac` times the GPU count.** A value of 1% on rank 0 of a 32-GPU run means the run waits about a third of its time.
+- **Cost.** At 3.30 s per step, a 10K-step stage 2 on `graph_scm_realism` costs 305 H100-h. At R10's speed it costs 450.
+
+The diagnostics cost 2.9 H100-h (six 1xH100 jobs). The evaluations cost 2.5 H100-h for N10 (1 H100 each) and 2.2 for R10 (8 H100 for the two arena suites).
+
 ## Phase 1B
 
 Stage-1 recipe arms trained from scratch (plan §4, "Phase 1B"), run on 2026-11-27 and 28. Every training run uses the code of dev-v2 `67c0c94` (PR #32) and is named `tabsil-v2-1b-<arm>-s<seed>`. The readout is the capped evaluation of plan §3 on TabArena with 3 splits and on the development suite, with the reference validation loss next to it.

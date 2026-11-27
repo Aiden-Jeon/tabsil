@@ -94,6 +94,27 @@ def splits_frame(frame: pd.DataFrame, label: str, allow_imputed: bool = False) -
     return out
 
 
+def mean_splits(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """The mean of several runs as one run: on every split, the mean of the runs' errors. For a
+    control that is the mean of repeated runs (two seeds of one branch, plan §4 phase 1A). The
+    runs must have the same (dataset, split) pairs and problem types."""
+    if not frames:
+        raise ValueError("no runs to average")
+    keys = ["dataset", "split"]
+    first = frames[0].set_index(keys).sort_index()
+    errors = [first["error"]]
+    for frame in frames[1:]:
+        other = frame.set_index(keys).sort_index()
+        if not first.index.equals(other.index):
+            raise ValueError("the runs to average have different splits")
+        if (first["problem_type"] != other["problem_type"]).any():
+            raise ValueError("the runs to average disagree on a dataset's problem type")
+        errors.append(other["error"])
+    out = first.copy()
+    out["error"] = np.mean([e.to_numpy(dtype=float) for e in errors], axis=0)
+    return out.reset_index()[COLUMNS]
+
+
 def dataset_ratios(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
     """Per dataset: the split-mean errors of a and b, the split count, r = b / a and `floored`
     (an error below `ERROR_FLOOR` was raised to it). The two runs must have the same (dataset,
