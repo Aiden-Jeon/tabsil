@@ -13,12 +13,17 @@ download their data at run time and write one result row per cell (`adbench`, `c
   count, the seed, the inference settings saved with the weights), so another checkpoint in the
   same output folder is an error; a baseline's string does not name the model, so its rows are
   reused whatever the model
+- `Results`: what the suites' `run` functions do with `results.csv` in one run (read and check
+  the earlier rows, append a finished cell's rows, record a failed cell, write `failures.json`)
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
+import traceback
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -112,3 +117,54 @@ def check_settings(done: pd.DataFrame, settings: dict[str, str], path: Path) -> 
             f" ({_opts(done)[stale].iloc[0]!r}; this run: {settings[method]!r});"
             " use another output directory"
         )
+
+
+class Results:
+    """A suite's `results.csv` during one `run`: one row (or a few) per cell, appended as each
+    cell finishes, so a rerun resumes after the cells already there.
+
+    - opening creates `out_dir`, reads the rows of earlier runs (`done`) and stops if a method of
+      this run has rows with other settings (`check_settings`; `settings`: result method -> its
+      settings string)
+    - `append` writes a finished cell's rows
+    - `fail` records a cell that raised and logs it with its traceback; the run goes on and its
+      caller ends with an error
+    - `finish` writes `failures.json` if a cell failed and returns (all rows, failures)
+
+    Which cells are finished and what counts as a bad output stay in the suite's `run`: the
+    cell keys differ (an impute job writes several rows) and so do the checks.
+    """
+
+    def __init__(
+        self,
+        out_dir: Path,
+        columns: list[str],
+        settings: dict[str, str],
+        label: str,
+        log: Callable[[str], None] = print,
+    ) -> None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self.out_dir = out_dir
+        self.path = out_dir / "results.csv"
+        self.columns = columns
+        self.label = label
+        self.log = log
+        self.done = read_results(self.path, columns)
+        check_settings(self.done, settings, self.path)
+        self.failures: list[dict] = []
+
+    def append(self, rows: list[dict]) -> None:
+        header = not self.path.exists() or not self.path.stat().st_size
+        table = pd.DataFrame(rows, columns=self.columns)
+        table.to_csv(self.path, mode="a", header=header, index=False)
+
+    def fail(self, cell: dict, error: Exception) -> None:
+        """Record the failure of `cell` (its key columns, in the order they are logged)."""
+        self.failures.append({**cell, "error": repr(error)})
+        trace = "".join(traceback.format_exception(error))
+        self.log(f"[{self.label}] {' '.join(map(str, cell.values()))} FAILED:\n{trace}")
+
+    def finish(self) -> tuple[pd.DataFrame, list[dict]]:
+        if self.failures:
+            (self.out_dir / "failures.json").write_text(json.dumps(self.failures, indent=1))
+        return read_results(self.path, self.columns), self.failures

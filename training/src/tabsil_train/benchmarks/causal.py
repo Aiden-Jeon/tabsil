@@ -47,10 +47,8 @@ are reused whatever the model. A failed cell (an exception or a non-finite effec
 
 from __future__ import annotations
 
-import json
 import os
 import time
-import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -309,13 +307,11 @@ def run(
     `out_dir/results.csv`, appending a row as each finishes. `opts[method]` is the settings
     string written with its rows; rows of `methods` already there with another string stop the
     run (`_files.check_settings`). Returns (all rows, failures)."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "results.csv"
-    done = read_results(path)
     # resume only rows computed with the same settings (`opts`: weights, members, seed, ...)
-    _files.check_settings(done, {m: (opts or {}).get(m, "") for m in methods}, path)
+    settings = {m: (opts or {}).get(m, "") for m in methods}
+    results = _files.Results(out_dir, RESULT_COLUMNS, settings, "causal", log)
+    done = results.done
     finished = set(zip(done.benchmark, done.realization.astype(int), done.method, strict=True))
-    failures = []
     for benchmark, realizations in plan.items():
         todo = [r for r in realizations if any((benchmark, r, m) not in finished for m in methods)]
         for r, split in splits(benchmark, todo):
@@ -326,10 +322,7 @@ def run(
                 try:
                     row = metrics(split, *estimators[method](split, r))
                 except Exception as e:  # noqa: BLE001 - record and go on; the run fails at the end
-                    failures.append(
-                        dict(benchmark=benchmark, realization=r, method=method, error=repr(e))
-                    )
-                    log(f"[causal] {benchmark} {r} {method} FAILED:\n{traceback.format_exc()}")
+                    results.fail(dict(benchmark=benchmark, realization=r, method=method), e)
                     continue
                 row |= dict(
                     benchmark=benchmark, realization=r, method=method,
@@ -337,17 +330,13 @@ def run(
                     n_test=len(split.X_test), n_treated=int(split.t_train.sum()),
                     n_features=split.X_train.shape[1], opts=(opts or {}).get(method, ""),
                 )  # fmt: skip
-                pd.DataFrame([row], columns=RESULT_COLUMNS).to_csv(
-                    path, mode="a", header=not path.exists() or not path.stat().st_size, index=False
-                )
+                results.append([row])
                 log(
                     f"[causal] {benchmark} {r} {method}: sqrt PEHE in {row['pehe_in']:.3f} out "
                     f"{row['pehe_out']:.3f}, ATE err in {row['ate_err_in']:.3f} out "
                     f"{row['ate_err_out']:.3f} ({row['seconds']:.1f}s)"
                 )
-    if failures:
-        (out_dir / "failures.json").write_text(json.dumps(failures, indent=1))
-    return read_results(path), failures
+    return results.finish()
 
 
 # --- report -------------------------------------------------------------------------------------

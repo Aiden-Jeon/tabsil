@@ -36,11 +36,9 @@ and the run ends with an error after the others; nothing is imputed for our meth
 
 from __future__ import annotations
 
-import json
 import os
 import random
 import time
-import traceback
 from collections.abc import Callable
 from pathlib import Path
 
@@ -235,12 +233,9 @@ def run(
     (all rows, failures)."""
     from sklearn.metrics import average_precision_score, roc_auc_score
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "results.csv"
-    done = read_results(path)
-    _files.check_settings(done, row_settings(methods, opts), path)
+    results = _files.Results(out_dir, RESULT_COLUMNS, row_settings(methods, opts), "adbench", log)
+    done = results.done
     finished = set(zip(done.dataset, done.split, done.method, strict=True))
-    failures = []
     for dataset in datasets:
         X, y = load(dataset)
         for split in splits:
@@ -259,10 +254,7 @@ def run(
                             "non-finite values"
                         )
                 except Exception as e:  # noqa: BLE001 - record and go on; the run fails at the end
-                    failures.append(
-                        dict(dataset=dataset, split=split, method=method, error=repr(e))
-                    )
-                    log(f"[adbench] {dataset} {split} {method} FAILED:\n{traceback.format_exc()}")
+                    results.fail(dict(dataset=dataset, split=split, method=method), e)
                     continue
                 row = dict(
                     dataset=dataset, split=split, seed=seed, method=method,
@@ -272,17 +264,13 @@ def run(
                     test_anomalies=int(y_test.sum()), n_features=X.shape[1],
                     opts=(opts or {}).get(base(method), ""),
                 )  # fmt: skip
-                pd.DataFrame([row], columns=RESULT_COLUMNS).to_csv(
-                    path, mode="a", header=not path.exists() or not path.stat().st_size, index=False
-                )
+                results.append([row])
                 log(
                     f"[adbench] {dataset} {split} {method}: AUROC {row['auroc']:.4f} "
                     f"AUPRC {row['aupr']:.4f} ({row['seconds']:.0f}s, context {len(X_fit)}, "
                     f"test {len(X_test)})"
                 )
-    if failures:
-        (out_dir / "failures.json").write_text(json.dumps(failures, indent=1))
-    return read_results(path), failures
+    return results.finish()
 
 
 # --- reference and comparison ---------------------------------------------------------------

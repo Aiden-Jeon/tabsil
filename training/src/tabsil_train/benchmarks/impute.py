@@ -46,7 +46,6 @@ import functools
 import json
 import os
 import time
-import traceback
 import zlib
 from collections.abc import Callable
 from pathlib import Path
@@ -523,12 +522,8 @@ def run(
     categorical, seed)` -> the filled table, or {result method: filled table}. `opts[method]` is
     the settings string written with its rows; rows of `methods` already there with another
     string stop the run (`_files.check_settings`). Returns (all rows, failures)."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "results.csv"
-    done = read_results(path)
-    _files.check_settings(done, row_settings(methods, opts), path)
-    finished = finished_keys(done)
-    failures = []
+    results = _files.Results(out_dir, RESULT_COLUMNS, row_settings(methods, opts), "impute", log)
+    finished = finished_keys(results.done)
     for dataset in datasets:
         X_all, categorical, _ = load(dataset)
         for rate in rates:
@@ -555,12 +550,7 @@ def run(
                                     "masked cells"
                                 )
                     except Exception as e:  # noqa: BLE001 - record and go on; the run fails
-                        failures.append(
-                            dict(dataset=dataset, rate=rate, seed=seed, method=method,
-                                 error=repr(e))
-                        )  # fmt: skip
-                        log(f"[impute] {dataset} {rate} {seed} {method} FAILED:\n"
-                            f"{traceback.format_exc()}")  # fmt: skip
+                        results.fail(dict(dataset=dataset, rate=rate, seed=seed, method=method), e)
                         continue
                     seconds = round(time.time() - t0, 1)
                     rows = []
@@ -576,13 +566,8 @@ def run(
                             f"[impute] {dataset} {rate} {seed} {m}: nrmse {s['nrmse']:.4f} "
                             f"accuracy {s['accuracy']:.4f} ({seconds:.0f}s)"
                         )
-                    pd.DataFrame(rows, columns=RESULT_COLUMNS).to_csv(
-                        path, mode="a", header=not path.exists() or not path.stat().st_size,
-                        index=False,
-                    )  # fmt: skip
-    if failures:
-        (out_dir / "failures.json").write_text(json.dumps(failures, indent=1))
-    return read_results(path), failures
+                    results.append(rows)
+    return results.finish()
 
 
 # --- report ---------------------------------------------------------------------------------
