@@ -98,7 +98,7 @@ HICARD_MISSING = Variant(
 #
 # Not included: sdm's count/distributional columns (`DistributionalMixtureConverter`; TabSil's
 # nearest part is `noise_prob`), the trivial-table filter, the regression target tail warp (stage 3
-# only), and the stage 3 row replay. The first three options and Relabel change y, so the
+# only), and the stage 3 row replay. The first two options and Relabel change y, so the
 # regression borders are drawn with them (`make_borders`).
 REALISM = Variant(
     {

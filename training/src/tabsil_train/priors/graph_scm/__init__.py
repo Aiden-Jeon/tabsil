@@ -6,8 +6,7 @@ table size rule and missing values. It chains the parts (`generator.GraphSCM` in
 This folder holds what is specific to the graph SCM. This module is the prior: `GraphSCMPrior`,
 and `make_prior`, `make_borders` and `check_config`, which build it from a training config.
 `generator` is the generator it wraps. `variants` holds the priors that are this one with some of
-its options at fixed values (`graph_scm_hicard_missing`, `graph_scm_realism`,
-`graph_scm_base_realism`).
+its options at fixed values, each registered under its own name.
 
 1. Table size: each batch draws the rows (train + eval) and the train-row share, then the feature
    count, with the TabICLv2 training-script rule (`table_size.sample_split_size`). All datasets

@@ -16,7 +16,7 @@ Parts that priors share:
 The graph SCM, in one folder:
 
 - `graph_scm`: the assembled prior (generator + class count + table size rule + missing values)
-  and its options, all off by default
+  and the options a variant fixes
 - `graph_scm.generator`: its generator, the continuous table of one group from the TabICLv2 graph
   SCM
 - `graph_scm.variants`: the prior with some of its options at fixed values, each under its own
