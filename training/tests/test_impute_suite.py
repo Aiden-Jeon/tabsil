@@ -126,6 +126,19 @@ def test_missforest_stops_early_on_numeric_only_tables(monkeypatch):
     assert len(rounds) < 2 * 10  # two columns per round: stopped before 10 rounds
 
 
+def test_missforest_is_the_same_for_every_thread_count(monkeypatch):
+    # with threaded predictions the last bits, and the round at which it stops, changed per call
+    X, categorical, _ = _table()
+    _, mask = bi.make_split("cmc", X, 0.3, 0)
+    X_masked = np.where(mask, np.nan, X)
+    outputs = []
+    for jobs in ("1", "4", "4"):
+        monkeypatch.setenv("TABSIL_IMPUTE_N_JOBS", jobs)
+        outputs.append(bi.impute_missforest(X_masked.copy(), categorical, 0, n_trees=10))
+    np.testing.assert_array_equal(outputs[1], outputs[0])
+    np.testing.assert_array_equal(outputs[2], outputs[0])
+
+
 def test_extension_categorical_rule():
     X, categorical, _ = _table()
     X = np.column_stack([X, np.tile(np.arange(5.0), 60)])  # 5 values, 60 rows each
@@ -238,6 +251,37 @@ def test_official_model_counts_classes_over_observed_values(monkeypatch):
     assert not model.use_classifier_(0, torch.arange(30.0))  # more classes than TabPFN v2 takes
     # the unpatched extension counts every NaN as a class
     assert not unsupervised.TabPFNUnsupervisedModel.use_classifier_(model, 0, y)
+
+
+def test_tabpfn_imputer_seeds_the_generators_the_official_code_draws_from(monkeypatch):
+    import random
+    import types
+
+    import torch
+
+    class Official:  # draws as the extension does: Python's `random` and torch's generator
+        def __init__(self, tabpfn_clf, tabpfn_reg):
+            pass
+
+        def set_categorical_features(self, categorical):
+            pass
+
+        def fit(self, X):
+            return self
+
+        def impute(self, X):
+            return torch.tensor([[random.random(), torch.rand(1).item()]])
+
+    extension = types.ModuleType("tabpfn_extensions.unsupervised")
+    extension.simple_impute = None
+    monkeypatch.setitem(sys.modules, "tabpfn_extensions", types.ModuleType("tabpfn_extensions"))
+    monkeypatch.setitem(sys.modules, "tabpfn_extensions.unsupervised", extension)
+    monkeypatch.setattr(bi, "tabpfn_models", lambda device: (None, None))
+    monkeypatch.setattr(bi, "official_model_class", lambda: Official)
+    impute = bi.tabpfn_imputer("cpu", simple=False)
+    first = impute(np.zeros((1, 2)), [], 3)
+    np.testing.assert_array_equal(impute(np.zeros((1, 2)), [], 3), first)  # after other draws
+    assert (impute(np.zeros((1, 2)), [], 4) != first).all()
 
 
 def _eval_script():
