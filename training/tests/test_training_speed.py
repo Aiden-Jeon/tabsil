@@ -1,5 +1,5 @@
-"""Training speedup option tests: LAWA, TF32/compile settings, the collector freeze, time to
-target."""
+"""Training speedup option tests: LAWA, TF32/compile settings, the collector freeze, the training
+time kept across resumes."""
 
 import contextlib
 import gc
