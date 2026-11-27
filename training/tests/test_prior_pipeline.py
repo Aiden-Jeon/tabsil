@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from tabsil_train.priors.base import IGNORE_INDEX, PriorBatch
-from tabsil_train.priors.hyperparameters import ClassCount
+from tabsil_train.priors.graph_scm import ClassCount
 from tabsil_train.priors.pipeline import Group, Pipeline, Rng
 from tabsil_train.priors.transforms import CoverClasses, DropInvalid, Missing
 
