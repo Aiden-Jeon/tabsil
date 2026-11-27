@@ -64,6 +64,8 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
     for m in ("tabpfn_impute", "tabpfn_simple"):
         imputers[m] = impute.tabpfn_imputer(args.device, simple=m == "tabpfn_simple")
         opts[m] = f"tabpfn-extensions {impute.TABPFN_EXTENSIONS_VERSION}, TabPFN v2 defaults"
+    # `impute` rows from before its column orders followed the seed are another computation
+    opts[impute.OFFICIAL] += ", column orders from the seed"
     ours = [m for m in methods if m.startswith(impute.OURS)]
     path = args.regressor_path or args.classifier_path
     if ours:
