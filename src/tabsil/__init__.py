@@ -40,16 +40,17 @@ from tabsil.utils import get_device, set_seed
 
 if TYPE_CHECKING:
     from tabsil.hub import from_pretrained
-    from tabsil.recipe import TabSilClassifier, TabSilRegressor
     from tabsil.tasks.causal import TabSilCATE
+    from tabsil.tasks.classification import TabSilClassifier
     from tabsil.tasks.forecast import TabSilForecaster
+    from tabsil.tasks.regression import TabSilRegressor
     from tabsil.tasks.unsupervised import TabSilUnsupervised
 
 # Names loaded on first use -> the module defining them
 _LAZY = {
     "from_pretrained": "tabsil.hub",
-    "TabSilClassifier": "tabsil.recipe",
-    "TabSilRegressor": "tabsil.recipe",
+    "TabSilClassifier": "tabsil.tasks.classification",
+    "TabSilRegressor": "tabsil.tasks.regression",
     "TabSilForecaster": "tabsil.tasks.forecast",
     "TabSilUnsupervised": "tabsil.tasks.unsupervised",
     "TabSilCATE": "tabsil.tasks.causal",

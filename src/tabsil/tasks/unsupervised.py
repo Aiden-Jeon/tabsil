@@ -338,7 +338,8 @@ class TabSilUnsupervised:
         return column in self.classes_ and len(self.classes_[column]) <= max_classes_of(self.model)
 
     def _estimator(self, classifier: bool, categorical: list[int]):
-        from tabsil.recipe import TabSilClassifier, TabSilRegressor
+        from tabsil.tasks.classification import TabSilClassifier
+        from tabsil.tasks.regression import TabSilRegressor
 
         kwargs = {
             "n_estimators": self.n_estimators,

@@ -213,7 +213,7 @@ class TabSilCATE:
             from sklearn.base import clone
 
             return clone(self.regressor).fit(X, y)
-        from tabsil.recipe import TabSilRegressor
+        from tabsil.tasks.regression import TabSilRegressor
 
         return TabSilRegressor(
             self.model,
@@ -229,7 +229,7 @@ class TabSilCATE:
             from sklearn.base import clone
 
             return clone(self.classifier).fit(X, t)
-        from tabsil.recipe import TabSilClassifier
+        from tabsil.tasks.classification import TabSilClassifier
 
         return TabSilClassifier(
             self.model,

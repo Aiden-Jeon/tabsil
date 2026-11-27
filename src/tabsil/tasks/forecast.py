@@ -361,7 +361,7 @@ class TabSilForecaster:
     def _predict_series(
         self, past: pd.DataFrame, steps: pd.DataFrame, levels: list[float]
     ) -> tuple[np.ndarray, np.ndarray]:
-        from tabsil.recipe import TabSilRegressor
+        from tabsil.tasks.regression import TabSilRegressor
 
         target, ts = self.target_column, self.timestamp_column
         covariates = [c for c in self.covariates_ if c in steps.columns]

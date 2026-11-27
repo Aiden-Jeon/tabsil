@@ -160,16 +160,16 @@ def test_inference_classes_load_weights_without_from_pretrained(tmp_path, monkey
         TabSilRegressor(str(tabsil_dir), borders)
 
 
-def test_import_tabsil_loads_the_hub_and_recipe_on_first_use():
+def test_import_tabsil_loads_the_hub_and_estimators_on_first_use():
     # `import tabsil` does not import the Hub or inference code; the names load on first use
     code = (
         "import sys, tabsil\n"
-        "assert 'tabsil.hub' not in sys.modules and 'tabsil.recipe' not in sys.modules\n"
+        "assert not {'tabsil.hub', 'tabsil.recipe', 'tabsil.tasks'} & set(sys.modules)\n"
         "from tabsil import TabSilClassifier, TabSilRegressor, from_pretrained\n"
-        "import tabsil.hub, tabsil.recipe\n"
+        "import tabsil.hub, tabsil.tasks.classification, tabsil.tasks.regression\n"
         "assert from_pretrained is tabsil.hub.from_pretrained\n"
-        "assert TabSilClassifier is tabsil.recipe.TabSilClassifier\n"
-        "assert TabSilRegressor is tabsil.recipe.TabSilRegressor\n"
+        "assert TabSilClassifier is tabsil.tasks.classification.TabSilClassifier\n"
+        "assert TabSilRegressor is tabsil.tasks.regression.TabSilRegressor\n"
         "assert 'tabsil_train' not in sys.modules and 'mlflow' not in sys.modules\n"
         "assert {'TabSilClassifier', 'from_pretrained'} <= set(dir(tabsil))\n"
     )
