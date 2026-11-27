@@ -10,7 +10,7 @@ import torch
 from helpers import tiny_model
 
 from tabsil.recipe import TabSilRegressor
-from tabsil.unsupervised import (
+from tabsil.tasks.unsupervised import (
     CategoricalConditional,
     NumericConditional,
     TabSilUnsupervised,

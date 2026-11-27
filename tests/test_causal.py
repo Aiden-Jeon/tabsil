@@ -11,7 +11,7 @@ from helpers import tiny_model
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression, LogisticRegression
 
-from tabsil.causal import LEARNERS, TabSilCATE
+from tabsil.tasks.causal import LEARNERS, TabSilCATE
 
 BORDERS = torch.linspace(-4, 4, 33)
 

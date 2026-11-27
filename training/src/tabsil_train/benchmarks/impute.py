@@ -51,7 +51,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from tabsil.unsupervised import nearest_class  # the same rule as TabSilUnsupervised.impute
+from tabsil.tasks.unsupervised import nearest_class  # the same rule as TabSilUnsupervised.impute
 from tabsil_train.benchmarks import _files
 from tabsil_train.benchmarks._files import download_verified
 
@@ -427,7 +427,7 @@ def tabsil_imputer(
     `seed_offset`. With `extension_kinds`, the categorical columns are those the TabPFN extension
     uses (`extension_categorical`) and the result is {"tabsil_inferred": mean}; scoring still
     follows the table's kinds."""
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil.tasks.unsupervised import TabSilUnsupervised
 
     def impute(X: np.ndarray, categorical: list[int], seed: int) -> dict[str, np.ndarray]:
         kinds = extension_categorical(X, categorical) if extension_kinds else list(categorical)

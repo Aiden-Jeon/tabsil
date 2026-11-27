@@ -39,20 +39,20 @@ from tabsil.models.bar_distribution import (
 from tabsil.utils import get_device, set_seed
 
 if TYPE_CHECKING:
-    from tabsil.causal import TabSilCATE
-    from tabsil.forecast import TabSilForecaster
     from tabsil.hub import from_pretrained
     from tabsil.recipe import TabSilClassifier, TabSilRegressor
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil.tasks.causal import TabSilCATE
+    from tabsil.tasks.forecast import TabSilForecaster
+    from tabsil.tasks.unsupervised import TabSilUnsupervised
 
 # Names loaded on first use -> the module defining them
 _LAZY = {
     "from_pretrained": "tabsil.hub",
     "TabSilClassifier": "tabsil.recipe",
     "TabSilRegressor": "tabsil.recipe",
-    "TabSilForecaster": "tabsil.forecast",
-    "TabSilUnsupervised": "tabsil.unsupervised",
-    "TabSilCATE": "tabsil.causal",
+    "TabSilForecaster": "tabsil.tasks.forecast",
+    "TabSilUnsupervised": "tabsil.tasks.unsupervised",
+    "TabSilCATE": "tabsil.tasks.causal",
 }
 
 

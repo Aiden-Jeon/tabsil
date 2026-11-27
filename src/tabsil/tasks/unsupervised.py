@@ -107,7 +107,7 @@ import pandas as pd
 import torch
 from torch import nn
 
-from tabsil.forecast import bucket_quantiles
+from tabsil.tasks.forecast import bucket_quantiles
 
 # Probability given to an outcome the model gives no mass: a category not in the context, a numeric
 # value outside the borders. Same as the clamp of `EnsembleRegressor.predict_distribution`

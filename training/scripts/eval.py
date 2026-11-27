@@ -1317,7 +1317,7 @@ def main(argv: list[str] | None = None) -> None:
 def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
     """Forecasting on fev-bench (`tabsil_train.benchmarks.fevbench`): every window of each task,
     our Seasonal Naive check, the comparison table and the Elo pools."""
-    from tabsil.forecast import TabSilForecaster
+    from tabsil.tasks.forecast import TabSilForecaster
     from tabsil_train.benchmarks import fevbench
 
     if args.regressor_path is None:
