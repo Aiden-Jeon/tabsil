@@ -1,5 +1,5 @@
 """ADBench unsupervised outlier detection: 12 classical tables x 3 seeds, TabSil's chain-rule log
-density (`tabsil.unsupervised`) against the official TabPFN v2 extension and pyod baselines.
+density (`tabsil.tasks.unsupervised`) against the official TabPFN v2 extension and pyod baselines.
 
 The protocol, the 12 tables, the comparison numbers and the Elo are those of the fm-agent-bench
 anomaly track (`docs/anomaly.md`, `fab/bench/anomaly/`, results at commit
@@ -181,7 +181,7 @@ def tabsil_scorer(model, borders, n_permutations: int, n_estimators: int | None,
                   seed_offset: int = 0) -> Callable:  # fmt: skip
     """fit(X_train) -> outlier_score(X_test) of `TabSilUnsupervised`, random_state = the ADBench
     seed + `seed_offset` (column orders and members)."""
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil.tasks.unsupervised import TabSilUnsupervised
 
     def score(X_train: np.ndarray, X_test: np.ndarray, seed: int) -> np.ndarray:
         est = TabSilUnsupervised(
@@ -398,10 +398,20 @@ def summary_table(ours: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index()
 
 
+# the files `report` writes
+REPORT_FILES = ("table_d4.csv", "summary.csv", "elo.csv")
+
+
 def report(ours: pd.DataFrame, out_dir: Path, methods: list[str] = (OURS,)) -> dict:
-    """Write `summary.csv` (per table), `elo.csv` (pool with IsolationForest = 1000), `clean.csv`
-    (contaminated vs clean context) and `table_d4.csv` (the split check), and return the main
-    numbers. The Elo needs every (table, split) of our methods (it does not impute ours)."""
+    """Write `table_d4.csv` (the split check, with IsolationForest rows), `summary.csv` (per table,
+    with TabSil rows) and `elo.csv` (pool with IsolationForest = 1000), and return the main
+    numbers. The Elo needs every (table, split) of our methods (it does not impute ours).
+
+    `ours` is the rows to report: the caller passes those of the methods its run asked for (other
+    rows of `results.csv` can be an earlier run's, of another model). A file an earlier report
+    wrote and this one does not is removed, so the folder holds one report."""
+    for name in REPORT_FILES:
+        (out_dir / name).unlink(missing_ok=True)
     out: dict = {}
     if ANCHOR in set(ours.method):
         check = table_d4_check(ours)

@@ -10,7 +10,7 @@
 # predictive distribution metrics.
 #
 # ADBench unsupervised outlier detection (12 tables x 3 seeds, `--suite adbench`): TabSil's
-# chain-rule log density (tabsil.unsupervised) on the contaminated training rows, its `+clean`
+# chain-rule log density (tabsil.tasks.unsupervised) on the contaminated training rows, its `+clean`
 # diagnostic and IsolationForest (the split check). One (table, split, method) job per GPU from a
 # queue (`--shards`); with 8 GPUs set compute to GPU_8xH100 with 8 accelerators:
 #   databricks air run -f training/scripts/eval.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \

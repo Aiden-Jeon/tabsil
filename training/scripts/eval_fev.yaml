@@ -1,5 +1,5 @@
 # TabSil fev-bench forecasting evaluation (training/scripts/eval.py --suite fev) on Databricks AI
-# Runtime: tabsil.forecast.TabSilForecaster on every rolling window of 10 univariate fev-bench
+# Runtime: tabsil.TabSilForecaster on every rolling window of 10 univariate fev-bench
 # tasks (tabsil_train.benchmarks.fevbench), scored with fev's SQL and MASE, with the Elo pools
 # (Seasonal Naive = 1000) against the per-window results copied from fm-agent-bench. The model is
 # TABSIL_REGRESSOR (default: the default Hub repo at the v1 tag). From the repository root:

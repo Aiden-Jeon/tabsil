@@ -63,8 +63,8 @@ def read_results(path: Path, columns: list[str]) -> pd.DataFrame:
 
 
 def model_settings(model, borders, n_estimators: int, seed: int, **options) -> str:
-    """The settings string (`opts`) of the rows a TabSil method computes with `model`: everything
-    that changes them, as `key=value` words.
+    """The settings string (`opts`) of the rows a TabSil method computes with `model`: what the
+    checkpoint and the command line put into them, as `key=value` words.
 
     - `weights`: the digest of the weights and borders (`tabsil_train.hub.weights_digest`), not
       the checkpoint path. New weights at an old path (`runs:/<id>/checkpoints/latest.pt`) give
@@ -75,6 +75,9 @@ def model_settings(model, borders, n_estimators: int, seed: int, **options) -> s
     - the inference settings saved with the weights (`tabsil.recipe.default_inference`), which
       `TabSilClassifier` and `TabSilRegressor` read: two Hub tags can hold the same weights with
       other settings
+
+    The device is not in the string: rows computed on CUDA (bfloat16 autocast) and on the CPU
+    (float32) differ slightly and are reused for each other.
     """
     from tabsil.recipe import default_inference
     from tabsil_train.hub import weights_digest

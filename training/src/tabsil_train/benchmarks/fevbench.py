@@ -1,4 +1,4 @@
-"""fev-bench forecasting evaluation of TabSil (`tabsil.forecast.TabSilForecaster`, zero-shot).
+"""fev-bench forecasting evaluation of TabSil (`tabsil.TabSilForecaster`, zero-shot).
 
 Tasks, splits and metrics follow fm-agent-bench P7 (`docs/forecast.md` at commit
 `FM_AGENT_BENCH_COMMIT`), which compared public tabular FMs on fev-bench:

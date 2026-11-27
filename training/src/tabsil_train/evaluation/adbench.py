@@ -75,6 +75,9 @@ def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> No
         rows = adbench.read_results(suite_dir / "results.csv")
     else:
         rows, failures = adbench.run(scorers, datasets, splits, methods, suite_dir, opts)
+    # the report is of this run's methods: rows of other methods in results.csv are an earlier
+    # run's and were not checked against this run's settings
+    rows = rows[rows.method.isin(methods)]
     summary = adbench.report(rows, suite_dir, [m for m in methods if m == adbench.OURS])
     summary |= {"failures": len(failures), "seconds": round(time.time() - t0, 1)}
     (suite_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))

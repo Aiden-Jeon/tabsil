@@ -6,7 +6,10 @@
 - `evaluation`: the runs `scripts/eval.py` starts for the fev, ADBench, causal and impute suites
 - `recipe`: TabSil's training curriculum (the structure and inference defaults are in
   `tabsil.recipe`)
-- `hub`: checkpoints of training runs (MLflow `runs:/` artifacts, the structure in run params)
+- `hub`: `load_model` for the scripts (Hub repos, `save_pretrained` folders, checkpoint files,
+  MLflow `runs:/` artifacts) and the model structure in run params
+- `subsample`: `SubsampledEstimator`, which reduces the rows passed to fit to N (class-stratified
+  for classification; for context-length experiments)
 - `utils`: MLflow run logging, the learning rate schedule, torchrun setup
 
 The scripts are in `training/scripts` (`train.py`, `eval.py`) and `training/hub` (Hub upload).

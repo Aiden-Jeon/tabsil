@@ -1,5 +1,5 @@
 """Missing value imputation: 10 OpenML tables x MCAR rates 10/30/50% x 3 seeds, TabSil
-(`tabsil.unsupervised.TabSilUnsupervised.impute`, zero-shot) against the official TabPFN v2
+(`tabsil.TabSilUnsupervised.impute`, zero-shot) against the official TabPFN v2
 extension and the usual baselines, every method on the same rows and masks.
 
 - tables (`TABLES`): OpenML datasets used in imputation benchmarks (HyperImpute, GAIN, MissForest
@@ -53,7 +53,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from tabsil.unsupervised import nearest_class  # the same rule as TabSilUnsupervised.impute
+from tabsil.tasks.unsupervised import nearest_class  # the same rule as TabSilUnsupervised.impute
 from tabsil_train.benchmarks import _files
 from tabsil_train.benchmarks._files import download_verified
 
@@ -429,7 +429,7 @@ def tabsil_imputer(
     `seed_offset`. With `extension_kinds`, the categorical columns are those the TabPFN extension
     uses (`extension_categorical`) and the result is {"tabsil_inferred": mean}; scoring still
     follows the table's kinds."""
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil.tasks.unsupervised import TabSilUnsupervised
 
     def impute(X: np.ndarray, categorical: list[int], seed: int) -> dict[str, np.ndarray]:
         kinds = extension_categorical(X, categorical) if extension_kinds else list(categorical)
@@ -494,7 +494,8 @@ def new_rows(rows: pd.DataFrame, existing: pd.DataFrame) -> pd.DataFrame:
     """The rows of `rows` whose (table, rate, seed, method) is not in `existing` (to merge a
     worker's results without repeating rows an earlier run merged)."""
     merged = finished_keys(existing)
-    return rows[[k not in merged for k in finished_keys_list(rows)]]
+    new = np.array([k not in merged for k in finished_keys_list(rows)], dtype=bool)
+    return rows[new]  # a boolean mask, also when `rows` is empty (the columns stay)
 
 
 def read_results(path: Path) -> pd.DataFrame:
