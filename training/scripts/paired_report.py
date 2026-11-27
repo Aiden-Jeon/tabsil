@@ -7,14 +7,17 @@ A run is a per-split table: a local `results_per_split.csv` (TabArena / BeyondAr
 `eval_rows.csv` (AMLB, `--suite dev`), or an MLflow run, `runs:/<run_id>` (the eval artifact is
 found under `eval/`) or `runs:/<run_id>/<artifact path>`. Give `--a` and `--b` once per suite, in
 the same order; more than one pair is also pooled. The pairs must not share a dataset (an error;
-`--no-pool` gives the per-suite tables only, e.g. for the same suite at two seeds). MLflow runs
-need `DATABRICKS_CONFIG_PROFILE=<profile> MLFLOW_TRACKING_URI=databricks`.
+`--no-pool` gives the per-suite tables only, e.g. for the same suite at two seeds). Several runs
+joined with `+` (`runs:/<id>+runs:/<id>`) are one side that is their mean: on every split, the
+mean of the runs' errors (the control of a branch that was repeated with another seed). MLflow
+runs need `DATABRICKS_CONFIG_PROFILE=<profile> MLFLOW_TRACKING_URI=databricks`.
 
 G measures the weights alone only if a and b were evaluated the same way (plan §3). For MLflow
 runs the report compares the evaluation seed, the fold count, the context cap
 (`subsample_train_rows`) and the applied inference settings (`inference_classification`,
-`inference_regression`) of a and b, and prints a warning line for each that differs. Local files
-carry no settings and are not checked.
+`inference_regression`) of a and b, and prints a warning line for each that differs. Runs that
+are averaged must agree in these settings (an error). Local files carry no settings and are not
+checked.
 
 From the repository root:
   uv run --package tabsil-train python training/scripts/paired_report.py \
@@ -37,6 +40,8 @@ from tabsil_train.benchmarks import paired
 ARENA_FILE = "results_per_split.csv"
 AMLB_FILE = "eval_rows.csv"
 ELO_GROUPS = ("classification", "regression", "binary", "multiclass")
+# text of a setting that only one of two runs logged (`settings_differences`)
+NOT_LOGGED = "is not logged by"
 # run params that a and b must share for G to measure the weights alone (`settings_differences`)
 SETTINGS = (
     "seed",
@@ -49,12 +54,33 @@ SETTINGS = (
 
 class Run:
     """One side of a comparison: its per-split errors, suite name, Elo per group and, for an
-    MLflow run, its params (None for a local file)."""
+    MLflow run, its params (None for a local file). A source of several runs joined with `+` is
+    their mean (`paired.mean_splits`): the runs must be of one suite and, as MLflow runs, agree in
+    the evaluation settings (`SETTINGS`). A setting that one of them did not log cannot be
+    compared and is kept in `unchecked` (a warning line of the report). The mean has no Elo, and
+    its params are the first run's."""
 
     def __init__(self, source: str, allow_imputed: bool, cache: Path) -> None:
         self.source = source
-        path, self.suite, self.elo, self.params = resolve(source, cache)
-        self.splits = paired.load_splits(path, allow_imputed=allow_imputed)
+        parts = [resolve(part, cache) for part in source.split("+")]
+        suites = {suite for _, suite, _, _ in parts}
+        if len(suites) > 1:
+            raise SystemExit(f"{source}: the runs to average are of different suites {suites}")
+        _, self.suite, elo, self.params = parts[0]
+        self.elo = elo if len(parts) == 1 else {}
+        self.unchecked: list[str] = []
+        for _, _, _, params in parts[1:]:
+            if self.params is None or params is None:
+                self.params = None  # a local file among them: nothing to compare
+                continue
+            differences = settings_differences(self.params, params)
+            unlogged = [d for d in differences if NOT_LOGGED in d]
+            if len(unlogged) < len(differences):
+                differ = [d for d in differences if d not in unlogged]
+                raise SystemExit(f"{source}: the runs to average differ in {differ}")
+            self.unchecked += [d.split(f" {NOT_LOGGED}")[0] for d in unlogged]
+        frames = [paired.load_splits(path, allow_imputed=allow_imputed) for path, *_ in parts]
+        self.splits = frames[0] if len(frames) == 1 else paired.mean_splits(frames)
 
 
 def resolve(source: str, cache: Path) -> tuple[Path, str, dict, dict | None]:
@@ -99,7 +125,7 @@ def settings_differences(a: dict, b: dict) -> list[str]:
         if value_a == value_b:
             continue
         if value_a is None or value_b is None:
-            out.append(f"{key} is not logged by {'a' if value_a is None else 'b'}")
+            out.append(f"{key} {NOT_LOGGED} {'a' if value_a is None else 'b'}")
             continue
         if key.startswith("inference_"):
             fields_a, fields_b = json.loads(value_a), json.loads(value_b)
@@ -112,13 +138,20 @@ def settings_differences(a: dict, b: dict) -> list[str]:
 
 
 def pair_warnings(name: str, a: Run, b: Run) -> list[str]:
-    """Warning lines of one pair of MLflow runs: another suite, other evaluation settings."""
+    """Warning lines of one pair of MLflow runs: another suite, other evaluation settings, and
+    settings that could not be compared among the runs averaged into one side."""
+    out = [
+        f"- warning ({name}): the runs averaged into {side} could not be compared in {key}"
+        " (one of them did not log it)"
+        for side, run in (("a", a), ("b", b))
+        for key in run.unchecked
+    ]
     if a.params is None or b.params is None:
-        return []
+        return out
     differences = settings_differences(a.params, b.params)
     if a.suite != b.suite:
         differences.insert(0, f"suite: a {a.suite}, b {b.suite}")
-    return [f"- warning ({name}): a and b differ in {d}" for d in differences]
+    return out + [f"- warning ({name}): a and b differ in {d}" for d in differences]
 
 
 def _find_artifact(client, run_id: str) -> str:
