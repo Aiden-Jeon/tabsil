@@ -29,14 +29,14 @@ def test_eval_flag_off_is_the_old_estimator(monkeypatch, tmp_path):
     model = _tiny_model()
     monkeypatch.setattr(script, "load_model", lambda *a, **k: (model, None))
     paths = {"classification": "unused"}
-    factories = {"classification": types.SimpleNamespace(model=model, n_estimators=8)}
     task = types.SimpleNamespace(categorical_indices=[])
     g = np.random.default_rng(1)
     X, y = g.normal(size=(120, 3)), g.choice(3, 120)
 
     off = script.parse_args(["--classifier-path", "unused", "--out-dir", str(tmp_path)])
     assert off.subsample_train_rows is None
-    plain = script.make_estimator_factory("classification", off)(task)
+    factories = {"classification": script.make_estimator_factory("classification", off)}
+    plain = factories["classification"](task)
     assert type(plain) is EnsembleClassifier
     printed = json.loads(script.arena_fingerprint(off, paths, factories))
     assert "subsample_train_rows" not in printed  # default keeps the old fingerprint

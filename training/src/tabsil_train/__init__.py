@@ -1,6 +1,6 @@
 """tabsil-train: training and evaluation of TabSil (the `tabsil` package is the inference side).
 
-- `priors`: training data (assembler, generators, transforms, table size rules, graph SCM prior)
+- `priors`: training data (assembler, transforms, table size rules, graph SCM prior and variants)
 - `training`: training config, the training loop, data feeding, losses, stability
 - `benchmarks`: the evaluation benchmarks, one folder per task (`tabular` for classification and
   regression, `forecast`, `unsupervised`, `causal`)

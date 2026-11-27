@@ -316,7 +316,7 @@ def _train_script():
 
 
 def _clear_env(monkeypatch):
-    for name in ("TABSIL_CONFIG_NAME", "TABSIL_STEPS"):
+    for name in ("TABSIL_CONFIG_NAME", "TABSIL_STEPS", "TABSIL_EMSIZE", "TABSIL_N_CLS"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -363,6 +363,72 @@ def test_train_script_takes_only_a_source_run_of_the_same_structure(monkeypatch)
     assert config == smoke and config.n_inducing == 8
 
 
+def test_train_script_changes_the_model_size(monkeypatch):
+    from tabsil_train.hub import run_architecture
+
+    _clear_env(monkeypatch)
+    script = _train_script()
+    # the size arguments change the preset's structure; everything else stays the recipe's
+    args = script.parse_args(["--config-name", "stage1", "--emsize", "192"])
+    config = script.build_config(args)
+    assert config == replace(recipe.curriculum(1), emsize=192)
+    assert config.model_config().icl_dim == 4 * 192
+    monkeypatch.setenv("TABSIL_EMSIZE", "512")
+    monkeypatch.setenv("TABSIL_N_CLS", "2")
+    config = script.build_config(script.parse_args(["--config-name", "stage1"]))
+    assert (config.emsize, config.n_cls, config.model_config().icl_dim) == (512, 2, 1024)
+    # the run logs them as params, so a later stage reads its structure back
+    source = run_architecture({k: str(v) for k, v in vars(config).items()})
+    assert (source["emsize"], source["n_cls"]) == (512, 2)
+    monkeypatch.delenv("TABSIL_EMSIZE")
+    monkeypatch.delenv("TABSIL_N_CLS")
+    # a later stage from a run of another size needs the same values again
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    with pytest.raises(SystemExit, match="--emsize"):
+        script.build_config(args, source)
+    args = script.parse_args(
+        ["--config-name", "stage2", "--init-run-id", "abc", "--emsize", "512", "--n-cls", "2"]
+    )
+    assert script.build_config(args, source) == replace(recipe.curriculum(2), emsize=512, n_cls=2)
+    # a structure the model rejects stops before the run starts
+    for bad, match in ((["--emsize", "130"], "does not divide"), (["--emsize", "100"], "RoPE")):
+        with pytest.raises(SystemExit, match=match):
+            script.build_config(script.parse_args(["--config-name", "stage1", *bad]))
+
+
+def test_train_script_picks_the_prior_and_a_resumed_run_keeps_its_own(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.delenv("TABSIL_PRIOR_TYPE", raising=False)
+    script = _train_script()
+    prior = "graph_scm_hicard_missing"
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    assert script.build_config(args).prior_type == "graph_scm"
+    # a new stage from a run's weights takes the given prior
+    args = script.parse_args(
+        ["--config-name", "stage2", "--init-run-id", "abc", "--prior-type", prior]
+    )
+    script.inherit_prior_type(args, {"prior_type": "graph_scm"})
+    assert script.build_config(args) == replace(recipe.curriculum(2), prior_type=prior)
+    monkeypatch.setenv("TABSIL_PRIOR_TYPE", prior)
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    assert script.build_config(args).prior_type == prior
+    monkeypatch.delenv("TABSIL_PRIOR_TYPE")
+    # a resumed run keeps its prior (runs without the param used graph_scm)
+    args = script.parse_args(["--config-name", "stage2", "--resume-run-id", "abc"])
+    script.inherit_prior_type(args, {"prior_type": prior})
+    assert script.build_config(args).prior_type == prior
+    args = script.parse_args(["--config-name", "stage2", "--resume-run-id", "abc"])
+    script.inherit_prior_type(args, {})
+    assert args.prior_type == "graph_scm"
+    args = script.parse_args(
+        ["--config-name", "stage2", "--resume-run-id", "abc", "--prior-type", prior]
+    )
+    with pytest.raises(SystemExit, match="prior_type"):
+        script.inherit_prior_type(args, {"prior_type": "graph_scm"})
+    with pytest.raises(SystemExit, match="prior_type"):
+        script.build_config(script.parse_args(["--config-name", "smoke", "--prior-type", "nope"]))
+
+
 def test_train_script_checks_the_source_checkpoint_before_the_run(tmp_path):
     # a checkpoint with a mismatched model config stops before opening an MLflow run
     script = _train_script()
@@ -380,6 +446,32 @@ def test_train_script_checks_the_source_checkpoint_before_the_run(tmp_path):
     with pytest.raises(SystemExit, match="regression borders"):
         script._check_source(str(tmp_path / "no_borders.pt"), config, resume=False)
     script._check_source(latest, config, resume=False)  # loading weights only ignores the step
+
+
+def test_train_script_takes_weights_from_a_hub_folder(tmp_path, monkeypatch):
+    # --init-hub: a save_pretrained folder (here local) becomes an init_from checkpoint
+    from tabsil.hub import save_pretrained
+    from tabsil.models import load_checkpoint
+
+    _clear_env(monkeypatch)
+    script = _train_script()
+    config = _smoke(steps=2, collapse_threshold=None)
+    train(config, tmp_path / "a", mlflow_log=False)
+    model, borders = load_checkpoint(tmp_path / "a" / "latest.pt")
+    save_pretrained(model, borders, tmp_path / "hub")
+    path = script.hub_init_checkpoint(str(tmp_path / "hub"), config, tmp_path / "init.pt")
+    result = train(config, tmp_path / "b", mlflow_log=False, init_from=path)
+    trained, trained_borders = load_checkpoint(result["final_path"])
+    assert torch.equal(trained_borders, borders)  # the borders carry over
+    # another structure is refused before the run starts
+    with pytest.raises(SystemExit, match="nhead"):
+        script.hub_init_checkpoint(str(tmp_path / "hub"), replace(config, nhead=4), tmp_path / "x")
+    # one weight source at a time; a later stage accepts --init-hub
+    args = script.parse_args(["--config-name", "stage2", "--init-hub", "aiden-jeon/tabsil@x"])
+    assert args.init_hub == "aiden-jeon/tabsil@x"
+    for other in (["--init-run-id", "abc"], ["--resume-run-id", "abc"]):
+        with pytest.raises(SystemExit):
+            script.parse_args(["--config-name", "stage2", "--init-hub", "r", *other])
 
 
 @pytest.mark.parametrize(
@@ -444,3 +536,63 @@ def test_train_script_sets_the_tabicl_prior_options_from_env(monkeypatch):
         )
         == base
     )
+
+
+def test_a_resumed_run_keeps_its_seed_steps_and_warmup(monkeypatch):
+    _clear_env(monkeypatch)
+    for name in ("TABSIL_SEED", "TABSIL_WARMUP_STEPS"):
+        monkeypatch.delenv(name, raising=False)
+    script = _train_script()
+    params = {"seed": "1", "steps": "30000", "warmup_steps": "300"}
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc"])
+    script.inherit_schedule(args, params)
+    config = script.build_config(args)
+    assert (config.seed, config.steps, config.warmup_steps) == (1, 30000, 300)
+    # values given on resume are used, but another seed is an error
+    args = script.parse_args(
+        ["--config-name", "stage1", "--resume-run-id", "abc", "--steps", "40000", "--seed", "1"]
+    )
+    script.inherit_schedule(args, params)
+    assert (args.steps, args.seed, args.warmup_steps) == (40000, 1, 300)
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc", "--seed", "2"])
+    with pytest.raises(SystemExit, match="seed"):
+        script.inherit_schedule(args, params)
+    # runs without the params, and runs that only give their weights, keep the preset
+    args = script.parse_args(["--config-name", "stage1", "--resume-run-id", "abc"])
+    script.inherit_schedule(args, {})
+    assert script.build_config(args) == recipe.curriculum(1)
+    args = script.parse_args(["--config-name", "stage2", "--init-run-id", "abc"])
+    script.inherit_schedule(args, params)
+    assert script.build_config(args) == recipe.curriculum(2)
+
+
+def test_train_script_sets_the_prefetch_factor(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.delenv("TABSIL_PREFETCH_FACTOR", raising=False)
+    script = _train_script()
+    assert script.build_config(script.parse_args(["--config-name", "stage1"])).prefetch_factor == 4
+    args = script.parse_args(["--config-name", "stage1", "--prefetch-factor", "16"])
+    assert script.build_config(args) == replace(recipe.curriculum(1), prefetch_factor=16)
+    monkeypatch.setenv("TABSIL_PREFETCH_FACTOR", "8")
+    script = _train_script()
+    assert script.build_config(script.parse_args(["--config-name", "stage1"])).prefetch_factor == 8
+    with pytest.raises(ValueError, match="prefetch_factor"):
+        TrainConfig(prefetch_factor=0)
+
+
+def test_the_loaders_request_prefetch_factor_micro_batches_per_worker(tmp_path, monkeypatch):
+    from tabsil_train.training import loop
+
+    seen = []
+    original = loop.DataLoader
+
+    def recording(*args, **kwargs):
+        seen.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(loop, "DataLoader", recording)
+    config = tabsil_smoke(
+        steps=1, warmup_steps=1, num_workers=2, prefetch_factor=3, border_datasets=10
+    )
+    train(config, tmp_path, mlflow_log=False)
+    assert seen and all(k["prefetch_factor"] == 3 and k["num_workers"] == 1 for k in seen)

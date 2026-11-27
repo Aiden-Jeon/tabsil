@@ -32,6 +32,23 @@ AFFILIATES, licensed under the Apache License 2.0:
 - src/tabsil/models/column_row_transformer.py `LogScale`: adapted from sdm/nn/scaling.py
   `LogScale` and `GatedLogScale` (that file states that portions of it are derived from TabICLv2;
   see below)
+- training/src/tabsil_train/priors/transforms/categorical.py `HighCardinality`, `level_codes`,
+  `power_law_weights`: adapted from sdm/prior/tabular/transform/recode.py `RecodeHighCardinality`
+  and sdm/prior/util.py `random_weight`
+- training/src/tabsil_train/priors/transforms/missing.py `StructuredMissing` and its `mask_*`
+  functions: adapted from sdm/prior/tabular/transform/missing/structured.py (`MaskRows`,
+  `MaskBlock`, `MaskByTarget`, `MaskCensoring`, `MaskStructured`), near_empty.py
+  (`MaskNearEmpty`), latent.py (`MaskLatent`) and _count.py (`_sample_count`)
+- training/src/tabsil_train/priors/transforms/features.py `Coarsen`: adapted from
+  sdm/prior/tabular/transform/coarsen.py `Coarsen`
+- training/src/tabsil_train/priors/transforms/dependence.py `CorrelateColumns`, `blend_discrete`,
+  `Relabel`, `score_classes`: adapted from sdm/prior/tabular/transform/correlate.py
+  (`CorrelateColumns`, `_discretize_correlated_column`) and relabel.py (`Relabel`)
+- training/src/tabsil_train/priors/transforms/target.py `TrainRowTargetScale`: adapted from
+  train/kumo/tabular/loader.py (`PriorDataset`: the context-row target standardization and the
+  `min_regression_train_std` check)
+- training/src/tabsil_train/training/muon.py `adamw_parameters` and the AdamW groups of
+  `Muon.for_model`: adapted from train/kumo/tabular/optim.py (`configure_optimizers`)
 
 This product includes software derived from TabICLv2 (https://github.com/soda-inria/tabicl),
 Copyright (c) 2025, Soda team @ Inria, licensed under the BSD 3-Clause License

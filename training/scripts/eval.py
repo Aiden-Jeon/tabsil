@@ -14,11 +14,20 @@ From the repository root (`EVAL=training/scripts/eval.py`, `RUN="uv run --packag
   $RUN python $EVAL --suite classification --classifier-path clf.pt --tasks 359955 --folds 2
   $RUN python $EVAL --suite classification --classifier-path runs:/<run_id>/checkpoints/latest.pt
 
+Every fold row (`eval_rows.csv`) also has TabArena's error (`metric_error`: 1 - ROC AUC for binary,
+log loss for multiclass, RMSE for regression) and `problem_type`, which the paired report
+(`training/scripts/paired_report.py`) compares between two runs. `--suite dev` is the development
+suite of the v2 experiment plan: the 57 tasks without the 9 whose data is also in TabArena's 51
+(`tabsil_train.benchmarks.amlb.TABARENA_OVERLAP`), 23 classification and 25 regression tasks.
+
 The ensemble member count and preprocessing come from the model (`tabsil.recipe.default_inference`:
 the Hub config.json `inference` entry first, otherwise 8 `standard` members with at most 768
 columns per member chosen `balanced`). `--n-estimators` changes the member count and `--seed` the
 members' random numbers (feature and class order, identifier column): re-evaluating the same model
-with another seed measures the benchmark noise. Arena result caches are per seed.
+with another seed measures the benchmark noise. Arena result caches are per seed, and per checkpoint
+path, weights (a digest of the state dict and borders) and applied inference settings. The settings
+each task ran with are logged as the MLflow params `inference_classification` and
+`inference_regression` (JSON).
 
 `--uncertainty` (AMLB) adds predictive distribution and uncertainty metrics per fold
 (`tabsil_train.benchmarks.tabular.uncertainty`): for regression CRPS, central interval
@@ -29,9 +38,10 @@ alpha = 0.1) coverage, set size, SSCS and class-conditional coverage gap. The pe
 widths and interval scores are averaged only as `_scaled`, divided by the training target standard
 deviation).
 
-`--suite tabarena-lite`, `beyondarena` and `beyondarena-lite` are TabArena-Lite and BeyondArena
-(`tabsil_train.benchmarks.tabular.arena`, needs the `arena` extra, which needs pandas 2.3 and is
-installed apart from the dev group:
+`--suite tabarena-lite`, `tabarena-3split`, `beyondarena` and `beyondarena-lite` are TabArena-Lite,
+the same 51 datasets with their first 3 splits (153 splits; every baseline is scored on the same
+splits) and BeyondArena (`tabsil_train.benchmarks.tabular.arena`, needs the `arena` extra, which
+needs pandas 2.3 and is installed apart from the dev group:
 `uv sync --package tabsil-train --no-dev --extra arena --group arena-dev`, with the same options
 for `uv run`). The official splits run and Elo, normalized score,
 improvability and win rates are computed as on the public leaderboard. Splits of a task without a
@@ -164,14 +174,15 @@ from tabsil_train.evaluation.fev import run_fev
 from tabsil_train.evaluation.impute import run_impute
 from tabsil_train.evaluation.shards import clock as _clock
 from tabsil_train.evaluation.shards import strip_flags as _strip_flags
-from tabsil_train.hub import load_model
+from tabsil_train.hub import load_model, weights_digest
 from tabsil_train.utils import mlflow_eval_run
 
-ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
+ARENA_SUITES = ("tabarena-lite", "tabarena-3split", "beyondarena", "beyondarena-lite")
 FEV_SUITE = "fev"
 ADBENCH_SUITE = "adbench"
 CAUSAL_SUITE = "causal"
 IMPUTE_SUITE = "impute"
+DEV_SUITE = "dev"
 LATENCY_REPEATS = 5
 
 
@@ -183,6 +194,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "classification",
             "regression",
             "all",
+            DEV_SUITE,
             *ARENA_SUITES,
             FEV_SUITE,
             ADBENCH_SUITE,
@@ -373,11 +385,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def selected_tasks(args: argparse.Namespace) -> list[tuple[str, int]]:
-    suites = ["classification", "regression"] if args.suite == "all" else [args.suite]
+    both = args.suite in ("all", DEV_SUITE)
+    suites = ["classification", "regression"] if both else [args.suite]
     chosen = None if args.tasks is None else {int(t) for t in args.tasks.split(",")}
     out = []
     for suite in suites:
-        for task_id in bm.task_names(suite):
+        ids = bm.DEV_SUITE[suite] if args.suite == DEV_SUITE else bm.task_names(suite)
+        for task_id in ids:
             if chosen is None or task_id in chosen:
                 out.append((suite, task_id))
     if chosen is not None:
@@ -404,6 +418,7 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
         member_kinds = resolve_member_kinds(args.member_kinds)
     n_estimators = args.n_estimators or inference["n_estimators"]
     fits_log = fits_path(args)
+    options = inference_options(args, suite)
 
     def make(task: bm.OpenMLTask):
         kw = {
@@ -448,7 +463,35 @@ def make_estimator_factory(suite: str, args: argparse.Namespace):
     # 768 / balanced)
     make.max_features_per_member, make.feature_subsampling = model_feature_cap(args, inference)
     make.model, make.borders = model, borders  # TabArena / BeyondArena size limits (arena_limits)
+    # the inference settings the estimators get (model's, then the command line's): logged to
+    # MLflow and part of the arena cache key
+    make.inference = applied_inference(
+        suite, n_estimators, member_kinds, make.max_features_per_member,
+        make.feature_subsampling, {**inference, **options},
+    )  # fmt: skip
     return make
+
+
+def applied_inference(
+    suite: str,
+    n_estimators: int,
+    member_kinds,
+    max_features_per_member: int | None,
+    feature_subsampling: str,
+    settings: dict,
+) -> dict:
+    """The inference settings one task's estimators run with, as plain values (the `inference_*`
+    MLflow params and the arena cache key)."""
+    out = {
+        "n_estimators": int(n_estimators),
+        "member_kinds": list(member_kinds),
+        "max_features_per_member": max_features_per_member,
+        "feature_subsampling": feature_subsampling,
+        "categories": settings["categories"],
+    }
+    if suite == "classification":
+        out["softmax_temperature"] = float(settings["softmax_temperature"])
+    return out
 
 
 def inference_options(args: argparse.Namespace, suite: str | None = None) -> dict:
@@ -560,6 +603,8 @@ def arena_suite(name: str):
 
     if name == "tabarena-lite":
         return tabarena.SUITE
+    if name == "tabarena-3split":
+        return tabarena.SUITE_3SPLIT
     return beyondarena.suite("lite" if name == "beyondarena-lite" else "core2k")
 
 
@@ -591,11 +636,15 @@ def arena_limits(models: dict, args: argparse.Namespace, caps: dict | None = Non
 
 def arena_fingerprint(args: argparse.Namespace, paths: dict, factories: dict) -> str:
     """The value that decides whether finished splits are reused: only with the same checkpoints
-    and inference settings. Settings at their default are left out."""
+    (path and weights, `weights_digest`) and inference settings (the command line's, and the ones
+    the estimators get, `applied_inference`, which include the settings saved with the weights).
+    Command-line settings at their default are left out."""
     caps = feature_caps(args, factories)
     return json.dumps(
         {
             "paths": {t: paths[t] for t in factories},
+            "weights": {t: weights_digest(f.model, f.borders) for t, f in factories.items()},
+            "inference": {t: f.inference for t, f in factories.items()},
             "n_estimators": {t: f.n_estimators for t, f in factories.items()},
             **({"seed": args.seed} if args.seed else {}),
             **(
@@ -1202,6 +1251,12 @@ def print_arena_summary(summary: dict) -> None:
         print(line(f"  {label}", s))
 
 
+def applied_inference_params(factories: dict) -> dict:
+    """MLflow params of the inference settings each task ran with (`applied_inference`, JSON):
+    `inference_classification`, `inference_regression`."""
+    return {f"inference_{t}": json.dumps(f.inference, sort_keys=True) for t, f in factories.items()}
+
+
 def log_arena_mlflow(args, summary: dict, out_dir: Path, factories: dict) -> None:
     prefix = summary["suite"].replace("-", "_")
     mlflow.log_params(
@@ -1217,6 +1272,7 @@ def log_arena_mlflow(args, summary: dict, out_dir: Path, factories: dict) -> Non
             "subsample_train_rows": args.subsample_train_rows,
             "member_kinds": getattr(args, "member_kinds", None) or "default",
             **inference_options(args),
+            **applied_inference_params(factories),
         }
     )
     paths = {"classifier_path": args.classifier_path, "regressor_path": args.regressor_path}
@@ -1251,7 +1307,10 @@ def log_fits_artifact(args: argparse.Namespace) -> None:
 def summarize(rows: list[dict]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     keys = ["suite", "task_id", "dataset"]
-    per_dataset = df.groupby(keys)["score"].mean().reset_index()
+    if "problem_type" in df:
+        keys.append("problem_type")
+    values = [c for c in ("score", "metric_error") if c in df]
+    per_dataset = df.groupby(keys)[values].mean().reset_index()
     paper = {**bm.paper_scores("classification"), **bm.paper_scores("regression")}
     per_dataset["paper"] = per_dataset["task_id"].map(paper)
     per_dataset["diff"] = per_dataset["score"] - per_dataset["paper"]
@@ -1282,7 +1341,9 @@ def main(argv: list[str] | None = None) -> None:
         IMPUTE_SUITE,
     ):
         # the arenas report only the official package's metrics; stop rather than silently ignore
-        raise SystemExit("--uncertainty is for AMLB suites only (classification, regression, all).")
+        raise SystemExit(
+            "--uncertainty is for AMLB suites only (classification, regression, all, dev)."
+        )
     if args.latency and args.suite not in ARENA_SUITES:
         raise SystemExit("--latency is for the TabArena / BeyondArena suites only.")
     out_dir = Path(args.out_dir)
@@ -1330,6 +1391,7 @@ def run_amlb(args: argparse.Namespace, out_dir: Path, tasks: list, use_mlflow: b
                 "max_features_per_member": _one_or_by_task(feature_caps(args, factories)),
                 "subsample_train_rows": args.subsample_train_rows,
                 **{f"n_estimators_{suite}": f.n_estimators for suite, f in factories.items()},
+                **applied_inference_params(factories),
             }
         )
         paths = {"classifier_path": args.classifier_path, "regressor_path": args.regressor_path}
@@ -1410,7 +1472,7 @@ def write_amlb_fits(args: argparse.Namespace, suite: str, task, task_rows: list[
 def summarize_uncertainty(rows: list[dict]) -> pd.DataFrame:
     """Per-dataset fold means of the uncertainty metrics
     (`tabsil_train.benchmarks.tabular.uncertainty`)."""
-    return unc.dataset_means(rows, exclude=("score", *bm.TIME_KEYS))
+    return unc.dataset_means(rows, exclude=("score", "metric_error", "problem_type", *bm.TIME_KEYS))
 
 
 def report_uncertainty(rows: list[dict], out_dir: Path, use_mlflow: bool) -> None:

@@ -22,6 +22,7 @@ from tabsil.models import (
     model_class,
 )
 from tabsil_train.priors import DEFAULT_PRIOR_TYPE, canonical_prior_type, prior_module
+from tabsil_train.training.reference import REFERENCE_BATCH
 
 N_BUCKETS = 5000
 # The tasks one training run learns (one model, the training loop alternates them per step)
@@ -42,6 +43,8 @@ SPEED_OPTIONS = (
 PHASE_KEYS = ("lr", "muon_weight_decay")
 # Scope of distributed Muon (`muon_distributed`)
 MUON_DISTRIBUTED = ("off", "node", "all")
+# Optimizers (`optimizer`, `training.muon`) and how messages name them
+OPTIMIZER_NAMES = {"muon": "Muon", "muon_adamw": "Muon + AdamW"}
 
 
 @dataclass
@@ -86,9 +89,14 @@ class TrainConfig:
     max_train_fraction: float = 0.9
     binary_prob: float = 0.5
     filter_unpredictable: bool = True
+    # Standardize the regression target again with the train rows (mean, sd with ddof 0), after
+    # the prior's clip and its standardization over all rows, as inference does; tables whose
+    # train-row sd is at most 0.1 are drawn again (`priors.transforms.TrainRowTargetScale`,
+    # Kumo-Tabular's loader). The regression borders follow it. Off by default (v1)
+    target_train_rows: bool = False
     missing_dataset_prob: float = 0.3
     border_datasets: int = 20_000  # datasets sampled to set the regression borders (our choice)
-    # optimization (Muon on all parameters, warmup + cosine)
+    # optimization (Muon on all parameters or Muon + AdamW, `optimizer`; warmup + cosine)
     batch_size: int = 256
     micro_batch: int = 4
     steps: int = 250_000  # total length of the lr schedule
@@ -100,9 +108,34 @@ class TrainConfig:
     # run
     seed: int = 0
     num_workers: int = 8
+    # Micro batches each prior worker has requested ahead (the DataLoader's `prefetch_factor`). The
+    # loader hands them over in request order, so one that takes longer to make than its head
+    # start (workers per task x prefetch_factor micro batches) stops its GPU, and every other GPU
+    # waits for it in the gradient all-reduce. A larger value absorbs slower tables at the same
+    # tables in the same order. Priors with `corrected_cat_sizes` have such tables: at stage 1 on
+    # 8 GPUs the default's head start is about 14 s, and `graph_scm_base_realism` has micro
+    # batches that take 20 to 45 s
+    prefetch_factor: int = 4
+    # Python's garbage collector. A full pass walks every object it tracks, and nearly all of them
+    # live for the whole run (the model, the optimizer state, the compiled graphs): 1.2 to 2.1
+    # million per process, 0.7 to 1.2 s per pass on average. A pass stops its process, and every
+    # other GPU waits for it in the gradient all-reduce. On (default): at every log step each
+    # process collects once and then calls `gc.freeze()`, which moves the objects alive at that
+    # point out of the collector's reach, so later passes walk only what was made since. Every GPU
+    # does it at the same step, so the passes run side by side. Until the first log step of a run
+    # or a resumed chunk nothing is frozen. `train` unfreezes at the end. The training computation
+    # is the same on or off. It is set per chunk, and the run param holds the first chunk's value.
+    # Measured on 8 H100 over the same tables: 6.7% less per step in stage 1 and 2.3% in stage 2
+    # (`training/docs/v2-experiment-results.md`, "Collector pauses" and "The collector change as
+    # merged")
+    gc_freeze: bool = True
     log_every: int = 100
     val_every: int = 5_000
     val_batch: int = 8  # datasets per val batch; separate from micro_batch so the val set is fixed
+    # Tables per task of the reference validation set (`training.reference`, metrics `ref_*`): drawn
+    # from one fixed prior and seed, so that runs of different seeds and priors are validated on
+    # the same tables. A multiple of 8 (its batch size). 0 turns it off (default)
+    reference_val_tables: int = 0
     checkpoint_every: int = 5_000
     # latest.pt is overwritten, so every this many steps also keep `step_XXXXXXX.pt` (to go back)
     keep_every: int | None = 25_000
@@ -143,6 +176,12 @@ class TrainConfig:
     # parameters, muon_momentum the Muon momentum (TabICLv2 0.9 = `--beta1`)
     muon_weight_decay: float = 0.01
     muon_momentum: float = 0.9
+    # "muon": Muon on every parameter (above, v1). "muon_adamw": Kumo-Tabular's split, Muon on the
+    # Linear weights and AdamW (torch defaults, weight decay 0.01 on matrices and the attention
+    # logit scales, 0 on the other 1-D parameters) on the target encoders, the output and the rest
+    # (`training.muon`). Both share lr and schedule; muon_weight_decay sets only the Muon part. A
+    # run resumes only from a checkpoint of the same optimizer
+    optimizer: str = "muon"
     # Distributed Muon (`training.muon`): instead of every GPU computing the same Newton–Schulz
     # orthogonalization, GPUs split the matrix pieces and all-gather the results. "node" splits
     # among the GPUs of a node, "all" among all GPUs. Updates are bit-identical to "off" (default,
@@ -189,8 +228,17 @@ class TrainConfig:
             raise ValueError(
                 f"muon_distributed must be one of {MUON_DISTRIBUTED}: {self.muon_distributed}"
             )
+        if self.optimizer not in OPTIMIZER_NAMES:
+            raise ValueError(f"optimizer must be one of {tuple(OPTIMIZER_NAMES)}: {self.optimizer}")
+        if self.prefetch_factor < 1:
+            raise ValueError(f"prefetch_factor must be at least 1: {self.prefetch_factor}")
         if not 0.0 <= self.muon_momentum < 1.0:
             raise ValueError(f"muon_momentum must be in [0, 1): {self.muon_momentum}")
+        if self.reference_val_tables < 0 or self.reference_val_tables % REFERENCE_BATCH:
+            raise ValueError(
+                f"reference_val_tables must be a multiple of {REFERENCE_BATCH} (0 turns it off):"
+                f" {self.reference_val_tables}"
+            )
         if not 0.0 <= self.binary_prob <= 1.0:
             raise ValueError(f"binary_prob must be in [0, 1]: {self.binary_prob}")
         if self.activation_checkpointing_rows is not None:

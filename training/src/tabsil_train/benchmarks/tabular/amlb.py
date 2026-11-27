@@ -8,6 +8,15 @@ cross-validation defined by the OpenML task (90% train, 10% test). Classificatio
 `PAPER_CLASSIFICATION` and `PAPER_REGRESSION` are the unnormalized scores from Supplementary
 Tables 1 and 2 (baselines tuned for 4 hours, TabPFN at default settings). Only means are copied;
 standard deviations are omitted.
+
+Each fold also gets TabArena's error (`metric_error`, lower is better; `problem_type`), so a run
+can be compared with another in the paired report (`tabsil_train.benchmarks.paired`): 1 - ROC AUC
+for binary tasks, log loss for multiclass tasks, RMSE for regression.
+
+The development suite (`DEV_SUITE`, the eval script's `--suite dev`) is the 57 tasks without the
+datasets that are also among TabArena's 51 (`TABARENA_OVERLAP`): 23 classification and 25
+regression tasks, the v2 experiment plan's held-out data next to TabArena
+(`training/docs/v2-experiment-plan.md` §3).
 """
 
 from __future__ import annotations
@@ -716,6 +725,34 @@ PAPER_REGRESSION = (
 )
 
 
+# Tasks of the 57 whose data is also in TabArena v0.1's 51 datasets, {OpenML task id: (TabArena
+# dataset, how it was matched)}. Made with `training/scripts/dev_suite_overlap.py`, which compares
+# the names (lower case, letters and digits only) and prints both lists, against the curated
+# TabArena metadata of the `tabarena` package (dataset name, OpenML name, source and size).
+# The two "same source" entries do not match by name: AMLB's dna is the StatLog version of the UCI
+# primate splice-junction data that TabArena has as splice (3,186 against 3,190 sequences), and
+# AMLB's wine-quality-white is the white-wine half (4,898 rows) of TabArena's wine_quality (6,497
+# red and white wines). kc1 and pc4 (NASA defect data) are other projects than TabArena's jm1 and
+# stay in.
+TABARENA_OVERLAP = {
+    359955: ("blood-transfusion-service-center", "name"),
+    359956: ("qsar-biodeg", "name"),
+    168757: ("credit-g", "name"),
+    359968: ("churn", "name"),
+    359964: ("splice", "same source (UCI splice-junction)"),
+    359974: ("wine_quality", "same source (white wines of UCI wine quality)"),
+    361235: ("airfoil_self_noise", "name"),
+    361237: ("concrete_compressive_strength", "name"),
+    361621: ("QSAR_fish_toxicity", "name"),
+}
+
+
+def dev_task_ids(task: str) -> list[int]:
+    """The development suite's task ids for "classification" or "regression": the paper's tasks
+    without `TABARENA_OVERLAP`, in table order."""
+    return [t for t in task_names(task) if t not in TABARENA_OVERLAP]
+
+
 def paper_scores(task: str, method: str = "TabPFN") -> dict[int, float]:
     """Scores from the paper's tables, {OpenML task id: score}."""
     table = PAPER_CLASSIFICATION if task == "classification" else PAPER_REGRESSION
@@ -726,6 +763,10 @@ def paper_scores(task: str, method: str = "TabPFN") -> dict[int, float]:
 def task_names(task: str) -> dict[int, str]:
     table = PAPER_CLASSIFICATION if task == "classification" else PAPER_REGRESSION
     return {task_id: name for name, task_id, _, _ in table}
+
+
+# {"classification": task ids, "regression": task ids} of the development suite (`dev_task_ids`)
+DEV_SUITE = {task: dev_task_ids(task) for task in ("classification", "regression")}
 
 
 @dataclass
@@ -793,6 +834,44 @@ def score_fold(
     return float(roc_auc_score(y_true, proba, multi_class="ovr", labels=classes[present]))
 
 
+def problem_type(task_type: str, n_classes: int) -> str:
+    """TabArena's problem type: "regression", "binary" (2 classes) or "multiclass"."""
+    if task_type == "regression":
+        return "regression"
+    return "binary" if n_classes == 2 else "multiclass"
+
+
+# Probabilities are clipped to [LOG_LOSS_EPS, 1 - LOG_LOSS_EPS] in the log loss. TabArena's scorer
+# (AutoGluon's `log_loss`, which calls `sklearn.metrics.log_loss`) clips at the machine epsilon of
+# the predictions' dtype instead (2.2e-16 for float64, 1.2e-7 for float32) and does not
+# renormalize. The two agree unless a test row's true class gets a probability below the larger
+# of the two clips (1e-15 against float64 predictions, 1.2e-7 against float32): such a row costs
+# up to 34.5 here and up to 36.0 (float64) or 15.9 (float32) there.
+LOG_LOSS_EPS = 1e-15
+
+
+def metric_error(
+    kind: str, y_true: np.ndarray, prediction: np.ndarray, classes: np.ndarray | None = None
+) -> float:
+    """TabArena's error of one fold (lower is better) for `kind` (`problem_type`): 1 - ROC AUC
+    (binary), log loss (multiclass) or RMSE (regression). As in `score_fold`, test rows of a
+    class the training fold does not have are dropped (NaN if no row is left, as `score_fold`).
+    The log loss is over all training classes (the probabilities renormalized after clipping,
+    `LOG_LOSS_EPS`), so a test fold without some class is still scored."""
+    if kind == "regression":
+        return float(mean_squared_error(y_true, prediction) ** 0.5)
+    if kind == "binary":
+        return 1.0 - score_fold("classification", y_true, prediction, classes)
+    y_true, prediction = drop_unseen_classes(y_true, prediction, classes)
+    if len(y_true) == 0:
+        return float("nan")
+    proba = np.clip(np.asarray(prediction, dtype=np.float64), LOG_LOSS_EPS, 1 - LOG_LOSS_EPS)
+    proba = proba / proba.sum(axis=1, keepdims=True)
+    position = {c: i for i, c in enumerate(np.asarray(classes).tolist())}
+    index = np.array([position[c] for c in np.asarray(y_true).tolist()], dtype=int)
+    return float(-np.mean(np.log(proba[np.arange(len(y_true)), index])))
+
+
 # per-fold row counts and fit / prediction seconds (`evaluate_task` rows)
 TIME_KEYS = ("train_rows", "test_rows", "fit_rows", "fit_seconds", "predict_seconds")
 
@@ -834,7 +913,8 @@ def evaluate_task(
     n_folds: int = 10,
     uncertainty: bool = False,
 ) -> list[dict]:
-    """One score per fold. With `uncertainty=True`, predictive-distribution and uncertainty
+    """One score per fold (`score_fold`) and TabArena's error (`metric_error`, with
+    `problem_type`). With `uncertainty=True`, predictive-distribution and uncertainty
     metrics (`tabsil_train.benchmarks.tabular.uncertainty`) are added to the same row. Regression
     estimators must provide `predict_full` (mean, bin log-probabilities, borders) or
     `predict_distribution` (log-probabilities, borders).
@@ -845,6 +925,7 @@ def evaluate_task(
     `predict_full`, used with `uncertainty`, returns the distribution from the same pass)."""
     from tabsil_train.benchmarks.tabular import uncertainty as unc
 
+    kind = problem_type(task.task_type, task.y.nunique())
     rows = []
     for fold, train_ix, test_ix in task.folds(n_folds):
         estimator = make_estimator(task)
@@ -861,6 +942,7 @@ def evaluate_task(
             prediction = estimator.predict_proba(x_test)
             predict_seconds = time.perf_counter() - start
             score = score_fold("classification", y_test, prediction, estimator.classes_)
+            error = metric_error(kind, y_test, prediction, estimator.classes_)
             if uncertainty:
                 extra = unc.classification_metrics(
                     prediction, y_test, estimator.classes_, seed=fold
@@ -877,6 +959,7 @@ def evaluate_task(
                 prediction = estimator.predict(x_test)
                 predict_seconds = time.perf_counter() - start
             score = score_fold("regression", y_test, prediction)
+            error = metric_error(kind, y_test, prediction)
         times = {
             "train_rows": len(train_ix),
             "test_rows": len(test_ix),
@@ -890,6 +973,8 @@ def evaluate_task(
                 "dataset": task.name,
                 "fold": fold,
                 "score": score,
+                "problem_type": kind,
+                "metric_error": error,
                 **times,
                 **extra,
             }

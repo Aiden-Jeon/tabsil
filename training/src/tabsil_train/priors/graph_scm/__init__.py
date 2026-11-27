@@ -1,6 +1,12 @@
 """Graph SCM prior (prior axis, `prior_type="graph_scm"`): the TabICLv2 graph SCM generator plus a
-table size rule and missing values. It chains the parts (`tabsil_train.priors.generators.graph_scm`,
-`transforms`) with `Pipeline`, and is the prior used by the TabSil recipe (`tabsil_train.recipe`).
+table size rule and missing values. It chains the parts (`generator.GraphSCM` in this folder,
+`tabsil_train.priors.transforms`) with `Pipeline`, and is the prior used by the TabSil recipe
+(`tabsil_train.recipe`).
+
+This folder holds what is specific to the graph SCM. This module is the prior: `GraphSCMPrior`,
+and `make_prior`, `make_borders` and `check_config`, which build it from a training config.
+`generator` is the generator it wraps. `variants` holds the priors that are this one with some of
+its options at fixed values, each registered under its own name.
 
 1. Table size: each batch draws the rows (train + eval) and the train-row share, then the feature
    count, with the TabICLv2 training-script rule (`table_size.sample_split_size`). All datasets
@@ -12,7 +18,41 @@ table size rule and missing values. It chains the parts (`tabsil_train.priors.ge
    count on (at most `MAX_ATTEMPTS` times).
 3. Missing values (TabPFN v2 paper, "Post-processing"; `Missing`): in some datasets every cell is
    erased with the same probability (MCAR). The paper gives no rates; `missing_dataset_prob` and
-   `max_missing_rate` are our choice.
+   `max_missing_rate` are our choice (the rate is U(`min_missing_rate`, `max_missing_rate`), with
+   a lower bound of 0 by default).
+
+Options that make the tables more like real ones, all off by default (then no random number is
+drawn for them, so the datasets are exactly those of the v1 prior). They change only x, so the
+regression borders do not depend on them. In the order applied, between steps 2 and 3:
+
+- `noise_prob` (`transforms.MeasurementNoise`): noisy measurements of about 10% of the columns
+- `coarsen_prob` (`transforms.Coarsen`): columns reduced to 2-8 ordered levels
+- `high_cardinality_prob` (`transforms.HighCardinality`): 1-3 columns recoded as categorical
+  columns with 21 to (rows) categories, coded as inference codes them (train-row categories,
+  unseen ones NaN)
+- `structured_missing_prob`, `near_empty_missing_prob`, `latent_missing_prob`
+  (`transforms.StructuredMissing`): value-dependent (MAR/MNAR) missing values in column groups,
+  before the MCAR step 3
+
+Options that change how the columns depend on each other and on the target, also off by default.
+They run between DropInvalid and CoverClasses in step 2. Some also change y, so the regression
+borders are drawn with them (`make_borders(..., **options)`, `TARGET_FIELDS`):
+
+- `correlate_prob` (`transforms.CorrelateColumns`): random column blocks blended toward shared
+  factors (x only). `correlate_discrete_levels` (default 100) is the most distinct values of a
+  column that blending keeps as they are
+- `relabel_prob` (`transforms.Relabel`): the target recomputed from 1-4 columns
+- `corrected_num_converters`, `corrected_cat_sizes` (`generator.GraphSCM`): the two TabICL
+  `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 200 categories)
+- `reject_trivial_prob` (`generator.GraphSCM`): with this probability a dataset that an ExtraTrees
+  probe predicts almost perfectly is drawn again
+
+Regression target scaling, off by default: with `target_train_rows`
+(`transforms.TrainRowTargetScale`, a training config field like `filter_unpredictable`), the
+target is standardized again with the train rows after the SCM's clip and standardization over all
+rows, as inference standardizes it, and a table whose train-row sd is at most 0.1 is drawn again
+(Kumo-Tabular's loader). It runs last in step 2, so the regression borders are drawn with it
+(`BORDER_PRIOR_FIELDS`).
 
     prior = GraphSCMPrior(task="classification", seed=0)
     batch = prior.sample_batch(8)  # x (8, rows, features), y (8, rows), n_train
@@ -29,11 +69,22 @@ from typing import Literal
 import torch
 
 from tabsil_train.priors.base import PriorBatch
-from tabsil_train.priors.generators.graph_scm import GraphSCM
-from tabsil_train.priors.hyperparameters import ClassCount
+from tabsil_train.priors.graph_scm.generator import GraphSCM
 from tabsil_train.priors.pipeline import Pipeline, Rng
 from tabsil_train.priors.table_size import check_split_sizes, sample_split_size
-from tabsil_train.priors.transforms import CoverClasses, DropInvalid, Missing
+from tabsil_train.priors.transforms import (
+    Coarsen,
+    CorrelateColumns,
+    CoverClasses,
+    DropInvalid,
+    HighCardinality,
+    MeasurementNoise,
+    Missing,
+    Relabel,
+    StructuredMissing,
+    TrainRowTargetScale,
+)
+from tabsil_train.priors.transforms.dependence import DISCRETE_LEVELS
 
 # Most classes of a classification dataset (TabPFN v2 paper); the classifier's output count
 # (`TrainConfig.n_out`)
@@ -41,6 +92,29 @@ MAX_CLASSES = 10
 MAX_ATTEMPTS = 100  # most redraws for one dataset (so that a bad setting raises instead of hanging)
 # Fewest train rows of a table: classification needs two so that two classes can appear
 MIN_TRAIN_ROWS = {"classification": 2, "regression": 1}
+
+
+class ClassCount:
+    """Class count `num_classes` ~ U{2, ..., min(max_classes, train rows)}.
+
+    Every class must appear among the train rows, so the class count never exceeds the train row
+    count. With `binary_prob` > 0, 2 is picked first with that probability, otherwise the count is
+    drawn from the uniform distribution above (TabICLv2 `PriorDataset` uses 0.5, giving binary
+    tasks 0.5 + 0.5/9 ≈ 56% of the time). With 0, no extra random number is drawn, so the datasets
+    are the same as without the option.
+    """
+
+    def __init__(self, max_classes: int, binary_prob: float = 0.0) -> None:
+        if not 0.0 <= binary_prob <= 1.0:
+            raise ValueError(f"binary_prob must be between 0 and 1: {binary_prob}")
+        self.max_classes = max_classes
+        self.binary_prob = binary_prob
+
+    def __call__(self, rng: Rng, n_train: int, n_features: int) -> dict:
+        if self.binary_prob and rng.numpy.random() < self.binary_prob:
+            return {"num_classes": 2}
+        max_classes = min(self.max_classes, n_train)
+        return {"num_classes": int(rng.numpy.integers(2, max_classes + 1))}
 
 
 class GraphSCMPrior:
@@ -60,6 +134,20 @@ class GraphSCMPrior:
         max_train_fraction: float = 0.9,
         binary_prob: float = 0.0,
         filter_unpredictable: bool = False,
+        noise_prob: float = 0.0,
+        coarsen_prob: float = 0.0,
+        high_cardinality_prob: float = 0.0,
+        structured_missing_prob: float = 0.0,
+        near_empty_missing_prob: float = 0.0,
+        latent_missing_prob: float = 0.0,
+        correlate_prob: float = 0.0,
+        relabel_prob: float = 0.0,
+        corrected_num_converters: bool = False,
+        corrected_cat_sizes: bool = False,
+        target_train_rows: bool = False,
+        min_missing_rate: float = 0.0,
+        correlate_discrete_levels: int = DISCRETE_LEVELS,
+        reject_trivial_prob: float = 0.0,
     ) -> None:
         self._task = task
         self.min_train_rows = MIN_TRAIN_ROWS[task]
@@ -83,17 +171,53 @@ class GraphSCMPrior:
         self.max_train_fraction = max_train_fraction
         self.rng = Rng.from_seed(seed)
         # This also seeds TabICL's global random state
-        generator = GraphSCM(task, seed=seed, filter_unpredictable=filter_unpredictable)
+        generator = GraphSCM(
+            task,
+            seed=seed,
+            filter_unpredictable=filter_unpredictable,
+            corrected_num_converters=corrected_num_converters,
+            corrected_cat_sizes=corrected_cat_sizes,
+            reject_trivial_prob=reject_trivial_prob,
+        )
         classification = task == "classification"
         hyperparameters = ClassCount(MAX_CLASSES, binary_prob) if classification else None
-        # Everything before the missing values (regression borders and `_one_dataset` stop here)
-        self._accept = [DropInvalid(), CoverClasses()] if classification else [DropInvalid()]
-        self._missing = Missing(missing_dataset_prob, max_missing_rate)
+        # Column dependence options (they run before CoverClasses, since Relabel changes y)
+        dependence = []
+        if correlate_prob:
+            dependence.append(CorrelateColumns(correlate_prob, correlate_discrete_levels))
+        if relabel_prob:
+            dependence.append(Relabel(relabel_prob, classification=classification))
+        self.dependence = tuple(dependence)
+        # Everything before the missing values (regression borders and `_one_dataset` stop here).
+        # The train-row target scaling comes last, after every part that changes y
+        last = [CoverClasses()] if classification else []
+        if target_train_rows and not classification:
+            last.append(TrainRowTargetScale())
+        self._accept = [DropInvalid(), *dependence, *last]
+        self._missing = Missing(missing_dataset_prob, max_missing_rate, min_missing_rate)
+        # The options: a part is only added when on, so the v1 settings draw the same numbers
+        realism = []
+        if noise_prob:
+            realism.append(MeasurementNoise(noise_prob))
+        if coarsen_prob:
+            realism.append(Coarsen(coarsen_prob))
+        if high_cardinality_prob:
+            realism.append(HighCardinality(high_cardinality_prob))
+        if structured_missing_prob or near_empty_missing_prob or latent_missing_prob:
+            realism.append(
+                StructuredMissing(
+                    structured_prob=structured_missing_prob,
+                    near_empty_prob=near_empty_missing_prob,
+                    latent_prob=latent_missing_prob,
+                    classification=classification,
+                )
+            )
+        self.realism = tuple(realism)
         self.pipeline = Pipeline(
             generator,
             rng=self.rng,
             hyperparameters=hyperparameters,
-            transforms=[*self._accept, self._missing],
+            transforms=[*self._accept, *realism, self._missing],
             max_attempts=MAX_ATTEMPTS,
         )
 
@@ -108,6 +232,10 @@ class GraphSCMPrior:
     @property
     def max_missing_rate(self) -> float:
         return self._missing.max_rate
+
+    @property
+    def min_missing_rate(self) -> float:
+        return self._missing.min_rate
 
     def sample_shape(self) -> tuple[int, int, int]:
         """(train rows, features, eval rows) of the next table (`table_size.sample_split_size`)."""
@@ -152,10 +280,33 @@ SIZE_DEFAULTS = {
 }
 SIZE_FIELDS = tuple(SIZE_DEFAULTS)
 # Prior options that change the training data distribution
-PRIOR_FIELDS = ("binary_prob", "filter_unpredictable")
+PRIOR_FIELDS = ("binary_prob", "filter_unpredictable", "target_train_rows")
+# Options that change only x, off by default (module docstring). They are not training config
+# fields: a prior that turns them on is a variant with fixed values (`variants`)
+REALISM_FIELDS = (
+    "noise_prob",
+    "coarsen_prob",
+    "high_cardinality_prob",
+    "structured_missing_prob",
+    "near_empty_missing_prob",
+    "latent_missing_prob",
+    "correlate_prob",
+    "correlate_discrete_levels",
+)
+# The MCAR missing values (step 3; x only). missing_dataset_prob is a training config field; a
+# variant may fix it and the rates instead (then the config value is not used)
+MISSING_FIELDS = ("missing_dataset_prob", "max_missing_rate", "min_missing_rate")
+# Options that also change the target, off by default. Like REALISM_FIELDS they are fixed by a
+# variant, which passes them to `make_borders` too
+TARGET_FIELDS = (
+    "relabel_prob",
+    "corrected_num_converters",
+    "corrected_cat_sizes",
+    "reject_trivial_prob",
+)
 # Those that also change the regression target distribution (the regression borders follow the
 # training prior in these; binary_prob only affects classification)
-BORDER_PRIOR_FIELDS = ("filter_unpredictable",)
+BORDER_PRIOR_FIELDS = ("filter_unpredictable", "target_train_rows")
 
 
 def _sizes(config) -> dict:
@@ -172,27 +323,36 @@ def check_config(config) -> None:
         check_split_sizes(**sizes, min_train_rows=min_train_rows)
 
 
-def make_prior(config, task: str, seed: int) -> GraphSCMPrior:
+def make_prior(config, task: str, seed: int, **options) -> GraphSCMPrior:
     """The `task` prior with the dataset sizes of the training config
-    (`tabsil_train.training.config.TrainConfig`)."""
+    (`tabsil_train.training.config.TrainConfig`). `options` are the `GraphSCMPrior` options a
+    prior assembled on this one fixes (`REALISM_FIELDS`, `MISSING_FIELDS`, `TARGET_FIELDS`)."""
+    unknown = set(options) - set(REALISM_FIELDS) - set(MISSING_FIELDS) - set(TARGET_FIELDS)
+    if unknown:
+        raise TypeError(f"make_prior got unknown options: {sorted(unknown)}")
     return GraphSCMPrior(
         task,
         seed=seed,
-        missing_dataset_prob=config.missing_dataset_prob,
+        **{"missing_dataset_prob": config.missing_dataset_prob, **options},
         **_sizes(config),
         **{name: getattr(config, name) for name in PRIOR_FIELDS},
     )
 
 
-def make_borders(config, n_buckets: int, seed: int, n_jobs: int = 1) -> torch.Tensor:
+def make_borders(config, n_buckets: int, seed: int, n_jobs: int = 1, **options) -> torch.Tensor:
     """Regression borders (`regression_borders`) drawn with the dataset sizes of the training
-    config."""
+    config. `options` are the `TARGET_FIELDS` a prior assembled on this one fixes (the options
+    that change y)."""
+    unknown = set(options) - set(TARGET_FIELDS)
+    if unknown:
+        raise TypeError(f"make_borders got unknown options: {sorted(unknown)}")
     return regression_borders(
         n_buckets,
         config.border_datasets,
         seed,
         n_jobs=n_jobs,
         **{name: getattr(config, name) for name in BORDER_PRIOR_FIELDS},
+        **options,
         **_sizes(config),
     )
 
@@ -233,10 +393,11 @@ def regression_borders(
     missing ones; they mean the same as in `GraphSCMPrior`, and in training `make_borders` passes
     the training prior's values. `filter_unpredictable` (`BORDER_PRIOR_FIELDS`, default from
     `GraphSCMPrior`) should also match the training prior (filtered datasets' targets never
-    appear in training).
+    appear in training), and so should the `TARGET_FIELDS` options.
     """
-    options = {k: v for k, v in sizes_and_options.items() if k in BORDER_PRIOR_FIELDS}
-    sizes = {k: v for k, v in sizes_and_options.items() if k not in BORDER_PRIOR_FIELDS}
+    prior_fields = (*BORDER_PRIOR_FIELDS, *TARGET_FIELDS)
+    options = {k: v for k, v in sizes_and_options.items() if k in prior_fields}
+    sizes = {k: v for k, v in sizes_and_options.items() if k not in prior_fields}
     unknown = set(sizes) - set(SIZE_DEFAULTS)
     if unknown:
         raise TypeError(f"regression_borders got unknown size/prior arguments: {sorted(unknown)}")

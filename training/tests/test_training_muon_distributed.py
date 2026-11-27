@@ -27,12 +27,15 @@ def _model():
     return config.build_model()
 
 
-def _run(process_group=None) -> dict:
+def _run(process_group=None, adamw: bool = False) -> dict:
     """Weights and optimizer state after STEPS updates with the same gradients. At step 1 the
     first and last parameters have no gradient (layers of a task unused that step). 1-D
-    parameters (flattened to an (n, 1) matrix) are sharded too."""
+    parameters (flattened to an (n, 1) matrix) are sharded too. With `adamw`, the optimizer is
+    Muon + AdamW (`optimizer="muon_adamw"`; the AdamW part is computed on every process)."""
     model = _model()
-    opt = Muon.for_model(model, lr=1e-2, weight_decay=0.01, process_group=process_group)
+    opt = Muon.for_model(
+        model, lr=1e-2, weight_decay=0.01, process_group=process_group, adamw=adamw
+    )
     params = list(model.parameters())
     for step in range(STEPS):
         gen = torch.Generator().manual_seed(step)
@@ -45,7 +48,9 @@ def _run(process_group=None) -> dict:
     return {"model": model.state_dict(), "optimizer": opt.state_dict()}
 
 
-def _worker(rank: int, world: int, port: int, group_size: int, threads: int, out: str) -> None:
+def _worker(
+    rank: int, world: int, port: int, group_size: int, threads: int, out: str, adamw: bool = False
+) -> None:
     # CPU matmul summation order depends on thread count; match the single-process count
     # (if an earlier test trains without prior workers, `PriorBatches` sets this process to 1
     # thread)
@@ -56,7 +61,7 @@ def _worker(rank: int, world: int, port: int, group_size: int, threads: int, out
         group = dist.group.WORLD
         if group_size < world:
             group, _ = dist.new_subgroups(group_size=group_size)
-        torch.save(_run(group), Path(out) / f"rank{rank}.pt")
+        torch.save(_run(group, adamw), Path(out) / f"rank{rank}.pt")
     finally:
         dist.destroy_process_group()
 
@@ -82,12 +87,15 @@ def _assert_same(a, b, path="") -> None:
         assert a == b, path
 
 
-@pytest.mark.parametrize(("world", "group_size"), [(3, 3), (4, 2)])
-def test_sharded_muon_matches_one_process(tmp_path, world, group_size):
+@pytest.mark.parametrize(
+    ("world", "group_size", "adamw"), [(3, 3, False), (4, 2, False), (3, 3, True)]
+)
+def test_sharded_muon_matches_one_process(tmp_path, world, group_size, adamw):
     # Sharding across all GPUs (3, pieces not evenly divisible) or within nodes (4 as 2x2), every
-    # process's weights and momentum state are bit-identical to the single-process run
-    reference = _run()
-    args = (world, _free_port(), group_size, torch.get_num_threads(), str(tmp_path))
+    # process's weights and momentum state are bit-identical to the single-process run, also with
+    # the AdamW part of `muon_adamw`
+    reference = _run(adamw=adamw)
+    args = (world, _free_port(), group_size, torch.get_num_threads(), str(tmp_path), adamw)
     mp.spawn(_worker, args=args, nprocs=world)
     for rank in range(world):
         _assert_same(torch.load(tmp_path / f"rank{rank}.pt", weights_only=True), reference)

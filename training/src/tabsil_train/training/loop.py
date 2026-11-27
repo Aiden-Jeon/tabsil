@@ -10,15 +10,19 @@ the pinball loss of its quantile outputs. The effective batch is
 
 and grad_accumulation is derived from the other values. When micro_batch × world_size exceeds
 batch_size (many GPUs), the per-GPU micro batch shrinks to batch_size / world_size. The optimizer
-is Muon on every parameter (`training.muon`); the learning rate follows a linear warmup and a
-cosine decay.
+is Muon on every parameter, or Muon on the weight matrices and AdamW on the rest
+(`TrainConfig.optimizer`, `training.muon`); the learning rate follows a linear warmup and a cosine
+decay.
 
-Three fixes from training on GPUs are kept:
+Four fixes from training on GPUs are kept:
 - bf16 has no GradScaler, so a step with an inf/nan gradient is skipped
 - the number of train rows changes per forward, so cuDNN attention is off (it builds a new graph
   per shape and is slow)
 - there is at least 1 train row (with 0, only that GPU leaves attention weights unused and DDP
   synchronization breaks)
+- a full pass of Python's garbage collector stops one GPU's process while the others wait for it
+  in the all-reduce, so every process freezes its live objects out of the collector's reach at
+  each log step (`TrainConfig.gc_freeze`)
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ from __future__ import annotations
 import collections
 import contextlib
 import copy
+import gc
+import importlib.metadata
 import json
 import math
 import os
@@ -49,14 +55,18 @@ from tabsil.models import (
     state_config,
     state_weights,
 )
+from tabsil.models.quantile_distribution import pinball_loss
 from tabsil_train.priors import prior_module
-from tabsil_train.training.config import N_BUCKETS, TrainConfig
+from tabsil_train.priors.transforms.target import train_row_scale
+from tabsil_train.training.config import N_BUCKETS, OPTIMIZER_NAMES, TrainConfig
 from tabsil_train.training.data import PriorBatches
 from tabsil_train.training.diagnostics import (
     GroupNormWindow,
     RankTiming,
     TaskGradientCosine,
     group_norms,
+    head_scale_groups,
+    head_scale_metrics,
     parameter_groups,
     rank_timing_metrics,
     weight_norm_metrics,
@@ -64,6 +74,7 @@ from tabsil_train.training.diagnostics import (
 )
 from tabsil_train.training.losses import prior_loss
 from tabsil_train.training.muon import Muon, shard_group
+from tabsil_train.training.reference import reference_digest, reference_jobs, reference_sets
 from tabsil_train.training.stability import CollapseGuard
 from tabsil_train.utils import DistContext, lr_factor, setup_distributed
 
@@ -96,24 +107,56 @@ def _make_val_batches(config: TrainConfig, task: str, n_batches: int = 8):
     return [prior.sample_batch(config.val_batch) for _ in range(n_batches)]
 
 
+def prior_options(prior_type: str) -> str:
+    """The options the prior module of `prior_type` fixes (its `OPTIONS`; `{}` for `graph_scm`), as
+    JSON with sorted keys: the `prior_options` run param."""
+    return json.dumps(getattr(prior_module(prior_type), "OPTIONS", {}), sort_keys=True)
+
+
+def _package_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 @torch.no_grad()
 def _validate(
-    model, val_batches, device, autocast, task, inference_rows: int | None = None
+    model,
+    val_batches,
+    device,
+    autocast,
+    task,
+    inference_rows: int | None = None,
+    train_row_targets: bool = False,
 ) -> dict[str, float]:
     """Loss over the validation batches (plus accuracy for classification). With
     `inference_rows`, batches with more rows use the model's inference path (`inference=True`,
-    `TrainConfig.activation_checkpointing_rows`)."""
+    `TrainConfig.activation_checkpointing_rows`).
+
+    `train_row_targets` is for a model trained with `TrainConfig.target_train_rows` on batches
+    drawn without it (the reference set): each regression target is standardized with its train
+    rows as in training, and the loss of a table is multiplied by its train-row sd. The pinball
+    loss scales with the target, so that is the loss of the model's quantiles mapped back to the
+    batch's own units (all rows standardized), the units of a model trained without the option."""
     model.eval()
     total, correct, count = 0.0, 0, 0
     for batch in val_batches:
         x, y = batch.x.to(device), batch.y.to(device)
+        scale = None
+        if train_row_targets and task == "regression":
+            mean, scale = train_row_scale(y, batch.n_train)
+            y = (y - mean) / scale
         kwargs = {"task": task}
         if inference_rows is not None and x.shape[1] > inference_rows:
             kwargs["inference"] = True
         with autocast():
             logits = model(x, y[:, : batch.n_train], **kwargs)
         y_eval = y[:, batch.n_train :]
-        total += prior_loss(logits, y_eval, task).item()
+        if scale is None:
+            total += prior_loss(logits, y_eval, task).item()
+        else:
+            total += (pinball_loss(logits, y_eval.float()) * scale.float()).mean().item()
         if task == "classification":
             correct += (logits.argmax(-1) == y_eval.long()).sum().item()
             count += y_eval.numel()
@@ -124,15 +167,35 @@ def _validate(
     return out
 
 
-def _validate_tasks(model, val_sets, device, autocast, config) -> dict[str, float]:
-    """Validation of each task: the metric names end with the task, and `val_loss` is the mean of
-    the two task losses."""
+def _validate_tasks(
+    model, val_sets, device, autocast, config, prefix: str = "val"
+) -> dict[str, float]:
+    """Validation of each task: the metric names end with the task, and `<prefix>_loss` is the mean
+    of the two task losses. `prefix` is "val" for the run's validation batches and "ref" for the
+    reference set (`training.reference`). The reference set also gets
+    `ref_loss_regression_train_rows`: the regression loss with each target standardized with its
+    train rows, as inference gives it to the model, in the set's units (`_validate`). It is the
+    same computation for every run, so it compares a run trained with `target_train_rows` with
+    one trained without."""
     rows = config.activation_checkpointing_rows
+    reference = prefix == "ref"
+    # the reference set is drawn without the train-row target scaling (`training.reference`)
+    rescale = reference and config.target_train_rows
     out = {}
     for task, batches in val_sets.items():
-        val = _validate(model, batches, device, autocast, task, rows)
-        out.update({f"{k}_{task}": v for k, v in val.items()})
-    out["val_loss"] = sum(out[f"val_loss_{t}"] for t in val_sets) / len(val_sets)
+        val = _validate(model, batches, device, autocast, task, rows, rescale)
+        out.update({f"{prefix}{k[3:]}_{task}": v for k, v in val.items()})
+    out[f"{prefix}_loss"] = sum(out[f"{prefix}_loss_{t}"] for t in val_sets) / len(val_sets)
+    if reference and "regression" in val_sets:
+        # The regression loss with the targets as inference gives them (standardized with the
+        # train rows), for every run. A run trained with the scaling already has it above
+        key = f"{prefix}_loss_regression"
+        if rescale:
+            out[f"{key}_train_rows"] = out[key]
+        else:
+            batches = val_sets["regression"]
+            val = _validate(model, batches, device, autocast, "regression", rows, True)
+            out[f"{key}_train_rows"] = val["val_loss"]
     return out
 
 
@@ -166,9 +229,11 @@ def _set_base_lr(opt, sched, lr: float, step: int, verbose: bool) -> None:
 
 
 def _set_muon_weight_decay(opt: Muon, weight_decay: float) -> None:
-    """Set the weight decay of every Muon param group."""
+    """Set the weight decay of every Muon param group (the AdamW groups of `muon_adamw` keep
+    theirs, `training.muon`)."""
     for group in opt.param_groups:
-        group["weight_decay"] = weight_decay
+        if not group.get("adamw"):
+            group["weight_decay"] = weight_decay
 
 
 def _phase_base_lr(config: TrainConfig, step: int, lr_scale: float) -> float:
@@ -240,12 +305,13 @@ def check_resume_step(state: dict, config: TrainConfig) -> None:
     Resuming a run of a different config by mistake (e.g. another curriculum stage) would end
     without training and overwrite that run's results.
     """
-    # only a Muon optimizer state can be continued
+    # only a state of this run's optimizer (`TrainConfig.optimizer`) can be continued
     saved_optimizer = state.get("optimizer_type")
-    if saved_optimizer != "muon":
+    if saved_optimizer != config.optimizer:
         raise ValueError(
-            f"the checkpoint to resume has optimizer_type {saved_optimizer!r}; TabSil continues"
-            " Muon runs only (take its weights with init_from instead)"
+            f"the checkpoint to resume has optimizer_type {saved_optimizer!r}; with optimizer"
+            f" {config.optimizer!r} TabSil continues {OPTIMIZER_NAMES[config.optimizer]} runs"
+            " only (take its weights with init_from instead)"
         )
     step, stop = int(state["step"]), min(config.stop_step or config.steps, config.steps)
     if step >= stop:
@@ -328,6 +394,11 @@ def train(
         raise
     finally:
         torch.set_float32_matmul_precision(matmul_precision)
+        if config.gc_freeze:
+            # `gc.freeze()` is process-wide too. Give the collector back what the run froze, so
+            # that it collects the run's objects once they are no longer used. There is no
+            # unfreeze of a part: objects that the caller froze before are handed back as well
+            gc.unfreeze()
 
 
 def _train(
@@ -356,8 +427,9 @@ def _train(
     model = config.build_model().to(device)
     if config.activation_checkpointing_rows is not None:  # config check verified the class
         model.activation_checkpointing_rows = config.activation_checkpointing_rows
-    # Muon on every parameter (`training.muon`), warmup + cosine. Distributed Muon splits the
-    # orthogonalization among GPUs (every GPU creates the group together)
+    # Muon on every parameter, or Muon and AdamW with `optimizer="muon_adamw"` (`training.muon`),
+    # warmup + cosine. Distributed Muon splits the orthogonalization among GPUs (every GPU creates
+    # the group together)
     group = None if config.muon_distributed == "off" else shard_group(config.muon_distributed)
     opt = Muon.for_model(
         model,
@@ -365,6 +437,7 @@ def _train(
         weight_decay=config.muon_weight_decay,
         momentum=config.muon_momentum,
         process_group=group,
+        adamw=config.optimizer == "muon_adamw",
     )
     schedule = lambda s: lr_factor(s, config.warmup_steps, config.steps)  # noqa: E731
     sched = torch.optim.lr_scheduler.LambdaLR(opt, schedule)
@@ -412,10 +485,12 @@ def _train(
     # Training diagnostics (`training.diagnostics`): per-group norms and the task gradient cosine
     # are computed on rank 0 only (after DDP averaging every GPU has the same gradient). Every GPU
     # measures its own timing
-    norm_groups, grad_window, cosine = None, None, None
+    norm_groups, scale_groups, grad_window, cosine = None, None, None, None
     if d.is_main:
-        # every parameter is Muon's (the group names end in `/muon`)
-        norm_groups = parameter_groups(model, {id(p) for p in model.parameters()})
+        # the group names end in `/muon` or, with `muon_adamw`, `/adam`
+        muon_ids = {id(p) for g in opt.param_groups if not g.get("adamw") for p in g["params"]}
+        norm_groups = parameter_groups(model, muon_ids)
+        scale_groups = head_scale_groups(model)
         grad_window = GroupNormWindow(norm_groups)
         if config.grad_cosine:
             cosine = TaskGradientCosine(norm_groups, config.tasks, config.log_every)
@@ -470,7 +545,7 @@ def _train(
         workers = max(1, workers)
     loader_kwargs = {"num_workers": workers, "pin_memory": use_cuda}
     if workers > 0:
-        loader_kwargs.update(persistent_workers=True, prefetch_factor=4)
+        loader_kwargs.update(persistent_workers=True, prefetch_factor=config.prefetch_factor)
 
     def make_batches(from_step: int, rewinds: int) -> dict:
         # mix the start step into the seed so a resumed run does not see the same data again.
@@ -490,17 +565,30 @@ def _train(
 
     batches = make_batches(start_step, rewinds)
 
-    mlf, val_sets = None, None
+    mlf, val_sets, ref_sets = None, None, None
     if d.is_main:
         val_sets = {task: _make_val_batches(config, task) for task in config.tasks}
+        if config.reference_val_tables:
+            start = time.time()
+            ref_sets = reference_sets(config, config.tasks, n_jobs=reference_jobs())
+            ref_digest = reference_digest(ref_sets)
+            print(
+                f"reference validation set: {config.reference_val_tables} tables per task,"
+                f" digest {ref_digest}, {time.time() - start:.0f}s",
+                flush=True,
+            )
         if mlflow_log:
             import mlflow as mlf
 
             if mlf.active_run() is None:
                 mlf.start_run()
             run_params = mlf.get_run(mlf.active_run().info.run_id).data.params
+            # `prior_options`: the values the prior module fixes. They replace config fields of
+            # the same name (`graph_scm_base_realism` its `missing_dataset_prob`), so the config
+            # params alone would misstate the prior
+            settings = {**asdict(config), "prior_options": prior_options(config.prior_type)}
             if "steps" not in run_params:
-                mlf.log_params(asdict(config))
+                mlf.log_params(settings)
                 mlf.log_params(
                     {
                         "world_size": d.world_size,
@@ -512,14 +600,20 @@ def _train(
                 )
             else:
                 # params of a continued run cannot change, so only add settings added since
-                new = {k: v for k, v in asdict(config).items() if k not in run_params}
+                new = {k: v for k, v in settings.items() if k not in run_params}
                 if new:
                     mlf.log_params(new)
+            # the prior's tables depend on the tabicl version
+            mlf.set_tag("tabicl_version", _package_version("tabicl"))
             # phases can change on resume (adding a preset's phases to a run without them), so
             # also store them in a mutable tag. The training script reads the tag before the
             # param
             if config.phases or run_params.get("phases", "()") != "()":
                 mlf.set_tag("phases", str(config.phases))
+            if ref_sets is not None:
+                # the tables also depend on the tabicl version and the hash seed: equal digests
+                # mean equal tables (`training.reference`)
+                mlf.set_tag("reference_val_digest", ref_digest)
 
     guard = None
     if config.collapse_threshold is not None:
@@ -622,9 +716,16 @@ def _train(
             window_finite += 1
             window_tasks[task][0] += step_loss.item()
             window_tasks[task][1] += 1
+        done = step + 1
+        if config.gc_freeze and done % config.log_every == 0:
+            # Every GPU is here at the same time (they met in the all-reduce above), so their
+            # passes run side by side instead of each one stopping the others. The collection
+            # first: what is frozen is never collected, so garbage must not be frozen
+            # (`TrainConfig.gc_freeze`). Its time counts as training time
+            gc.collect()
+            gc.freeze()
         train_seconds += time.time() - t_step  # the .item() above waited for the GPU
 
-        done = step + 1
         # check the deadline every log_every steps, agreeing across GPUs to stop at the same step
         if config.deadline is not None and done % config.log_every == 0:
             late = torch.tensor(float(time.time() > config.deadline), device=device)
@@ -725,6 +826,7 @@ def _train(
             # gradient cosine, per-rank timing and table sizes
             metrics.update(grad_window.metrics())
             metrics.update(weight_norm_metrics(norm_groups))
+            metrics.update(head_scale_metrics(scale_groups))
             metrics.update(cosine_metrics)
             cosine_metrics = {}
             if timing_rows is not None:
@@ -756,10 +858,14 @@ def _train(
             averages.append(_to_cpu(model.state_dict()))
         if d.is_main and (done % config.val_every == 0 or last) and not rewound_at_end:
             val = _validate_tasks(model, val_sets, device, autocast, config)
+            if ref_sets is not None:
+                val.update(_validate_tasks(model, ref_sets, device, autocast, config, "ref"))
             # LAWA only once its window (K) is full; after a resume the window refills
             if averages is not None and len(averages) == config.weight_average:
                 averaged = eval_copy(_average_states(list(averages)))
                 avg = _validate_tasks(averaged, val_sets, device, autocast, config)
+                if ref_sets is not None:
+                    avg.update(_validate_tasks(averaged, ref_sets, device, autocast, config, "ref"))
                 val.update({f"{k}_avg": v for k, v in avg.items()})
             val["train_seconds"] = train_seconds
             history["val_step"].append(done)
@@ -786,8 +892,8 @@ def _train(
                 "borders": borders,
                 "rewinds": rewinds,
                 "train_seconds": train_seconds,
-                # optimizer kind (checked on resume, `check_resume_step`)
-                "optimizer_type": "muon",
+                # optimizer kind (`TrainConfig.optimizer`, checked on resume, `check_resume_step`)
+                "optimizer_type": config.optimizer,
             }
             if config.phases:  # checkpoints without phases keep the plain format
                 state["lr_scale"] = lr_scale

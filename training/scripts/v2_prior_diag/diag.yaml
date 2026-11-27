@@ -1,0 +1,37 @@
+# v2 prior diagnostics (README.md in this folder) on Databricks AI Runtime, 1x H100, about 4
+# minutes. Needs `tabsil.tasks.forecast` and `tabsil.tasks.unsupervised` (main, #17 and #19) and
+# the 0.1.1 inference code: on dev-v2 this runs only after main (with release/0.1.1) is merged in.
+# The reported numbers used main f5b26a7 (which includes release/0.1.1) and DIAG_MODEL below.
+# From the repository root:
+#   databricks air run -f training/scripts/v2_prior_diag/diag.yaml --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR
+# One diagnostic: --override "env_variables.DIAG_ARGS=d3_contamination"
+experiment_name: tabsil
+mlflow_run_name: tabsil-v2-prior-diag
+environment:
+  version: databricks_ai_v6
+  dependencies:
+    - huggingface-hub>=0.34
+    - scipy
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+code_source:
+  type: snapshot
+  snapshot:
+    # the tabsil package (imported through PYTHONPATH) and this folder, relative to the
+    # repository root
+    root_path: ../../..
+    include_paths:
+      - src
+      - training/scripts/v2_prior_diag
+env_variables:
+  DIAG_OUT: /tmp/v2_prior_diag
+  # weights and, through their config, the inference settings (pinned, not the package default)
+  DIAG_MODEL: aiden-jeon/tabsil@v1.1
+  DIAG_TIMEOUT: "1500"  # seconds per diagnostic
+  DIAG_ARGS: ""
+max_retries: 0
+timeout_minutes: 60
+command: >-
+  PYTHONPATH=$CODE_SOURCE_PATH/src
+  python $CODE_SOURCE_PATH/training/scripts/v2_prior_diag/run_all.py $DIAG_ARGS

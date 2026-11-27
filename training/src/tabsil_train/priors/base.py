@@ -13,7 +13,9 @@ IGNORE_INDEX = -100  # target ignored by the loss (cross-entropy's ignore_index)
 @dataclass
 class PriorBatch:
     x: torch.Tensor  # (B, R, F), missing values are NaN
-    y: torch.Tensor  # (B, R). Classification: class index, regression: z-normalized value
+    # (B, R). Classification: class index, regression: z-normalized value (over all rows, or over
+    # the train rows with `TrainConfig.target_train_rows`)
+    y: torch.Tensor
     n_train: int  # the first n_train rows are train rows, the rest are eval rows (target hidden)
 
     @property

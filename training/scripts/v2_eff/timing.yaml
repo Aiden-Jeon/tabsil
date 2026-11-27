@@ -1,0 +1,62 @@
+# Step-time measurements for the v2 plan's GPU cost (training/scripts/v2_eff/README.md) on
+# Databricks AI Runtime: `train.py` under `step_probe.py`, which also times the optimizer step, the
+# data wait of every GPU and the garbage collector. From the repository root:
+#   databricks air run -f training/scripts/v2_eff/timing.yaml --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+#     --override mlflow_run_name=tabsil-v2-eff-<what>
+# The default is stage 1 at v1's size, 300 steps on 8 H100 with the speed options of the plan's
+# timing runs. Other cases are overrides of the same variables as training/scripts/train.yaml:
+#   size:        --override env_variables.TABSIL_EMSIZE=128
+#   micro batch: --override env_variables.TABSIL_MICRO_BATCH=8
+#   stage 2:     --override env_variables.TABSIL_CONFIG_NAME=stage2 --override env_variables.TABSIL_INIT_HUB=aiden-jeon/tabsil@stage1-150k
+#                --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_hicard_missing
+#   one GPU:     --override compute.accelerator_type=GPU_1xH100 --override compute.num_accelerators=1
+#                --override env_variables.EFF_NPROC=1 --override env_variables.TABSIL_BATCH_SIZE=32
+#                --override env_variables.OMP_NUM_THREADS=1
+#                (batch 32 keeps the 8 micro batches per GPU and step of batch 256 on 8 GPUs.
+#                torchrun sets OMP_NUM_THREADS=1 only for more than one process; without it a
+#                stage-1 run from scratch hangs in the regression borders' process pool)
+#   collector:   the loop freezes the collector's objects at every log step (TrainConfig.gc_freeze);
+#                --override env_variables.TABSIL_GC_FREEZE=0 turns that off.
+#                --override env_variables.TABSIL_EFF_GC=freeze:100 (or off) turns it off as well and
+#                freezes once after 100 steps (or disables the collector)
+#                --override env_variables.TABSIL_EFF_PREFORK_FREEZE=1 also freezes right before the
+#                prior workers are forked (not something the loop does: what it would give)
+experiment_name: tabsil
+mlflow_run_name: tabsil-v2-eff-s1-m-mb4-probe
+environment:
+  version: databricks_ai_v6
+  dependencies:
+    - tabicl==2.2.0
+    - huggingface-hub>=0.34
+compute:
+  accelerator_type: GPU_8xH100
+  num_accelerators: 8
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - src
+      - training/src
+      - training/scripts/train.py
+      - training/scripts/v2_eff/step_probe.py
+env_variables:
+  TABSIL_CONFIG_NAME: stage1
+  TABSIL_STEPS: "300"
+  TABSIL_NUM_WORKERS: "16"
+  TABSIL_COMPILE: "1"
+  TABSIL_TF32: "1"
+  TABSIL_MUON_DISTRIBUTED: all
+  TABSIL_RANK_TIMING: "1"
+  # processes per node: 8 on GPU_8xH100, 1 on GPU_1xH100
+  EFF_NPROC: "8"
+max_retries: 0
+timeout_minutes: 60
+command: >-
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  PYTHONHASHSEED=0
+  PYTHONPATH=$CODE_SOURCE_PATH/src:$CODE_SOURCE_PATH/training/src
+  torchrun $(if [ "${NUM_NODES:-1}" -gt 1 ]; then
+  echo --nnodes=$NUM_NODES --node_rank=$NODE_RANK --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT;
+  else echo --standalone; fi)
+  --nproc_per_node=${EFF_NPROC:-8} $CODE_SOURCE_PATH/training/scripts/v2_eff/step_probe.py
