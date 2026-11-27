@@ -200,21 +200,6 @@ def _eval_script():
     return helpers.load_script("scripts/eval.py", "eval_script_causal")
 
 
-def _checkpoint(path):
-    import torch
-
-    from tabsil.models import randomize_zero_weights, save_checkpoint
-    from tabsil.models.column_row_transformer import (
-        ColumnRowTransformer,
-        ColumnRowTransformerConfig,
-    )
-
-    torch.manual_seed(0)
-    model = randomize_zero_weights(ColumnRowTransformer(ColumnRowTransformerConfig.tiny())).eval()
-    save_checkpoint(path, model, torch.linspace(-4, 4, 33))
-    return str(path)
-
-
 def test_eval_suite_causal_end_to_end(data_dir, tmp_path):
     from train_helpers import tiny_checkpoint
 
@@ -222,7 +207,7 @@ def test_eval_suite_causal_end_to_end(data_dir, tmp_path):
 
     script = _eval_script()
     out = tmp_path / "eval"
-    model = _checkpoint(tmp_path / "m.pt")
+    model = tiny_checkpoint(tmp_path / "m.pt")
     args = ["--suite", "causal", "--datasets", "ihdp,acic2016", "--causal-realizations", "1-2",
             "--causal-methods", "tabsil_t,tabsil_s", "--n-estimators", "2", "--device", "cpu",
             "--out-dir", str(out)]  # fmt: skip
@@ -239,7 +224,7 @@ def test_eval_suite_causal_end_to_end(data_dir, tmp_path):
     assert rows.opts.nunique() == 1 and "m.pt" not in rows.opts.iloc[0]  # no checkpoint path
     first = results.read_text()
     # the same weights at another path: the rerun resumes, nothing is computed again
-    script.main([*args, "--regressor-path", _checkpoint(tmp_path / "copy.pt")])
+    script.main([*args, "--regressor-path", tiny_checkpoint(tmp_path / "copy.pt")])
     assert results.read_text() == first
     # a rerun with other settings does not resume from these rows
     with pytest.raises(ValueError, match="other settings"):

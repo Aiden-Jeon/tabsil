@@ -4,6 +4,8 @@ tables are synthetic or monkeypatched."""
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -115,6 +117,9 @@ def test_eval_suite_adbench_reuses_rows_of_the_same_weights_and_settings(suite, 
     assert ours.opts.str.startswith(settings).all()
     assert ours.opts.nunique() == 1  # the +clean row has its method's settings
     first = results.read_text()
+    summary = out / "adbench" / "summary.json"
+    assert "mean_auroc" in json.loads(summary.read_text())
+    assert (out / "adbench" / "summary.csv").exists()
 
     # the same weights at another path: the rerun resumes, nothing is computed again
     script.main(_args(out, tiny_checkpoint(tmp_path / "copy.pt")))
@@ -132,6 +137,11 @@ def test_eval_suite_adbench_reuses_rows_of_the_same_weights_and_settings(suite, 
     # the IsolationForest row does not depend on the model: it is reused with other weights
     script.main(_args(out, tmp_path / "b.pt", "--adbench-methods", "iforest"))
     assert results.read_text() == first and len(iforest_calls) == 1
+    # and the report is of that run's method only: the TabSil rows in the file are the first
+    # model's, so neither their numbers nor the first run's summary.csv are in it
+    assert "mean_auroc" not in json.loads(summary.read_text())
+    assert not (out / "adbench" / "summary.csv").exists()
+    assert (out / "adbench" / "table_d4.csv").exists()
 
 
 def test_eval_suite_adbench_shards_check_the_settings_before_the_workers(

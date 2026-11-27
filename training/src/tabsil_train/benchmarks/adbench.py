@@ -455,10 +455,20 @@ def summary_table(ours: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index()
 
 
+# the files `report` writes
+REPORT_FILES = ("table_d4.csv", "summary.csv", "elo.csv")
+
+
 def report(ours: pd.DataFrame, out_dir: Path, methods: list[str] = (OURS,)) -> dict:
-    """Write `summary.csv` (per table), `elo.csv` (pool with IsolationForest = 1000), `clean.csv`
-    (contaminated vs clean context) and `table_d4.csv` (the split check), and return the main
-    numbers. The Elo needs every (table, split) of our methods (it does not impute ours)."""
+    """Write `table_d4.csv` (the split check, with IsolationForest rows), `summary.csv` (per table,
+    with TabSil rows) and `elo.csv` (pool with IsolationForest = 1000), and return the main
+    numbers. The Elo needs every (table, split) of our methods (it does not impute ours).
+
+    `ours` is the rows to report: the caller passes those of the methods its run asked for (other
+    rows of `results.csv` can be an earlier run's, of another model). A file an earlier report
+    wrote and this one does not is removed, so the folder holds one report."""
+    for name in REPORT_FILES:
+        (out_dir / name).unlink(missing_ok=True)
     out: dict = {}
     if ANCHOR in set(ours.method):
         check = table_d4_check(ours)

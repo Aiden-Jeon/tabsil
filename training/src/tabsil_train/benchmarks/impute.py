@@ -495,7 +495,8 @@ def new_rows(rows: pd.DataFrame, existing: pd.DataFrame) -> pd.DataFrame:
     """The rows of `rows` whose (table, rate, seed, method) is not in `existing` (to merge a
     worker's results without repeating rows an earlier run merged)."""
     merged = finished_keys(existing)
-    return rows[[k not in merged for k in finished_keys_list(rows)]]
+    new = np.array([k not in merged for k in finished_keys_list(rows)], dtype=bool)
+    return rows[new]  # a boolean mask, also when `rows` is empty (the columns stay)
 
 
 def read_results(path: Path) -> pd.DataFrame:

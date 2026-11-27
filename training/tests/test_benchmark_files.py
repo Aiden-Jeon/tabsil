@@ -86,7 +86,8 @@ def _linear():
 
 
 def test_weights_digest_value():
-    # the definition is shared with the arena cache key: the same weights must keep their digest
+    # the definition is dev-v2's (the arena cache key of its eval.py): the same weights must
+    # keep their digest in both
     assert weights_digest(_linear()) == "9d90b5d8bf1471b05a4b836ce924b02e57f53004"
     borders = torch.tensor([0.0, 1.0, 2.0])
     assert weights_digest(_linear(), borders) == "225f440d777bddaa0987a45a83f24947afbad948"

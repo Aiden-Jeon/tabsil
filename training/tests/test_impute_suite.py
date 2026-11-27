@@ -355,6 +355,26 @@ def test_eval_suite_impute_shards_check_the_settings_before_the_workers(
     assert len(workers) == 3 and results.read_text() == first
 
 
+def test_eval_suite_impute_shards_record_a_job_without_rows(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+
+    def failing_imputer(*args, **kwargs):
+        def impute(X, categorical, seed):
+            raise RuntimeError("boom")
+
+        return impute
+
+    # every cell of the worker's job fails, so it ends with an error and without a results file
+    monkeypatch.setattr(bi, "tabsil_imputer", failing_imputer)
+    in_process_workers(script, monkeypatch)
+    with pytest.raises(SystemExit, match="impute: 1 failed"):
+        script.main(_args(out, tiny_checkpoint(tmp_path / "a.pt"), "--shards", "2"))
+    assert set(pd.read_csv(results).method) == {"mean"}  # the other process's rows are merged
+    assert json.loads((out / "impute" / "summary.json").read_text())["failures"] == 1
+
+
 def test_eval_suite_impute_shards_do_not_merge_rows_of_other_settings(suite, tmp_path, monkeypatch):
     from train_helpers import in_process_workers, tiny_checkpoint
 
@@ -402,6 +422,8 @@ def test_new_rows_skips_rows_already_merged(tmp_path, monkeypatch):
     assert len(bi.new_rows(rows, rows.iloc[:1])) == 1
     empty = bi.read_results(tmp_path / "none.csv")
     assert len(bi.new_rows(rows, empty)) == 2
+    none = bi.new_rows(empty, rows)  # a worker that wrote nothing: no rows, the columns stay
+    assert len(none) == 0 and list(none.columns) == bi.RESULT_COLUMNS
 
 
 def test_report_only_covers_the_requested_grid(tmp_path, monkeypatch):
