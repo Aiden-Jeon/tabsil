@@ -37,8 +37,9 @@ def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
         random_state=args.seed,
         **context,
     )
+    windows = "all" if args.fev_windows is None else args.fev_windows
     print(
-        f"fev: tasks {tasks or list(fevbench.TASKS)}, windows {args.fev_windows or 'all'},"
+        f"fev: tasks {tasks or list(fevbench.TASKS)}, windows {windows},"
         f" context {forecaster.max_context_length}, device {args.device}",
         flush=True,
     )
@@ -51,7 +52,7 @@ def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
                 "n_estimators": args.n_estimators
                 or default_inference(model, "regression")["n_estimators"],
                 "max_context_length": forecaster.max_context_length,
-                "fev_windows": args.fev_windows or "all",
+                "fev_windows": windows,
                 "fev_tasks": ",".join(tasks or fevbench.TASKS),
             }
         )

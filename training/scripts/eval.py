@@ -382,6 +382,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--max-features-per-member must be >= 0 (0: off).")
     if args.subsample_train_rows is not None and args.subsample_train_rows < 1:
         parser.error("--subsample-train-rows must be >= 1.")
+    if args.fev_windows is not None and args.fev_windows < 1:
+        parser.error("--fev-windows must be >= 1.")
     return args
 
 
