@@ -14,11 +14,9 @@ For inference alone this function is not needed: `TabSilClassifier()`·`TabSilRe
 (`tabsil.recipe`) download from the default Hub repo (`HUB_REPO` at the tag `HUB_REVISION`)
 (`model_or_pretrained`).
 
-`load_model` reads a Hub repo, a local `save_pretrained` folder or a checkpoint file the same way
-(the evaluation and upload scripts use it through `tabsil_train.hub.load_model`, which also reads
-MLflow run artifacts, `runs:/...`). Hub repos are written as `hf://owner/name`, so a mistyped local
-path is not sent to the Hub. Intermediate checkpoints live on branches of the same repo
-(`stage1-150k`, `stage2-10k`) and are loaded as `hf://owner/name@stage2-10k`.
+The evaluation and upload scripts read a Hub repo (`hf://owner/name`), a local `save_pretrained`
+folder, a checkpoint file or an MLflow run artifact (`runs:/...`) the same way with
+`tabsil_train.hub.load_model` (the `tabsil-train` package).
 """
 
 from __future__ import annotations
@@ -31,20 +29,11 @@ from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file, save_file
 from torch import nn
 
-from tabsil.models import (
-    DEFAULT_MODEL_TYPE,
-    build_model,
-    config_dict,
-    model_from_state,
-    state_config,
-)
+from tabsil.models import DEFAULT_MODEL_TYPE, build_model, config_dict
 
 WEIGHTS_NAME = "model.safetensors"
 CONFIG_NAME = "config.json"
 BORDERS_KEY = "borders"
-HUB_PREFIX = "hf://"
-# MLflow run artifacts, read by `tabsil_train.hub.load_model`
-RUNS_PREFIX = "runs:/"
 
 
 def _is_local_path(repo_id_or_path: str | Path) -> bool:
@@ -125,45 +114,3 @@ def model_or_pretrained(
 def served_tasks(model: nn.Module, borders: torch.Tensor | None) -> tuple[str, ...]:
     """The tasks the model serves (`model.tasks`; regression only with the regression borders)."""
     return tuple(t for t in model.tasks if t != "regression" or borders is not None)
-
-
-def load_model(
-    spec: str | Path, task: str, dst: str | Path | None = None, *, name: str | None = None
-) -> tuple[nn.Module, torch.Tensor | None]:
-    """Load a checkpoint onto the CPU. `spec` is one of:
-
-    - `hf://owner/name`: a Hub repo (uploaded with `save_pretrained`). Append `@<revision>` to
-      load a branch, tag or commit (e.g. `hf://owner/name@step-100k`)
-    - a local `save_pretrained` folder, or a file saved with `tabsil.models.save_checkpoint`
-
-    Checkpoints written during training (`checkpoints/step_XXXXXXX.pt`, `latest.pt`) build the
-    model from the model type and config stored in them. MLflow run artifacts (`runs:/...`) are
-    read by `tabsil_train.hub.load_model` (the `tabsil-train` package). Messages name the
-    checkpoint `name` (default: `spec`). `dst` (the download folder of MLflow artifacts) is not used
-    here; it is kept so that calls written for the earlier `load_model(spec, task, dst)` still work.
-    """
-    spec = str(spec)
-    name = spec if name is None else name
-    if spec.startswith(HUB_PREFIX):
-        repo_id, _, revision = spec.removeprefix(HUB_PREFIX).partition("@")
-        return _check_task(from_pretrained(repo_id, revision=revision or None), task, name)
-    if spec.startswith(RUNS_PREFIX):
-        raise SystemExit(
-            f"{name} is an MLflow run artifact: load it with `tabsil_train.hub.load_model`"
-            " (the tabsil-train package)."
-        )
-    path = Path(spec)
-    if not path.exists():
-        raise SystemExit(f"{name} does not exist (pass a Hub repo as {HUB_PREFIX}owner/name).")
-    if path.is_dir():
-        return _check_task(from_pretrained(path), task, name)
-    state = torch.load(path, map_location="cpu", weights_only=True)
-    if state_config(state) is None:
-        raise SystemExit(f"{name} has no model config (saved before checkpoints recorded one).")
-    return _check_task(model_from_state(state), task, name)
-
-
-def _check_task(loaded: tuple[nn.Module, torch.Tensor | None], task: str, spec: str):
-    if task not in (served := served_tasks(*loaded)):
-        raise SystemExit(f"{spec} is a {'·'.join(served)} model (needs a {task} model).")
-    return loaded

@@ -1,5 +1,5 @@
-"""Checkpoint loading and Hub format tests (no Hub server). MLflow run checkpoints (`runs:/`) are
-tested in training/tests/test_hub_runs.py."""
+"""Hub format tests (no Hub server). `load_model` (Hub repos, folders, checkpoint files and MLflow
+run checkpoints) is `tabsil_train.hub.load_model`, tested in training/tests/test_hub_runs.py."""
 
 import json
 import subprocess
@@ -10,12 +10,7 @@ import torch
 from helpers import smoke_model
 
 from tabsil import hub
-from tabsil.models import config_dict, save_checkpoint
-
-
-@pytest.fixture
-def chdir_tmp(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # keep relative paths from hitting real repo folders
+from tabsil.models import config_dict
 
 
 def _model():
@@ -27,12 +22,6 @@ def _model():
 def _same_weights(a, b):
     for name, tensor in a.state_dict().items():
         assert torch.equal(b.state_dict()[name], tensor), name
-
-
-def _training_state(tmp_path, model):
-    path = tmp_path / "step_0000100.pt"
-    torch.save({"model": model.state_dict(), "step": 100, "borders": None}, path)
-    return path
 
 
 def test_save_and_load_pretrained_keeps_weights_and_borders(tmp_path):
@@ -47,45 +36,6 @@ def test_save_and_load_pretrained_keeps_weights_and_borders(tmp_path):
     loaded, borders = hub.from_pretrained(hub.save_pretrained(reg, edges, tmp_path / "reg"))
     assert torch.equal(borders, edges)
     _same_weights(reg, loaded)
-
-
-def test_load_model_reads_every_kind_of_checkpoint(tmp_path):
-    clf = _model()
-    save_checkpoint(tmp_path / "final.pt", clf)
-    hub.save_pretrained(clf, None, tmp_path / "pretrained")
-    for spec in (tmp_path / "final.pt", tmp_path / "pretrained"):
-        loaded, borders = hub.load_model(str(spec), "classification")
-        assert borders is None
-        _same_weights(clf, loaded)
-    with pytest.raises(SystemExit, match="needs a regression model"):
-        hub.load_model(str(tmp_path / "pretrained"), "regression")
-    # the earlier call with a download folder (`dst`, unused here) still works
-    _same_weights(clf, hub.load_model(str(tmp_path / "final.pt"), "classification", tmp_path)[0])
-
-
-def test_training_checkpoint_without_model_config_is_refused(tmp_path):
-    path = _training_state(tmp_path, _model())
-    with pytest.raises(SystemExit, match="no model config"):
-        hub.load_model(str(path), "classification")
-
-
-def test_hub_needs_the_hf_prefix_and_missing_local_paths_fail(tmp_path, monkeypatch, chdir_tmp):
-    seen = []
-    monkeypatch.setattr(
-        hub,
-        "from_pretrained",
-        lambda spec, revision=None: seen.append((spec, revision)) or (_model(), None),
-    )
-    hub.load_model("hf://owner/name", "classification")
-    assert seen == [("owner/name", None)]
-    hub.load_model("hf://owner/name@step-100k", "classification")  # intermediate checkpoint branch
-    assert seen[-1] == ("owner/name", "step-100k")
-    with pytest.raises(SystemExit, match="hf://"):
-        hub.load_model("models/clf", "classification")  # mistyped local path
-    # MLflow run artifacts are read by tabsil-train (`tabsil_train.hub.load_model`)
-    with pytest.raises(SystemExit, match="tabsil_train"):
-        hub.load_model("runs:/abc/model", "classification")
-    assert len(seen) == 2
 
 
 def test_borders_keep_their_dtype(tmp_path):
@@ -228,7 +178,4 @@ def test_default_weights_are_the_pinned_tag_and_other_revisions_pass_through(mon
     }
     assert revisions(lambda: hub.from_pretrained(HUB_REPO, revision="67ef600")) == {
         (HUB_REPO, "67ef600")
-    }
-    assert revisions(lambda: hub.load_model(f"hf://{HUB_REPO}", "classification")) == {
-        (HUB_REPO, None)
     }
