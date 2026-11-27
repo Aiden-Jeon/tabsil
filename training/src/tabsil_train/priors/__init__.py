@@ -47,15 +47,20 @@ from __future__ import annotations
 
 import importlib
 from types import ModuleType
+from typing import TYPE_CHECKING
 
 from tabsil_train.priors.base import PriorBatch
 
-# name -> module (imported on use; graph_scm needs the tabicl package)
+if TYPE_CHECKING:
+    from tabsil_train.priors.graph_scm.variants import Variant
+
+# name -> where the prior is: a module, or `module:name` for an object of a module (imported on
+# use; graph_scm needs the tabicl package)
 PRIOR_TYPES: dict[str, str] = {
     "graph_scm": "tabsil_train.priors.graph_scm",
-    "graph_scm_hicard_missing": "tabsil_train.priors.graph_scm_hicard_missing",
-    "graph_scm_realism": "tabsil_train.priors.graph_scm_realism",
-    "graph_scm_base_realism": "tabsil_train.priors.graph_scm_base_realism",
+    "graph_scm_hicard_missing": "tabsil_train.priors.graph_scm.variants:HICARD_MISSING",
+    "graph_scm_realism": "tabsil_train.priors.graph_scm.variants:REALISM",
+    "graph_scm_base_realism": "tabsil_train.priors.graph_scm.variants:BASE_REALISM",
 }
 # old name -> current name, accepted when reading older training runs whose params still use it
 PRIOR_TYPE_ALIASES: dict[str, str] = {
@@ -71,11 +76,15 @@ def canonical_prior_type(prior_type: str) -> str:
     return PRIOR_TYPE_ALIASES.get(prior_type, prior_type)
 
 
-def prior_module(prior_type: str) -> ModuleType:
+def prior_module(prior_type: str) -> ModuleType | Variant:
+    """What `prior_type` is registered to: the `graph_scm` module, or the `Variant` of a name
+    registered as `module:name`. Both provide what the module docstring lists."""
     name = canonical_prior_type(prior_type)
     if name not in PRIOR_TYPES:
         raise ValueError(f"prior_type must be one of {tuple(PRIOR_TYPES)}: {prior_type}")
-    return importlib.import_module(PRIOR_TYPES[name])
+    module_name, _, attribute = PRIOR_TYPES[name].partition(":")
+    module = importlib.import_module(module_name)
+    return getattr(module, attribute) if attribute else module
 
 
 __all__ = [

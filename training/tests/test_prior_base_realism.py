@@ -11,8 +11,8 @@ from train_helpers import tabsil_smoke
 
 from tabsil_train.priors import PRIOR_TYPES, prior_module
 from tabsil_train.priors import graph_scm as P
-from tabsil_train.priors import graph_scm_base_realism as B
 from tabsil_train.priors.graph_scm import generator as G
+from tabsil_train.priors.graph_scm.variants import BASE_REALISM as B
 from tabsil_train.priors.pipeline import Group, Rng
 from tabsil_train.priors.transforms import CorrelateColumns, Missing, StructuredMissing
 from tabsil_train.priors.transforms import dependence as D

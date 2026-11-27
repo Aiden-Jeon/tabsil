@@ -9,9 +9,9 @@ import pytest
 import torch
 
 from tabsil_train.priors import graph_scm as P
-from tabsil_train.priors import graph_scm_hicard_missing as V2
-from tabsil_train.priors import graph_scm_realism as R
 from tabsil_train.priors import prior_module
+from tabsil_train.priors.graph_scm.variants import HICARD_MISSING as V2
+from tabsil_train.priors.graph_scm.variants import REALISM as R
 from tabsil_train.priors.pipeline import Group, Rng
 from tabsil_train.priors.transforms import (
     Coarsen,
