@@ -1,7 +1,7 @@
-"""Paired report of two evaluation runs (`tabsil_train.benchmarks.paired`; v2 experiment plan §3):
-the geometric-mean error ratio G of b against a over datasets, its bootstrap CI, the Wilcoxon p
-and the datasets better and worse, overall, for classification and for regression, per suite and
-pooled.
+"""Paired report of two evaluation runs (`tabsil_train.benchmarks.tabular.paired`; v2 experiment
+plan §3): the geometric-mean error ratio G of b against a over datasets, its bootstrap CI, the
+Wilcoxon p and the datasets better and worse, overall, for classification and for regression, per
+suite and pooled.
 
 A run is a per-split table: a local `results_per_split.csv` (TabArena / BeyondArena) or
 `eval_rows.csv` (AMLB, `--suite dev`), or an MLflow run, `runs:/<run_id>` (the eval artifact is

@@ -9,9 +9,9 @@ cross-validation defined by the OpenML task (90% train, 10% test). Classificatio
 Tables 1 and 2 (baselines tuned for 4 hours, TabPFN at default settings). Only means are copied;
 standard deviations are omitted.
 
-Each fold also gets TabArena's error (`metric_error`, lower is better; `problem_type`), so a run
-can be compared with another in the paired report (`tabsil_train.benchmarks.paired`): 1 - ROC AUC
-for binary tasks, log loss for multiclass tasks, RMSE for regression.
+Each fold also gets TabArena's error (`metric_error`, lower is better; `problem_type`), so a run can
+be compared with another in the paired report (`tabsil_train.benchmarks.tabular.paired`): 1 - ROC
+AUC for binary tasks, log loss for multiclass tasks, RMSE for regression.
 
 The development suite (`DEV_SUITE`, the eval script's `--suite dev`) is the 57 tasks without the
 datasets that are also among TabArena's 51 (`TABARENA_OVERLAP`): 23 classification and 25

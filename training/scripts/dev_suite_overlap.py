@@ -1,6 +1,6 @@
-"""Which of the 57 AMLB / CTR23 tasks (`tabsil_train.benchmarks.amlb`) have data that is also in
-TabArena v0.1's 51 datasets: the check behind `amlb.TABARENA_OVERLAP` and the development suite
-(`--suite dev` of the eval script).
+"""Which of the 57 AMLB / CTR23 tasks (`tabsil_train.benchmarks.tabular.amlb`) have data that is
+also in TabArena v0.1's 51 datasets: the check behind `amlb.TABARENA_OVERLAP` and the development
+suite (`--suite dev` of the eval script).
 
 The names are compared after lower-casing and keeping only letters and digits. Name matches are
 printed first, then both lists with their sizes and sources, so a person can find the datasets

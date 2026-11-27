@@ -18,7 +18,8 @@ Every fold row (`eval_rows.csv`) also has TabArena's error (`metric_error`: 1 - 
 log loss for multiclass, RMSE for regression) and `problem_type`, which the paired report
 (`training/scripts/paired_report.py`) compares between two runs. `--suite dev` is the development
 suite of the v2 experiment plan: the 57 tasks without the 9 whose data is also in TabArena's 51
-(`tabsil_train.benchmarks.amlb.TABARENA_OVERLAP`), 23 classification and 25 regression tasks.
+(`tabsil_train.benchmarks.tabular.amlb.TABARENA_OVERLAP`), 23 classification and 25 regression
+tasks.
 
 The ensemble member count and preprocessing come from the model (`tabsil.recipe.default_inference`:
 the Hub config.json `inference` entry first, otherwise 8 `standard` members with at most 768
