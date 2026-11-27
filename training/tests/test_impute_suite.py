@@ -126,6 +126,18 @@ def test_missforest_stops_early_on_numeric_only_tables(monkeypatch):
     assert len(rounds) < 2 * 10  # two columns per round: stopped before 10 rounds
 
 
+def test_missforest_is_the_same_for_every_thread_count(monkeypatch):
+    X, categorical, _ = _table()
+    _, mask = bi.make_split("cmc", X, 0.3, 0)
+    X_masked = np.where(mask, np.nan, X)
+    outputs = []
+    for jobs in ("1", "4", "4"):
+        monkeypatch.setenv("TABSIL_IMPUTE_N_JOBS", jobs)
+        outputs.append(bi.impute_missforest(X_masked.copy(), categorical, 0, n_trees=10))
+    np.testing.assert_array_equal(outputs[1], outputs[0])
+    np.testing.assert_array_equal(outputs[2], outputs[0])
+
+
 def test_extension_categorical_rule():
     X, categorical, _ = _table()
     X = np.column_stack([X, np.tile(np.arange(5.0), 60)])  # 5 values, 60 rows each
@@ -220,9 +232,12 @@ def test_tabsil_imputer_with_a_tiny_model():
     assert set(inferred(X_masked, categorical, 0)) == {"tabsil_inferred"}
 
 
-@pytest.mark.skipif(
+needs_extension = pytest.mark.skipif(
     importlib.util.find_spec("tabpfn_extensions") is None, reason="needs the impute extra"
 )
+
+
+@needs_extension
 def test_official_model_counts_classes_over_observed_values(monkeypatch):
     import torch
     from tabpfn_extensions.unsupervised import unsupervised
@@ -238,6 +253,51 @@ def test_official_model_counts_classes_over_observed_values(monkeypatch):
     assert not model.use_classifier_(0, torch.arange(30.0))  # more classes than TabPFN v2 takes
     # the unpatched extension counts every NaN as a class
     assert not unsupervised.TabPFNUnsupervisedModel.use_classifier_(model, 0, y)
+
+
+@needs_extension
+def test_the_extension_draws_its_column_orders_from_python_random():
+    # what `tabpfn_imputer`'s `random.seed` relies on (the test below uses a stand-in)
+    import random
+
+    from tabpfn_extensions.unsupervised import unsupervised
+
+    def orders(seed):
+        random.seed(seed)
+        return unsupervised.efficient_random_permutation(list(range(6)), 10)
+
+    assert orders(3) == orders(3)
+    assert orders(3) != orders(4)
+
+
+def test_tabpfn_imputer_seeds_the_generators_the_official_code_draws_from(monkeypatch):
+    import random
+    import types
+
+    import torch
+
+    class Official:  # draws as the extension does: Python's `random` and torch's generator
+        def __init__(self, tabpfn_clf, tabpfn_reg):
+            pass
+
+        def set_categorical_features(self, categorical):
+            pass
+
+        def fit(self, X):
+            return self
+
+        def impute(self, X):
+            return torch.tensor([[random.random(), torch.rand(1).item()]])
+
+    extension = types.ModuleType("tabpfn_extensions.unsupervised")
+    extension.simple_impute = None
+    monkeypatch.setitem(sys.modules, "tabpfn_extensions.unsupervised", extension)
+    monkeypatch.setattr(bi, "tabpfn_models", lambda device: (None, None))
+    monkeypatch.setattr(bi, "official_model_class", lambda: Official)
+    impute = bi.tabpfn_imputer("cpu", simple=False)
+    first = impute(np.zeros((1, 2)), [], 3)
+    np.testing.assert_array_equal(impute(np.zeros((1, 2)), [], 3), first)  # after other draws
+    assert (impute(np.zeros((1, 2)), [], 4) != first).all()
 
 
 def _eval_script():
@@ -322,6 +382,33 @@ def test_eval_suite_impute_reuses_rows_of_the_same_weights_and_settings(suite, t
     # the mean row does not depend on the model: it is reused with other weights
     script.main(_args(out, tmp_path / "b.pt", "--impute-methods", "mean"))
     assert results.read_text() == first and len(mean_calls) == 1
+
+
+def test_eval_suite_impute_does_not_reuse_official_rows_from_before_the_seeding(suite, monkeypatch):
+    script, out, results, _ = suite
+    calls = []
+    monkeypatch.setattr(
+        bi,
+        "tabpfn_imputer",
+        lambda device, simple: lambda *a: calls.append(1) or bi.impute_mean(*a),
+    )
+
+    def args(methods):
+        return ["--suite", "impute", "--datasets", "cmc", "--impute-rates", "0.3",
+                "--impute-seeds", "0", "--impute-methods", methods, "--device", "cpu",
+                "--out-dir", str(out)]  # fmt: skip
+
+    script.main(args("tabpfn_impute,tabpfn_simple"))
+    before = f"tabpfn-extensions {bi.TABPFN_EXTENSIONS_VERSION}, TabPFN v2 defaults"
+    opts = pd.read_csv(results).set_index("method").opts
+    assert opts["tabpfn_simple"] == before  # computed as before
+    assert opts["tabpfn_impute"] == before + ", column orders from the seed"
+    # a folder written before the column orders followed the seed: both rows have the old string
+    pd.read_csv(results).assign(opts=before).to_csv(results, index=False)
+    with pytest.raises(ValueError, match=r"\['tabpfn_impute'\] results with other settings"):
+        script.main(args("tabpfn_impute,tabpfn_simple"))
+    script.main(args("tabpfn_simple"))  # its row is reused
+    assert len(calls) == 2
 
 
 def test_eval_suite_impute_shards_check_the_settings_before_the_workers(
