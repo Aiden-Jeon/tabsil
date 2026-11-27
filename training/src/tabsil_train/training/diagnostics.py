@@ -7,6 +7,10 @@ computation is unchanged.
   small parameters that set the attention logit scale (LogScale a_h and gate) get their own
   `<stage>_log_scale` group: in long runs the gradient concentrated there (checkpoint analysis),
   hidden inside the norm of the whole stage
+- Attention temperatures: the mean and the largest size of a_h (`LogScale.head_scale`) per stage
+  and for the first row ICL layer (`head_scale_mean/<group>`, `head_scale_max/<group>`). The group
+  weight norm above mixes 24 layers; these show whether one layer's temperatures grow (Kumo-Tabular
+  reports about 30-fold growth in the first in-context layer when it trains regression in bf16)
 - Task gradient cosine (option `grad_cosine`): multitask alternates the task per step, so the
   gradients of the 4 consecutive steps before a log step (cls, reg, cls, reg or the reverse) give
   the cosine of every group both tasks share. Cross-task is the mean of the three pairs 1 step
@@ -134,6 +138,43 @@ def weight_norm_metrics(groups: dict[str, list]) -> dict[str, float]:
     norms = group_norms(groups)
     values = torch.stack(list(norms.values())).tolist()
     return {f"weight_norm/{name}": v for name, v in zip(norms, values, strict=True)}
+
+
+# the group of the first row ICL layer's temperatures (`head_scale_groups`)
+FIRST_ICL_GROUP = "row_icl_first"
+
+
+def head_scale_groups(model: nn.Module) -> dict[str, list]:
+    """Group name -> the attention temperature parameters (`head_scale` of the LogScale modules,
+    one value per head): one group per stage (`model.parameter_stage`), plus `FIRST_ICL_GROUP`
+    with the first row ICL layer's alone."""
+    stage_of = getattr(model, "parameter_stage", None)
+    groups: dict[str, list] = {}
+    for name, p in model.named_parameters():
+        if name.rsplit(".", 1)[-1] != "head_scale":
+            continue
+        stage = stage_of(name) if stage_of is not None else name.split(".")[0]
+        if stage == "row_icl" and stage not in groups:
+            groups[FIRST_ICL_GROUP] = [p]
+        groups.setdefault(stage, []).append(p)
+    return groups
+
+
+@torch.no_grad()
+def head_scale_metrics(groups: dict[str, list]) -> dict[str, float]:
+    """`head_scale_mean/<group>` (mean of a_h over the heads) and `head_scale_max/<group>` (the
+    largest |a_h|) of `head_scale_groups`."""
+    if not groups:
+        return {}
+    stats = []
+    for params in groups.values():
+        values = torch.cat([p.detach().float().reshape(-1) for p in params])
+        stats.append(torch.stack([values.mean(), values.abs().max()]))
+    out: dict[str, float] = {}
+    for name, (mean, peak) in zip(groups, torch.stack(stats).tolist(), strict=True):  # one read
+        out[f"head_scale_mean/{name}"] = mean
+        out[f"head_scale_max/{name}"] = peak
+    return out
 
 
 class TaskGradientCosine:
