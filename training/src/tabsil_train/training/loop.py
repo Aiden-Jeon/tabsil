@@ -395,8 +395,9 @@ def train(
     finally:
         torch.set_float32_matmul_precision(matmul_precision)
         if config.gc_freeze:
-            # `gc.freeze()` is process-wide too: give the collector back what the run froze, so
-            # that it collects the run's objects once they are no longer used
+            # `gc.freeze()` is process-wide too. Give the collector back what the run froze, so
+            # that it collects the run's objects once they are no longer used. There is no
+            # unfreeze of a part: objects that the caller froze before are handed back as well
             gc.unfreeze()
 
 

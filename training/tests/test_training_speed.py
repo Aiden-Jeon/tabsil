@@ -1,6 +1,7 @@
 """Training speedup option tests: LAWA, TF32/compile settings, the collector freeze, time to
 target."""
 
+import contextlib
 import gc
 from dataclasses import replace
 
@@ -174,28 +175,37 @@ def _record_collector(monkeypatch) -> list:
     return calls
 
 
+@contextlib.contextmanager
+def _local_mlflow(tmp_path):
+    """MLflow on a store under `tmp_path` for the block; gives the id of an experiment in it whose
+    artifacts go there too. The process-wide tracking URI is put back as it was, also when it was
+    not set, and the active experiment is left alone."""
+    previous = mlflow.get_tracking_uri() if mlflow.is_tracking_uri_set() else None
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow.db'}")
+    try:
+        yield mlflow.MlflowClient().create_experiment(
+            "test", artifact_location=(tmp_path / "artifacts").as_uri()
+        )
+    finally:
+        mlflow.set_tracking_uri(previous)
+
+
 def test_gc_freeze_runs_at_every_log_step_and_does_not_change_the_run(tmp_path, monkeypatch):
     # The process pool that draws the regression borders gets the same hash seed in both runs
     monkeypatch.setenv("PYTHONHASHSEED", "1")
-    monkeypatch.chdir(tmp_path)  # the local artifact store is a folder of the working directory
     assert gc.get_freeze_count() == 0
     calls = _record_collector(monkeypatch)
     # Log steps at 2, 4 and 6, with a validation and a checkpoint between them and the collapse
-    # guard's snapshots on
+    # guard's snapshots on. Both runs log to MLflow, as the training jobs do
     config = _smoke(log_every=2, collapse_threshold=0.5, snapshot_every=2)
     results, recorded, params = {}, {}, {}
-    prev_uri = mlflow.get_tracking_uri()
-    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow.db'}")
-    try:
-        mlflow.set_experiment("test-gc-freeze")
+    with _local_mlflow(tmp_path) as experiment_id:
         for on in (False, True):
             calls.clear()
-            with mlflow.start_run() as run:
+            with mlflow.start_run(experiment_id=experiment_id) as run:
                 results[on] = train(replace(config, gc_freeze=on), tmp_path / str(on))
             recorded[on] = list(calls)
             params[on] = mlflow.MlflowClient().get_run(run.info.run_id).data.params
-    finally:
-        mlflow.set_tracking_uri(prev_uri)
 
     # On: one freeze per log step, each right after a collection (garbage is not frozen) and
     # holding the live objects. The end hands them back to the collector
@@ -236,7 +246,8 @@ def test_gc_freeze_is_undone_when_training_fails(tmp_path, monkeypatch):
 
 
 def test_train_script_turns_gc_freeze_off(monkeypatch):
-    for name in ("TABSIL_GC_FREEZE", "TABSIL_CONFIG_NAME"):
+    sources = ("TABSIL_RESUME_RUN_ID", "TABSIL_INIT_RUN_ID", "TABSIL_INIT_HUB")
+    for name in ("TABSIL_GC_FREEZE", "TABSIL_CONFIG_NAME", *sources):
         monkeypatch.delenv(name, raising=False)
     script = helpers.load_script("scripts/train.py", "train_script_gc_freeze")
     base = ["--config-name", "smoke"]
