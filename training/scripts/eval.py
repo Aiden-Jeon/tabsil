@@ -172,7 +172,7 @@ from tabsil_train.evaluation.fev import run_fev
 from tabsil_train.evaluation.impute import run_impute
 from tabsil_train.evaluation.shards import clock as _clock
 from tabsil_train.evaluation.shards import strip_flags as _strip_flags
-from tabsil_train.hub import load_model
+from tabsil_train.hub import load_model, weights_digest
 from tabsil_train.subsample import SubsampledEstimator
 from tabsil_train.utils import mlflow_eval_run
 
@@ -491,23 +491,6 @@ def applied_inference(
     if suite == "classification":
         out["softmax_temperature"] = float(settings["softmax_temperature"])
     return out
-
-
-def weights_digest(model: torch.nn.Module, borders: torch.Tensor | None = None) -> str:
-    """SHA-1 of a model's weights (every state_dict tensor's name, dtype, shape and bytes, in
-    name order) and of the regression borders: two checkpoints at different paths with the same
-    weights get the same digest, and new weights at an old path a new one."""
-    import hashlib
-
-    digest = hashlib.sha1()
-    tensors = sorted(model.state_dict().items())
-    if borders is not None:
-        tensors.append(("<borders>", torch.as_tensor(borders)))
-    for name, t in tensors:
-        t = t.detach().cpu().contiguous()
-        digest.update(f"{name}|{t.dtype}|{tuple(t.shape)}|".encode())
-        digest.update(t.reshape(-1).view(torch.uint8).numpy().tobytes())
-    return digest.hexdigest()
 
 
 def inference_options(args: argparse.Namespace, suite: str | None = None) -> dict:
