@@ -34,6 +34,7 @@ EXPECTED_COMMON = {
     "deadline": None,
     "seed": 0,
     "num_workers": 8,
+    "prefetch_factor": 4,
     "log_every": 100,
     "val_batch": 8,
     "reference_val_tables": 0,

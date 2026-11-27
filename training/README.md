@@ -82,7 +82,10 @@ databricks air run -p e2-demo-field-eng -f training/scripts/train.yaml $COMMON \
 # PS1 (seeds 0, 1)
 databricks air run -p e2-demo-field-eng -f training/scripts/train.yaml $COMMON \
   --override mlflow_run_name=tabsil-v2-1b-ps1-s0 --override env_variables.TABSIL_SEED=0 \
-  --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_base_realism
+  --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_base_realism \
+  --override env_variables.TABSIL_PREFETCH_FACTOR=16
 ```
+
+PS1 needs `TABSIL_PREFETCH_FACTOR=16`. Its prior (`corrected_cat_sizes`, `corrected_num_converters`) has a few micro batches that take 20 to 45 s to make. The loader hands micro batches over in request order with a head start of workers per task × prefetch, about 14 s at the default 4, so such a micro batch stops its GPU and the other seven wait in the all-reduce. `data_wait_frac` is measured on rank 0 and shows about an eighth of it. In 300-step runs on 8 H100, PS1 took 2.02 and 2.49 s per step (steps 101-200 and 201-300) at prefetch 4 and 1.95 and 1.98 at 16, against 1.80 for C. The tables and their order are the same at any prefetch. The remaining 9% is in the forward and backward time at equal table sizes and was not traced further.
 
 The workspace's `GPU_8xH100` quota is 8 nodes, and a request above it fails at once instead of waiting. A resumed run (`TABSIL_RESUME_RUN_ID`) keeps its seed, steps, warmup, batch, prior and recipe options.
