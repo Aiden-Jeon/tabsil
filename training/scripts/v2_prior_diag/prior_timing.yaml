@@ -1,0 +1,35 @@
+# Table generation time of training priors (prior_timing.py in this folder) on Databricks AI
+# Runtime. It needs no GPU; GPU_1xH100 is the smallest node. From the repository root:
+#   databricks air run -f training/scripts/v2_prior_diag/prior_timing.yaml --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR
+# Other priors or a longer measurement:
+#   --override "env_variables.TIMING_ARGS=--priors graph_scm --minutes 60"
+experiment_name: tabsil
+mlflow_run_name: tabsil-prior-timing
+environment:
+  version: databricks_ai_v6
+  # as training/scripts/train.yaml: the TabICL prior, and the Hub client that tabsil imports
+  dependencies:
+    - tabicl>=2.2
+    - huggingface-hub>=0.34
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+code_source:
+  type: snapshot
+  snapshot:
+    # the two packages (imported through PYTHONPATH) and this folder, relative to the repository
+    # root
+    root_path: ../../..
+    include_paths:
+      - src
+      - training/src
+      - training/scripts/v2_prior_diag
+env_variables:
+  TIMING_ARGS: "--priors graph_scm_hicard_missing graph_scm_realism --minutes 20"
+max_retries: 0
+timeout_minutes: 180
+# PYTHONHASHSEED=0 as in training (the TabICL prior iterates a set of strings)
+command: >-
+  PYTHONHASHSEED=0
+  PYTHONPATH=$CODE_SOURCE_PATH/src:$CODE_SOURCE_PATH/training/src
+  python $CODE_SOURCE_PATH/training/scripts/v2_prior_diag/prior_timing.py $TIMING_ARGS

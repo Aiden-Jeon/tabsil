@@ -1,6 +1,6 @@
 # v2 experiment plan
 
-Status: plan, in progress. Results are in [v2-experiment-results.md](v2-experiment-results.md) (phase 0 done 2026-11-26). Nothing was trained or evaluated for this document itself. It re-checks [v2-task-priors.md](v2-task-priors.md) and [v2-scaling.md](v2-scaling.md) against MLflow, the code and the primary sources (2026-11-26), and replaces their experiment plans. Every run below needs approval before it starts.
+Status: plan, in progress. Results are in [v2-experiment-results.md](v2-experiment-results.md) (phase 0 done 2026-11-26; N10 and R10 of phase 1A done 2026-11-27, L20 proposed and not launched). Nothing was trained or evaluated for this document itself. It re-checks [v2-task-priors.md](v2-task-priors.md) and [v2-scaling.md](v2-scaling.md) against MLflow, the code and the primary sources (2026-11-26), and replaces their experiment plans. Every run below needs approval before it starts.
 
 ## Summary
 

@@ -16,3 +16,21 @@ databricks air run -f training/scripts/v2_prior_diag/diag.yaml \
 ```
 
 `run_all.py` runs the three in turn, each within `DIAG_TIMEOUT` seconds. It logs each one's CSV files and outputs under `diag/` of the MLflow run as soon as that diagnostic ends. A failed diagnostic does not stop the others, but the job ends with an error.
+
+## Prior speed
+
+Two scripts for the time the training prior takes to make tables. They do not use the weights. The numbers and the reading are in [`training/docs/v2-experiment-results.md`](../../docs/v2-experiment-results.md) (Phase 1A, "Why R10 was slow").
+
+| Script | Question |
+|---|---|
+| `prior_timing.py` | How long does one training table of a prior take, and where does the time go (SCM draws, the dataset filter, the transforms)? One process per CPU pair generates tables as the training loop's prior workers do, and every table is one CSV row. Run it on AI Runtime with `prior_timing.yaml` |
+| `queue_sim.py` | What step time do those generation times give in the training loop? It replays the measured times through the loop's DataLoader queue (workers per task, prefetch per worker, tables handed over in request order or in any order) for 32 GPUs. Nothing is generated and no model runs, so it runs anywhere |
+
+```bash
+databricks air run -f training/scripts/v2_prior_diag/prior_timing.yaml \
+  --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+  --override "env_variables.TIMING_ARGS=--priors graph_scm_realism --minutes 45"
+# with diag/prior_timing.csv.gz of that run:
+python training/scripts/v2_prior_diag/queue_sim.py prior_timing.csv.gz --prior graph_scm_realism \
+  --compute 0.215 --overhead 1.58 --workers 8 16 --prefetch 4 16 --any-order
+```
