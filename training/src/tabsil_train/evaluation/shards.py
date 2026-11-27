@@ -73,7 +73,9 @@ def run_shard_queue(
     ((job, name, argv), no GPU) at the same time. A worker writes to `log_dir/<name>/` and logs to
     `log_dir/<name>.log`. When it ends, `on_done(job, returncode, job_dir)` merges its results and
     returns whether it succeeded. Prints each finished or failed job and a heartbeat every
-    `heartbeat_minutes` (`progress(job_dir)` adds a per-job note)."""
+    `heartbeat_minutes` (`progress(job_dir)` adds a per-job note). If the queue stops midway (an
+    exception from `on_done` or from starting a worker, Ctrl-C), the workers still running are
+    killed; the rows they wrote stay in their folders."""
     log_dir.mkdir(parents=True, exist_ok=True)
 
     def start(name: str, argv: list[str], visible_devices: str):
@@ -98,27 +100,38 @@ def run_shard_queue(
 
     jobs = list(jobs)
     running: dict[str, tuple] = {}  # device -> (job, process, job dir, start, log file)
-    side_running = {name: (job, *start(name, argv, "")) for job, name, argv in side}
+    side_running: dict[str, tuple] = {}  # name -> the same
     t0 = last = time.time()
-    while jobs or running or side_running:
-        for dev in devices:
-            if dev not in running and jobs:
-                job = jobs.pop(0)
-                name, argv = job_command(job)
-                running[dev] = (job, *start(name, argv, dev))
-        time.sleep(5)
-        for table in (running, side_running):
-            for key, (job, proc, job_dir, started, log) in list(table.items()):
-                if proc.poll() is not None:
-                    del table[key]
-                    finish(job, proc, job_dir, started, log)
-        if time.time() - last >= heartbeat_minutes * 60:
-            last = time.time()
-            busy = ", ".join(
-                f"GPU {dev}: {j[0]} {clock(last - j[3])}{note(j[2])}" for dev, j in running.items()
-            )
-            others = "".join(
-                f"; {name} {clock(last - j[3])}{note(j[2])}" for name, j in side_running.items()
-            )
-            print(f"{label} shards [{clock(last - t0)}] {len(jobs)} queued; {busy}{others}",
-                  flush=True)  # fmt: skip
+    try:
+        for job, name, argv in side:
+            side_running[name] = (job, *start(name, argv, ""))
+        while jobs or running or side_running:
+            for dev in devices:
+                if dev not in running and jobs:
+                    job = jobs.pop(0)
+                    name, argv = job_command(job)
+                    running[dev] = (job, *start(name, argv, dev))
+            time.sleep(5)
+            for table in (running, side_running):
+                for key, (job, proc, job_dir, started, log) in list(table.items()):
+                    if proc.poll() is not None:
+                        del table[key]
+                        finish(job, proc, job_dir, started, log)
+            if time.time() - last >= heartbeat_minutes * 60:
+                last = time.time()
+                busy = ", ".join(
+                    f"GPU {dev}: {j[0]} {clock(last - j[3])}{note(j[2])}"
+                    for dev, j in running.items()
+                )
+                others = "".join(
+                    f"; {name} {clock(last - j[3])}{note(j[2])}" for name, j in side_running.items()
+                )
+                print(f"{label} shards [{clock(last - t0)}] {len(jobs)} queued; {busy}{others}",
+                      flush=True)  # fmt: skip
+    finally:
+        # if the queue stops midway (an exception, Ctrl-C), do not leave workers holding GPUs
+        for _, proc, _, _, log in (*running.values(), *side_running.values()):
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            log.close()

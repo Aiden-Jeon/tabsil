@@ -174,6 +174,9 @@ def test_run_resumes_and_reports_failures(tmp_path, monkeypatch):
     assert len(calls) == 8
     rows, _ = bi.run(imputers, *args, log=lambda _: None)  # resume: nothing reruns
     assert len(calls) == 8 and len(rows) == 24
+    # a rerun without a failed cell leaves no failures.json of the earlier runs
+    _, failures = bi.run(imputers, *args[:3], ["mean", "tabsil"], tmp_path, log=lambda _: None)
+    assert not failures and not (tmp_path / "failures.json").exists()
     mean = rows[rows.method == "mean"]
     assert mean.nrmse.between(0.9, 1.1).all() and mean.accuracy.between(0.2, 0.8).all()
 
@@ -378,6 +381,22 @@ def test_eval_suite_impute_shards_record_a_job_without_rows(suite, tmp_path, mon
     assert json.loads((out / "impute" / "summary.json").read_text())["failures"] == 1
 
 
+def test_eval_suite_impute_shards_write_the_header_of_an_empty_file(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+    results.parent.mkdir(parents=True)
+    results.touch()  # a run cut short before its first row
+    (results.parent / "failures.json").write_text("[]")  # of an earlier run without --shards
+    in_process_workers(script, monkeypatch)
+    model = tiny_checkpoint(tmp_path / "a.pt")
+    script.main(_args(out, model, "--shards", "2", "--impute-methods", "tabsil"))
+    rows = pd.read_csv(results)
+    assert list(rows.columns) == bi.RESULT_COLUMNS
+    assert sorted(rows.method) == ["tabsil", "tabsil_median"]
+    assert not (results.parent / "failures.json").exists()
+
+
 def test_eval_suite_impute_shards_do_not_merge_rows_of_other_settings(suite, tmp_path, monkeypatch):
     from train_helpers import in_process_workers, tiny_checkpoint
 
@@ -491,3 +510,40 @@ def test_shard_queue_runs_every_job_on_free_gpus(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "test shards: ('bad',) FAILED (exit 1)" in out and "('c',) done in" in out
     assert (tmp_path / "shards" / "a.log").exists()
+
+
+def test_shard_queue_stops_the_workers_when_a_merge_raises(tmp_path, monkeypatch):
+    killed, logs = [], []
+
+    class FakeProcess:  # "a" ends at once, the others keep running until they are killed
+        def __init__(self, cmd, stdout, stderr, env):
+            self.name = Path(cmd[cmd.index("--out-dir") + 1]).name
+            self.returncode = 0 if self.name == "a" else None
+            logs.append(stdout)
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            killed.append(self.name)
+            self.returncode = -9
+
+        def wait(self):
+            return self.returncode
+
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(shards.time, "sleep", lambda s: None)
+
+    def on_done(job, returncode, job_dir):
+        raise RuntimeError("merge failed")
+
+    with pytest.raises(RuntimeError, match="merge failed"):
+        shards.run_shard_queue(
+            "test", [("a",), ("b",)], lambda j: (j[0], [j[0]]), on_done, ["0", "1"],
+            "scripts/eval.py", [], {}, tmp_path / "shards", 60.0,
+            side=[(("cpu",), "cpu", ["side"])],
+        )  # fmt: skip
+    assert sorted(killed) == ["b", "cpu"]  # no worker is left holding a GPU
+    assert len(logs) == 3 and all(log.closed for log in logs)

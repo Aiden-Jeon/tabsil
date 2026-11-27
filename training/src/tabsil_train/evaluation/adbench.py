@@ -18,10 +18,10 @@ from pathlib import Path
 import mlflow
 import pandas as pd
 
-from tabsil.recipe import default_inference
 from tabsil_train.benchmarks import _files, adbench
+from tabsil_train.evaluation.model import suite_model
 from tabsil_train.evaluation.shards import run_shard_queue, shard_devices, strip_flags
-from tabsil_train.hub import download_artifact, load_model
+from tabsil_train.hub import download_artifact
 
 # the `--suite` name: the results folder under --out-dir and the MLflow artifact folder
 SUITE = "adbench"
@@ -47,20 +47,19 @@ def run_adbench(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> No
     }
     if any(adbench.base(m) == adbench.OURS for m in methods):
         path = args.regressor_path or args.classifier_path
-        if not path:
-            raise SystemExit("adbench needs --regressor-path (a model serving both tasks).")
-        model, borders = load_model(path, "regression", out_dir / "checkpoints" / "regression")
-        if "classification" not in model.tasks:
-            raise SystemExit(f"{path} does not serve classification (categorical columns).")
-        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
-        scorers[adbench.OURS] = adbench.tabsil_scorer(
-            model, borders, args.n_permutations, n_estimators, args.device, 100 * args.seed
-        )
-        opts[adbench.OURS] = _files.model_settings(
-            model, borders, n_estimators, args.seed, n_permutations=args.n_permutations
-        )
+        # with --shards the workers score; this process loads the model for its settings string
+        model, borders, n_estimators, settings = suite_model(
+            args, path, out_dir, "adbench", "categorical columns",
+            n_permutations=args.n_permutations,
+        )  # fmt: skip
+        if args.shards == 1:
+            scorers[adbench.OURS] = adbench.tabsil_scorer(
+                model, borders, args.n_permutations, n_estimators, args.device, 100 * args.seed
+            )
+        opts[adbench.OURS] = settings
         params |= {"model": path, "n_permutations": args.n_permutations,
                    "n_estimators": n_estimators, "seed": args.seed}  # fmt: skip
+        del model, borders  # the scorer holds them (none with --shards)
     print(f"adbench: {len(datasets)} tables x {splits} x {methods}, {args.device}", flush=True)
     if use_mlflow:
         mlflow.log_params(params)
@@ -108,9 +107,11 @@ def run_adbench_shards(
     started as soon as a GPU is free (`run_shard_queue`). A finished job's rows are appended to
     `results.csv`; a failed job is returned as a failure (with its log under `shards/`). Rows of
     `methods` with other settings than `opts` (base method -> settings string) stop the run."""
-    done = adbench.read_results(suite_dir / "results.csv")
-    # here as well as in `adbench.run`: a job whose row is already there never reaches a worker
-    _files.check_settings(done, adbench.row_settings(methods, opts), suite_dir / "results.csv")
+    # the settings are checked here as well as in `adbench.run`: a job whose row is already
+    # there never reaches a worker
+    settings = adbench.row_settings(methods, opts)
+    results = _files.Results(suite_dir, adbench.RESULT_COLUMNS, settings, SUITE)
+    done = results.done
     finished = set(zip(done.dataset, done.split, done.method, strict=True))
     jobs = [
         (d, s, m) for d in datasets for s in splits for m in methods if (d, s, m) not in finished
@@ -118,7 +119,7 @@ def run_adbench_shards(
     jobs.sort(key=lambda j: -adbench.job_cost(j[0], j[2]))
     devices = shard_devices(args)
     path = args.regressor_path or args.classifier_path
-    if path.startswith("runs:/"):  # the parent's download, reused by every worker
+    if path and path.startswith("runs:/"):  # the parent's download, reused by every worker
         path = str(download_artifact(path, out_dir / "checkpoints" / "regression"))
     base = strip_flags(
         args.argv,
@@ -149,8 +150,7 @@ def run_adbench_shards(
     def on_done(job: tuple, returncode: int, job_dir: Path) -> bool:
         rows = adbench.read_results(job_dir / SUITE / "results.csv")
         if returncode == 0 and len(rows):
-            path_out = suite_dir / "results.csv"
-            rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
+            results.append(rows)
             return True
         d, s, m = job
         failures.append(dict(dataset=d, split=s, method=m, error=f"exit {returncode}"))

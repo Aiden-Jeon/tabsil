@@ -176,6 +176,31 @@ def test_eval_suite_adbench_shards_check_the_settings_before_the_workers(
     assert len(workers) == 2 and results.read_text() == first
 
 
+def test_eval_suite_adbench_without_a_model(suite):
+    # only IsolationForest: no model is given, and the --shards parent has no job to start
+    script, out, results, _ = suite
+    args = ["--suite", "adbench", "--datasets", "yeast", "--adbench-splits", "s1",
+            "--shards", "2", "--device", "cpu", "--out-dir", str(out)]  # fmt: skip
+    script.main([*args, "--adbench-methods", "iforest"])
+    assert list(pd.read_csv(results).method) == ["iforest"]
+    assert (out / "adbench" / "summary.json").exists()
+    with pytest.raises(SystemExit, match="adbench needs --regressor-path"):
+        script.main(args)  # the default methods have TabSil's
+
+
+def test_eval_suite_adbench_shards_write_the_header_of_an_empty_file(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+    results.parent.mkdir(parents=True)
+    results.touch()  # a run cut short before its first row
+    in_process_workers(script, monkeypatch)
+    model = tiny_checkpoint(tmp_path / "a.pt")
+    script.main(_args(out, model, "--shards", "2", "--adbench-methods", "tabsil_unsup"))
+    rows = pd.read_csv(results)
+    assert list(rows.columns) == ab.RESULT_COLUMNS and list(rows.method) == ["tabsil_unsup"]
+
+
 def test_elo_pool_and_summary_with_our_method():
     ref = ab.reference_results()
     iforest = ref[ref.method == "iforest"]

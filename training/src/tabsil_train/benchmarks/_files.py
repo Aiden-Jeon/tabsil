@@ -129,10 +129,11 @@ class Results:
     - opening creates `out_dir`, reads the rows of earlier runs (`done`) and stops if a method of
       this run has rows with other settings (`check_settings`; `settings`: result method -> its
       settings string)
-    - `append` writes a finished cell's rows
+    - `append` writes a finished cell's rows (the `--shards` parents: a finished worker's)
     - `fail` records a cell that raised and logs it with its traceback; the run goes on and its
       caller ends with an error
-    - `finish` writes `failures.json` if a cell failed and returns (all rows, failures)
+    - `finish` writes `failures.json` if a cell failed, removes an earlier run's if none did,
+      and returns (all rows, failures)
 
     Which cells are finished and what counts as a bad output stay in the suite's `run`: the
     cell keys differ (an impute job writes several rows) and so do the checks.
@@ -156,7 +157,7 @@ class Results:
         check_settings(self.done, settings, self.path)
         self.failures: list[dict] = []
 
-    def append(self, rows: list[dict]) -> None:
+    def append(self, rows: list[dict] | pd.DataFrame) -> None:
         header = not self.path.exists() or not self.path.stat().st_size
         table = pd.DataFrame(rows, columns=self.columns)
         table.to_csv(self.path, mode="a", header=header, index=False)
@@ -168,6 +169,9 @@ class Results:
         self.log(f"[{self.label}] {' '.join(map(str, cell.values()))} FAILED:\n{trace}")
 
     def finish(self) -> tuple[pd.DataFrame, list[dict]]:
+        path = self.out_dir / "failures.json"
         if self.failures:
-            (self.out_dir / "failures.json").write_text(json.dumps(self.failures, indent=1))
+            path.write_text(json.dumps(self.failures, indent=1))
+        else:  # the folder must not list failures of an earlier run next to this run's results
+            path.unlink(missing_ok=True)
         return read_results(self.path, self.columns), self.failures

@@ -177,8 +177,10 @@ def test_results_appends_rows_and_records_failures(tmp_path):
     assert json.loads((out / "failures.json").read_text()) == failures
     assert logs[0].startswith("[suite] d a FAILED:\nTraceback")
     assert logs[0].rstrip().endswith("RuntimeError: boom")
-    # a rerun starts from those rows; rows of other settings stop it when it opens
+    # a rerun starts from those rows; without a failed cell it removes the earlier failures.json
     again = _files.Results(out, columns, {"a": "s"}, "suite")
     assert len(again.done) == 3 and again.finish()[1] == []
+    assert not (out / "failures.json").exists()
+    # rows of other settings stop a run when it opens
     with pytest.raises(ValueError, match="other settings"):
         _files.Results(out, columns, {"a": "other"}, "suite")

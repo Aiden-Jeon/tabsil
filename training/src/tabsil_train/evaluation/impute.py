@@ -22,10 +22,10 @@ import mlflow
 import numpy as np
 import pandas as pd
 
-from tabsil.recipe import default_inference
 from tabsil_train.benchmarks import _files, impute
+from tabsil_train.evaluation.model import suite_model
 from tabsil_train.evaluation.shards import run_shard_queue, shard_devices, strip_flags
-from tabsil_train.hub import download_artifact, load_model
+from tabsil_train.hub import download_artifact
 
 # the `--suite` name: the results folder under --out-dir and the MLflow artifact folder
 SUITE = "impute"
@@ -65,15 +65,11 @@ def run_impute(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
         opts[m] = f"tabpfn-extensions {impute.TABPFN_EXTENSIONS_VERSION}, TabPFN v2 defaults"
     ours = [m for m in methods if m.startswith(impute.OURS)]
     path = args.regressor_path or args.classifier_path
-    if ours and not path:
-        raise SystemExit("impute needs --regressor-path (a model serving both tasks).")
     if ours:
         # with --shards the workers impute; this process loads the model for its settings string
-        model, borders = load_model(path, "regression", out_dir / "checkpoints" / "regression")
-        if "classification" not in model.tasks:
-            raise SystemExit(f"{path} does not serve classification (categorical columns).")
-        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
-        settings = _files.model_settings(model, borders, n_estimators, args.seed)
+        model, borders, n_estimators, settings = suite_model(
+            args, path, out_dir, "impute", "categorical columns"
+        )
         for m in ours:
             if args.shards == 1:
                 imputers[m] = impute.tabsil_imputer(
@@ -163,11 +159,14 @@ def run_impute_shards(
     MLflow, so a run cut short keeps them); a failed job is returned as a failure (log under
     `shards/`). Rows of `methods` with other settings than `opts` (job method -> settings string)
     stop the run."""
-    done = impute.read_results(suite_dir / "results.csv")
-    # here as well as in `impute.run`: a job whose rows are already there never reaches a worker
+    # the settings are checked here as well as in `impute.run`: a job whose rows are already
+    # there never reaches a worker
     settings = impute.row_settings(methods, opts)
-    _files.check_settings(done, settings, suite_dir / "results.csv")
-    finished = impute.finished_keys(done)
+    results = _files.Results(suite_dir, impute.RESULT_COLUMNS, settings, SUITE)
+    finished = impute.finished_keys(results.done)
+    # the workers keep their failures in their own folders: a failures.json here is an earlier
+    # run's without --shards
+    (suite_dir / "failures.json").unlink(missing_ok=True)
 
     def complete(d: str, r: float, m: str) -> bool:
         return all((d, round(r, 4), s, out) in finished for s in seeds for out in impute.METHODS[m])
@@ -200,16 +199,15 @@ def run_impute_shards(
 
     def on_done(job: tuple, returncode: int, job_dir: Path) -> bool:
         rows = impute.read_results(job_dir / SUITE / "results.csv")
-        path_out = suite_dir / "results.csv"
         # a worker resumes from its folder under shards/, which stays between runs, so its file
         # can hold rows merged by an earlier run: append only the new ones
-        rows = impute.new_rows(rows, impute.read_results(path_out))
+        rows = impute.new_rows(rows, impute.read_results(results.path))
         # nor rows of other settings an earlier run left there (the worker stops on them)
         rows = rows[~_files.other_settings(rows, settings)]
         if len(rows):  # rows a failed job finished still count
-            rows.to_csv(path_out, mode="a", header=not path_out.exists(), index=False)
+            results.append(rows)
             if use_mlflow:
-                mlflow.log_artifact(str(path_out), SUITE)
+                mlflow.log_artifact(str(results.path), SUITE)
         if returncode != 0:
             failures.append(dict(job=job, error=f"exit {returncode}"))
         return returncode == 0

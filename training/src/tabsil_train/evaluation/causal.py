@@ -12,9 +12,8 @@ from pathlib import Path
 import mlflow
 import pandas as pd
 
-from tabsil.recipe import default_inference
-from tabsil_train.benchmarks import _files, causal
-from tabsil_train.hub import load_model
+from tabsil_train.benchmarks import causal
+from tabsil_train.evaluation.model import suite_model
 
 # the `--suite` name: the results folder under --out-dir and the MLflow artifact folder
 SUITE = "causal"
@@ -43,15 +42,9 @@ def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> Non
         "methods": ",".join(methods),
     }
     if ours := [m for m in methods if m in causal.TABSIL]:
-        if not args.regressor_path:
-            raise SystemExit("--suite causal needs --regressor-path (a model serving both tasks).")
-        model, borders = load_model(
-            args.regressor_path, "regression", out_dir / "checkpoints" / "regression"
+        model, borders, n_estimators, settings = suite_model(
+            args, args.regressor_path, out_dir, "--suite causal", "propensity"
         )
-        if "classification" not in model.tasks:
-            raise SystemExit(f"{args.regressor_path} does not serve classification (propensity).")
-        n_estimators = args.n_estimators or default_inference(model, "regression")["n_estimators"]
-        settings = _files.model_settings(model, borders, n_estimators, args.seed)
         for m in ours:
             estimators[m] = causal.tabsil_estimator(
                 model, borders, causal.TABSIL[m], n_estimators, args.device, 1000 * args.seed

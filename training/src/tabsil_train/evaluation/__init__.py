@@ -8,6 +8,8 @@ MLflow logging. The benchmarks themselves (data, protocol, metrics, reports) are
 - `causal`: `--suite causal` (`run_causal`)
 - `impute`: `--suite impute` (`run_impute`)
 - `shards`: the `--shards` worker queue of the ADBench and impute suites
+- `model`: the multitask model the ADBench, causal and impute runs load, with the settings
+  string of its rows
 
 The AMLB and TabArena / BeyondArena runs are in `eval.py` itself.
 """
