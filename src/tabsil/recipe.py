@@ -25,7 +25,9 @@ used `standard` members only, no count columns and temperature 0.9).
 The non-size parts listed above (Fourier + ECDF encoder, gain-free q/k RMSNorm and the
 temperatures, target LayerNorm, pre-head MLP, interleaved stages, retrieval decoder, quantile
 head, one multitask model) are fixed in the code (`tabsil.models.column_row_transformer`); this
-module holds the numbers.
+module holds the numbers. The estimators that use them are in `tabsil.tasks`.
+
+    from tabsil import TabSilClassifier, TabSilRegressor
 
     clf = TabSilClassifier().fit(x_train, y_train)  # `HUB_REPO` at the tag `HUB_REVISION`
     reg = TabSilRegressor(model, borders).fit(x_train, y_train)
@@ -33,13 +35,8 @@ module holds the numbers.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
-import torch
 from torch import nn
 
-from tabsil.inference.ensemble import EnsembleClassifier, EnsembleRegressor
 from tabsil.inference.ensemble import resolve_member_kinds as _resolve_member_kinds
 
 NAME = "tabsil-v1"
@@ -121,8 +118,16 @@ def default_inference(model: nn.Module, task: str) -> dict:
     }
 
 
-def _inference_kwargs(model: nn.Module, task: str, n_estimators, member_kinds) -> dict:
-    # Arguments given by the caller come first, then the model's inference settings
+def inference_kwargs(
+    model: nn.Module,
+    task: str,
+    n_estimators: int | None,
+    member_kinds: str | tuple[str, ...] | list[str] | None,
+) -> dict:
+    """The ensemble arguments of `TabSilClassifier` / `TabSilRegressor`
+    (`tabsil.tasks.classification`, `tabsil.tasks.regression`): `n_estimators` and `member_kinds`
+    given by the caller (not None) come first, then the model's inference settings
+    (`default_inference`)."""
     out = default_inference(model, task)
     if n_estimators is not None:
         out["n_estimators"] = n_estimators
@@ -141,67 +146,3 @@ HUB_REPO = "aiden-jeon/tabsil"
 HUB_REVISION = "v1.1"
 HUB_DEFAULT = f"{HUB_REPO}@{HUB_REVISION}"
 HUB_REPOS = {"classification": HUB_DEFAULT, "regression": HUB_DEFAULT}
-
-
-def _load(model, task: str, repos: dict[str, str]) -> tuple[nn.Module, torch.Tensor | None]:
-    # Not a model: download from a Hub repo id or a local folder (None: the default Hub repo)
-    from tabsil.hub import model_or_pretrained
-
-    return model_or_pretrained(model, repos[task], task)
-
-
-class TabSilClassifier(EnsembleClassifier):
-    """TabSil classification: `EnsembleClassifier` with TabSil's inference defaults. Without `model`
-    it downloads the default Hub repo (`HUB_REPO`) at the tag `HUB_REVISION`. Other weights can
-    be given as a Hub repo id (`owner/name` is `main`, `owner/name@branch` a branch, tag or
-    commit), a local folder, or a model. The member count and
-    kinds default to the model's settings (`default_inference`); arguments override them.
-
-        clf = TabSilClassifier().fit(x_train, y_train)
-    """
-
-    hub_repos = HUB_REPOS  # the weights downloaded when no model is given
-
-    def __init__(
-        self,
-        model: nn.Module | str | Path | None = None,
-        *,
-        n_estimators: int | None = None,
-        member_kinds: str | tuple[str, ...] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        if not isinstance(model, nn.Module):
-            model, _ = _load(model, "classification", self.hub_repos)
-        inference = _inference_kwargs(model, "classification", n_estimators, member_kinds)
-        super().__init__(model, **{**inference, **kwargs})
-
-
-class TabSilRegressor(EnsembleRegressor):
-    """TabSil regression: `EnsembleRegressor` with TabSil's inference defaults. Without `model` it
-    downloads the weights and their regression borders from the default Hub repo (`HUB_REPO`) at
-    the tag `HUB_REVISION`. Other weights can be given as a Hub repo id, a local folder (borders
-    from there too), or a model with `borders`.
-
-        reg = TabSilRegressor().fit(x_train, y_train)
-    """
-
-    hub_repos = HUB_REPOS  # the weights downloaded when no model is given
-
-    def __init__(
-        self,
-        model: nn.Module | str | Path | None = None,
-        borders: torch.Tensor | None = None,
-        *,
-        n_estimators: int | None = None,
-        member_kinds: str | tuple[str, ...] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        if isinstance(model, nn.Module):
-            if borders is None:
-                raise ValueError("pass the regression borders together with a model")
-        else:
-            if borders is not None:
-                raise ValueError("borders are only given with a model (downloads include them)")
-            model, borders = _load(model, "regression", self.hub_repos)
-        inference = _inference_kwargs(model, "regression", n_estimators, member_kinds)
-        super().__init__(model, borders, **{**inference, **kwargs})

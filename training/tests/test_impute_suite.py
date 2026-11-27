@@ -1,11 +1,12 @@
 """Imputation suite: ARFF parsing and the sha256 check, split and mask protocol, metrics, the CPU
-baselines, run bookkeeping (resume, failures) and the report. No download: tables are synthetic
-or monkeypatched."""
+baselines, run bookkeeping (resume, failures, rows reused only with the same weights and
+settings) and the report. No download: tables are synthetic or monkeypatched."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,8 @@ import pandas as pd
 import pytest
 
 from tabsil_train.benchmarks import impute as bi
+from tabsil_train.evaluation import impute as impute_run
+from tabsil_train.evaluation import shards
 
 ARFF = """@relation tiny
 @attribute x numeric
@@ -123,6 +126,18 @@ def test_missforest_stops_early_on_numeric_only_tables(monkeypatch):
     assert len(rounds) < 2 * 10  # two columns per round: stopped before 10 rounds
 
 
+def test_missforest_is_the_same_for_every_thread_count(monkeypatch):
+    X, categorical, _ = _table()
+    _, mask = bi.make_split("cmc", X, 0.3, 0)
+    X_masked = np.where(mask, np.nan, X)
+    outputs = []
+    for jobs in ("1", "4", "4"):
+        monkeypatch.setenv("TABSIL_IMPUTE_N_JOBS", jobs)
+        outputs.append(bi.impute_missforest(X_masked.copy(), categorical, 0, n_trees=10))
+    np.testing.assert_array_equal(outputs[1], outputs[0])
+    np.testing.assert_array_equal(outputs[2], outputs[0])
+
+
 def test_extension_categorical_rule():
     X, categorical, _ = _table()
     X = np.column_stack([X, np.tile(np.arange(5.0), 60)])  # 5 values, 60 rows each
@@ -171,6 +186,9 @@ def test_run_resumes_and_reports_failures(tmp_path, monkeypatch):
     assert len(calls) == 8
     rows, _ = bi.run(imputers, *args, log=lambda _: None)  # resume: nothing reruns
     assert len(calls) == 8 and len(rows) == 24
+    # a rerun without a failed cell leaves no failures.json of the earlier runs
+    _, failures = bi.run(imputers, *args[:3], ["mean", "tabsil"], tmp_path, log=lambda _: None)
+    assert not failures and not (tmp_path / "failures.json").exists()
     mean = rows[rows.method == "mean"]
     assert mean.nrmse.between(0.9, 1.1).all() and mean.accuracy.between(0.2, 0.8).all()
 
@@ -214,9 +232,12 @@ def test_tabsil_imputer_with_a_tiny_model():
     assert set(inferred(X_masked, categorical, 0)) == {"tabsil_inferred"}
 
 
-@pytest.mark.skipif(
+needs_extension = pytest.mark.skipif(
     importlib.util.find_spec("tabpfn_extensions") is None, reason="needs the impute extra"
 )
+
+
+@needs_extension
 def test_official_model_counts_classes_over_observed_values(monkeypatch):
     import torch
     from tabpfn_extensions.unsupervised import unsupervised
@@ -232,6 +253,51 @@ def test_official_model_counts_classes_over_observed_values(monkeypatch):
     assert not model.use_classifier_(0, torch.arange(30.0))  # more classes than TabPFN v2 takes
     # the unpatched extension counts every NaN as a class
     assert not unsupervised.TabPFNUnsupervisedModel.use_classifier_(model, 0, y)
+
+
+@needs_extension
+def test_the_extension_draws_its_column_orders_from_python_random():
+    # what `tabpfn_imputer`'s `random.seed` relies on (the test below uses a stand-in)
+    import random
+
+    from tabpfn_extensions.unsupervised import unsupervised
+
+    def orders(seed):
+        random.seed(seed)
+        return unsupervised.efficient_random_permutation(list(range(6)), 10)
+
+    assert orders(3) == orders(3)
+    assert orders(3) != orders(4)
+
+
+def test_tabpfn_imputer_seeds_the_generators_the_official_code_draws_from(monkeypatch):
+    import random
+    import types
+
+    import torch
+
+    class Official:  # draws as the extension does: Python's `random` and torch's generator
+        def __init__(self, tabpfn_clf, tabpfn_reg):
+            pass
+
+        def set_categorical_features(self, categorical):
+            pass
+
+        def fit(self, X):
+            return self
+
+        def impute(self, X):
+            return torch.tensor([[random.random(), torch.rand(1).item()]])
+
+    extension = types.ModuleType("tabpfn_extensions.unsupervised")
+    extension.simple_impute = None
+    monkeypatch.setitem(sys.modules, "tabpfn_extensions.unsupervised", extension)
+    monkeypatch.setattr(bi, "tabpfn_models", lambda device: (None, None))
+    monkeypatch.setattr(bi, "official_model_class", lambda: Official)
+    impute = bi.tabpfn_imputer("cpu", simple=False)
+    first = impute(np.zeros((1, 2)), [], 3)
+    np.testing.assert_array_equal(impute(np.zeros((1, 2)), [], 3), first)  # after other draws
+    assert (impute(np.zeros((1, 2)), [], 4) != first).all()
 
 
 def _eval_script():
@@ -264,12 +330,181 @@ def test_eval_suite_impute(tmp_path, monkeypatch):
         script.main([*grid, "--impute-methods", "mean,knn"])
 
 
+def _args(out, model, *more):
+    return ["--suite", "impute", "--regressor-path", str(model), "--datasets", "cmc",
+            "--impute-rates", "0.3", "--impute-seeds", "0", "--impute-methods", "tabsil,mean",
+            "--n-estimators", "1", "--device", "cpu", "--out-dir", str(out), *more]  # fmt: skip
+
+
+@pytest.fixture
+def suite(tmp_path, monkeypatch):
+    """`eval.py` on a synthetic table: (script, output folder, results.csv, calls of the mean
+    imputer)."""
+    monkeypatch.setattr(bi, "load", _fake_load)
+    monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
+    calls = []
+    monkeypatch.setitem(bi.CPU_IMPUTERS, "mean", lambda *a: calls.append(1) or bi.impute_mean(*a))
+    out = tmp_path / "eval"
+    yield _eval_script(), out, out / "impute" / "results.csv", calls
+    bi.n_columns.cache_clear()  # the job cost cached the synthetic table's columns
+
+
+def test_eval_suite_impute_reuses_rows_of_the_same_weights_and_settings(suite, tmp_path):
+    from train_helpers import tiny_checkpoint
+
+    from tabsil_train.hub import load_model, weights_digest
+
+    script, out, results, mean_calls = suite
+    model = tiny_checkpoint(tmp_path / "a.pt")
+    script.main(_args(out, model))
+    rows = pd.read_csv(results)
+    assert sorted(rows.method) == ["mean", "tabsil", "tabsil_median"]
+    ours = rows[rows.method != "mean"]
+    digest = weights_digest(*load_model(model, "regression", tmp_path))
+    assert ours.opts.str.startswith(f"weights={digest} n_estimators=1 seed=0 ").all()
+    assert ours.opts.nunique() == 1  # tabsil_median rows have the tabsil job's settings
+    assert rows[rows.method == "mean"].opts.isna().all()
+    first = results.read_text()
+
+    # the same weights at another path: the rerun resumes, nothing is computed again
+    script.main(_args(out, tiny_checkpoint(tmp_path / "copy.pt")))
+    assert results.read_text() == first and len(mean_calls) == 1
+
+    # other weights stop the run, also when they replace the file at the first path
+    for path in (tmp_path / "b.pt", tmp_path / "a.pt"):
+        with pytest.raises(ValueError, match="other settings"):
+            script.main(_args(out, tiny_checkpoint(path, seed=1)))
+    # and so do other settings of the same weights
+    for flags in (["--seed", "1"], ["--n-estimators", "2"]):
+        with pytest.raises(ValueError, match="other settings"):
+            script.main(_args(out, tmp_path / "copy.pt", *flags))
+
+    # the mean row does not depend on the model: it is reused with other weights
+    script.main(_args(out, tmp_path / "b.pt", "--impute-methods", "mean"))
+    assert results.read_text() == first and len(mean_calls) == 1
+
+
+def test_eval_suite_impute_does_not_reuse_official_rows_from_before_the_seeding(suite, monkeypatch):
+    script, out, results, _ = suite
+    calls = []
+    monkeypatch.setattr(
+        bi,
+        "tabpfn_imputer",
+        lambda device, simple: lambda *a: calls.append(1) or bi.impute_mean(*a),
+    )
+
+    def args(methods):
+        return ["--suite", "impute", "--datasets", "cmc", "--impute-rates", "0.3",
+                "--impute-seeds", "0", "--impute-methods", methods, "--device", "cpu",
+                "--out-dir", str(out)]  # fmt: skip
+
+    script.main(args("tabpfn_impute,tabpfn_simple"))
+    before = f"tabpfn-extensions {bi.TABPFN_EXTENSIONS_VERSION}, TabPFN v2 defaults"
+    opts = pd.read_csv(results).set_index("method").opts
+    assert opts["tabpfn_simple"] == before  # computed as before
+    assert opts["tabpfn_impute"] == before + ", column orders from the seed"
+    # a folder written before the column orders followed the seed: both rows have the old string
+    pd.read_csv(results).assign(opts=before).to_csv(results, index=False)
+    with pytest.raises(ValueError, match=r"\['tabpfn_impute'\] results with other settings"):
+        script.main(args("tabpfn_impute,tabpfn_simple"))
+    script.main(args("tabpfn_simple"))  # its row is reused
+    assert len(calls) == 2
+
+
+def test_eval_suite_impute_shards_check_the_settings_before_the_workers(
+    suite, tmp_path, monkeypatch
+):
+    import mlflow
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, mean_calls = suite
+    local = tiny_checkpoint(tmp_path / "a.pt")
+    # the parent gets a runs:/ URI and hands its download, a local path, to the workers
+    monkeypatch.setattr(
+        mlflow.artifacts, "download_artifacts", lambda artifact_uri, dst_path: local
+    )
+    uri = "runs:/abc123/checkpoints/latest.pt"
+    workers = in_process_workers(script, monkeypatch)
+    script.main(_args(out, uri, "--shards", "2"))
+    # one GPU job with the local path, and the CPU methods' process without a model
+    gpu, cpu = sorted(workers, key=lambda argv: "--regressor-path" not in argv)
+    assert len(workers) == 2 and "--regressor-path" not in cpu
+    assert local in gpu and uri not in gpu
+    rows = pd.read_csv(results)
+    assert sorted(rows.method) == ["mean", "tabsil", "tabsil_median"]
+    assert rows[rows.method != "mean"].opts.nunique() == 1
+    first = results.read_text()
+
+    # the worker's rows carry the settings the parent expects: reruns find the job finished
+    # (only the CPU methods' process starts again, and resumes)
+    script.main(_args(out, uri, "--shards", "2"))
+    script.main(_args(out, local))
+    assert len(workers) == 3 and "--regressor-path" not in workers[2]
+    assert results.read_text() == first and len(mean_calls) == 1
+
+    # other weights: the parent stops before it filters the finished jobs and starts workers
+    with pytest.raises(ValueError, match="other settings"):
+        script.main(_args(out, tiny_checkpoint(tmp_path / "b.pt", seed=1), "--shards", "2"))
+    assert len(workers) == 3 and results.read_text() == first
+
+
+def test_eval_suite_impute_shards_record_a_job_without_rows(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+
+    def failing_imputer(*args, **kwargs):
+        def impute(X, categorical, seed):
+            raise RuntimeError("boom")
+
+        return impute
+
+    # every cell of the worker's job fails, so it ends with an error and without a results file
+    monkeypatch.setattr(bi, "tabsil_imputer", failing_imputer)
+    in_process_workers(script, monkeypatch)
+    with pytest.raises(SystemExit, match="impute: 1 failed"):
+        script.main(_args(out, tiny_checkpoint(tmp_path / "a.pt"), "--shards", "2"))
+    assert set(pd.read_csv(results).method) == {"mean"}  # the other process's rows are merged
+    assert json.loads((out / "impute" / "summary.json").read_text())["failures"] == 1
+
+
+def test_eval_suite_impute_shards_write_the_header_of_an_empty_file(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+    results.parent.mkdir(parents=True)
+    results.touch()  # a run cut short before its first row
+    (results.parent / "failures.json").write_text("[]")  # of an earlier run without --shards
+    in_process_workers(script, monkeypatch)
+    model = tiny_checkpoint(tmp_path / "a.pt")
+    script.main(_args(out, model, "--shards", "2", "--impute-methods", "tabsil"))
+    rows = pd.read_csv(results)
+    assert list(rows.columns) == bi.RESULT_COLUMNS
+    assert sorted(rows.method) == ["tabsil", "tabsil_median"]
+    assert not (results.parent / "failures.json").exists()
+
+
+def test_eval_suite_impute_shards_do_not_merge_rows_of_other_settings(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+    # an earlier run with other weights was cut short: its rows are in the worker's folder only
+    job_dir = out / "impute" / "shards" / "cmc_0.3_tabsil"
+    other = tiny_checkpoint(tmp_path / "b.pt", seed=1)
+    script.main(_args(job_dir, other, "--impute-methods", "tabsil"))
+    assert len(pd.read_csv(job_dir / "impute" / "results.csv")) == 2
+    in_process_workers(script, monkeypatch)
+    with pytest.raises(SystemExit, match="impute: 1 failed"):  # the worker stops on those rows
+        script.main(_args(out, tiny_checkpoint(tmp_path / "a.pt"), "--shards", "2"))
+    assert set(pd.read_csv(results).method) == {"mean"}
+    assert "other settings" in (out / "impute" / "shards" / "cmc_0.3_tabsil.log").read_text()
+
+
 def test_worker_threads_split_the_cores(monkeypatch):
-    script = _eval_script()
-    assert script.impute_worker_threads(9, cores=208) == 23
-    assert script.impute_worker_threads(9, cores=4) == 1
-    assert script.impute_worker_threads(0, cores=8) == 8
-    assert "OMP_NUM_THREADS" in script.WORKER_THREAD_VARIABLES
+    assert impute_run.impute_worker_threads(9, cores=208) == 23
+    assert impute_run.impute_worker_threads(9, cores=4) == 1
+    assert impute_run.impute_worker_threads(0, cores=8) == 8
+    assert "OMP_NUM_THREADS" in impute_run.WORKER_THREAD_VARIABLES
     monkeypatch.setenv("TABSIL_IMPUTE_N_JOBS", "3")
     assert bi.n_jobs() == 3
     monkeypatch.delenv("TABSIL_IMPUTE_N_JOBS")
@@ -295,6 +530,8 @@ def test_new_rows_skips_rows_already_merged(tmp_path, monkeypatch):
     assert len(bi.new_rows(rows, rows.iloc[:1])) == 1
     empty = bi.read_results(tmp_path / "none.csv")
     assert len(bi.new_rows(rows, empty)) == 2
+    none = bi.new_rows(empty, rows)  # a worker that wrote nothing: no rows, the columns stay
+    assert len(none) == 0 and list(none.columns) == bi.RESULT_COLUMNS
 
 
 def test_report_only_covers_the_requested_grid(tmp_path, monkeypatch):
@@ -315,22 +552,21 @@ def test_report_only_covers_the_requested_grid(tmp_path, monkeypatch):
 def test_shard_devices_take_at_most_shards_gpus(monkeypatch):
     import argparse
 
-    script = _eval_script()
-    monkeypatch.setattr(script.torch.cuda, "device_count", lambda: 8)
+    monkeypatch.setattr(shards.torch.cuda, "device_count", lambda: 8)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
-    assert script.shard_devices(argparse.Namespace(shards=2)) == ["0", "1"]
+    assert shards.shard_devices(argparse.Namespace(shards=2)) == ["0", "1"]
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES")
-    assert script.shard_devices(argparse.Namespace(shards=3)) == ["0", "1", "2"]
+    assert shards.shard_devices(argparse.Namespace(shards=3)) == ["0", "1", "2"]
     with pytest.raises(SystemExit, match="exceeds the GPU count"):
-        script.shard_devices(argparse.Namespace(shards=9))
+        shards.shard_devices(argparse.Namespace(shards=9))
 
 
 def test_shard_queue_runs_every_job_on_free_gpus(tmp_path, monkeypatch, capsys):
-    script = _eval_script()
-    started = []
+    started, commands = [], []
 
     class FakeProcess:
         def __init__(self, cmd, stdout, stderr, env):
+            commands.append(cmd)
             started.append((cmd[cmd.index("--out-dir") + 1], env["CUDA_VISIBLE_DEVICES"]))
             self.returncode = 1 if "bad" in cmd else 0
 
@@ -340,7 +576,7 @@ def test_shard_queue_runs_every_job_on_free_gpus(tmp_path, monkeypatch, capsys):
     import subprocess
 
     monkeypatch.setattr(subprocess, "Popen", FakeProcess)
-    monkeypatch.setattr(script.time, "sleep", lambda s: None)
+    monkeypatch.setattr(shards.time, "sleep", lambda s: None)
     done = {}
 
     def on_done(job, returncode, job_dir):
@@ -348,13 +584,53 @@ def test_shard_queue_runs_every_job_on_free_gpus(tmp_path, monkeypatch, capsys):
         return returncode == 0
 
     jobs = [("a",), ("bad",), ("c",)]
-    script._run_shard_queue(
-        "test", jobs, lambda j: (j[0], [j[0]]), on_done, ["0", "1"], ["--suite", "x"],
-        {}, tmp_path / "shards", 60.0, side=[(("cpu",), "cpu", ["side"])],
+    shards.run_shard_queue(
+        "test", jobs, lambda j: (j[0], [j[0]]), on_done, ["0", "1"], "scripts/eval.py",
+        ["--suite", "x"], {}, tmp_path / "shards", 60.0, side=[(("cpu",), "cpu", ["side"])],
     )  # fmt: skip
     assert done == {("a",): (0, "a"), ("bad",): (1, "bad"), ("c",): (0, "c"), ("cpu",): (0, "cpu")}
+    # a worker is the given script with the base arguments, then the job's and its folder
+    worker = [sys.executable, "scripts/eval.py", "--suite", "x", "a", "--out-dir"]
+    assert [*worker, str(tmp_path / "shards" / "a")] in commands
     devices = dict((Path(d).name, dev) for d, dev in started)
     assert devices["cpu"] == "" and {devices["a"], devices["bad"]} == {"0", "1"}
     out = capsys.readouterr().out
     assert "test shards: ('bad',) FAILED (exit 1)" in out and "('c',) done in" in out
     assert (tmp_path / "shards" / "a.log").exists()
+
+
+def test_shard_queue_stops_the_workers_when_a_merge_raises(tmp_path, monkeypatch):
+    killed, logs = [], []
+
+    class FakeProcess:  # "a" ends at once, the others keep running until they are killed
+        def __init__(self, cmd, stdout, stderr, env):
+            self.name = Path(cmd[cmd.index("--out-dir") + 1]).name
+            self.returncode = 0 if self.name == "a" else None
+            logs.append(stdout)
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            killed.append(self.name)
+            self.returncode = -9
+
+        def wait(self):
+            return self.returncode
+
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(shards.time, "sleep", lambda s: None)
+
+    def on_done(job, returncode, job_dir):
+        raise RuntimeError("merge failed")
+
+    with pytest.raises(RuntimeError, match="merge failed"):
+        shards.run_shard_queue(
+            "test", [("a",), ("b",)], lambda j: (j[0], [j[0]]), on_done, ["0", "1"],
+            "scripts/eval.py", [], {}, tmp_path / "shards", 60.0,
+            side=[(("cpu",), "cpu", ["side"])],
+        )  # fmt: skip
+    assert sorted(killed) == ["b", "cpu"]  # no worker is left holding a GPU
+    assert len(logs) == 3 and all(log.closed for log in logs)

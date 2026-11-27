@@ -17,7 +17,8 @@ from tabsil.inference.preprocessing import (
     select_features,
 )
 from tabsil.models import load_checkpoint, save_checkpoint
-from tabsil.recipe import TabSilClassifier, TabSilRegressor
+from tabsil.tasks.classification import TabSilClassifier
+from tabsil.tasks.regression import TabSilRegressor
 
 
 def _tiny_model():

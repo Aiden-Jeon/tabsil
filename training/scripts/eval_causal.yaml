@@ -1,5 +1,5 @@
 # TabSil treatment effect evaluation (training/scripts/eval.py --suite causal) on Databricks AI
-# Runtime: tabsil.causal.TabSilCATE (S-, T-, X-, DR-learner) on IHDP (100 realizations) and ACIC
+# Runtime: tabsil.TabSilCATE (S-, T-, X-, DR-learner) on IHDP (100 realizations) and ACIC
 # 2016 (10 simulations) (tabsil_train.benchmarks.causal), √PEHE and the ATE error within-sample and
 # out-of-sample. The model is TABSIL_REGRESSOR (default: the default Hub repo at the v1 tag; it
 # serves classification too, for the propensity). The EconML baselines run on the CPU and are not
