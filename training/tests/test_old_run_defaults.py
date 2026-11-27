@@ -17,6 +17,8 @@ the place that reads the run) before changing what new runs get. A new setting t
 way adds its line here: the value the runs before it were trained with.
 """
 
+import os
+
 import pytest
 from train_helpers import load_script
 
@@ -46,8 +48,9 @@ CHANGED = "a default that older runs are read with has changed (see this file's 
 
 @pytest.fixture
 def script(monkeypatch):
-    for name in ("CONFIG_NAME", "TARGET_TRAIN_ROWS", "OPTIMIZER", "PRIOR_TYPE"):
-        monkeypatch.delenv("TABSIL_" + name, raising=False)
+    # every argument of the script also reads an environment variable
+    for name in [name for name in os.environ if name.startswith("TABSIL_")]:
+        monkeypatch.delenv(name)
     return load_script("scripts/train.py", "train_script_old_runs")
 
 

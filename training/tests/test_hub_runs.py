@@ -1,4 +1,5 @@
-"""Loading MLflow run checkpoints (`runs:/`, `tabsil_train.hub.load_model`; no MLflow server)."""
+"""Loading MLflow run checkpoints (`runs:/`, `tabsil_train.hub.load_model`; no MLflow server), and
+what importing `tabsil_train.hub` loads."""
 
 import subprocess
 import sys
@@ -98,5 +99,6 @@ assert "tabsil_train.training.loop" not in sys.modules, "eval.py imports the loo
         [sys.executable, "-c", code, str(TRAINING_DIR / "scripts" / "eval.py")],
         capture_output=True,
         text=True,
+        timeout=600,  # a blocked import fails the test instead of hanging the run
     )
     assert done.returncode == 0, done.stderr

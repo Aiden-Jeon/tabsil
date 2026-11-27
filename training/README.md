@@ -8,7 +8,7 @@ Training, the synthetic-data prior, and the benchmark evaluation of [TabSil](../
 | `src/tabsil_train/training/` | training config (`TrainConfig`), the training loop, Muon (and Muon + AdamW), the reference validation set, losses, stability, diagnostics |
 | `src/tabsil_train/benchmarks/` | AMLB / CTR23, TabArena, BeyondArena, uncertainty metrics |
 | `src/tabsil_train/recipe.py` | the TabICLv2 three-stage curriculum (`curriculum(stage)`) |
-| `src/tabsil_train/hub.py` | MLflow run checkpoints (`runs:/...`) and the model structure in run params |
+| `src/tabsil_train/hub.py` | MLflow run checkpoints (`runs:/...`), the model structure in run params, and Hub weights as the checkpoint a training run starts from (`--init-hub`) |
 | `scripts/` | `train.py`, `eval.py` and their Databricks AI Runtime job specs (`*.yaml`); `paired_report.py`: the paired per-dataset error ratio of two eval runs (v2 plan §3); `dev_suite_overlap.py`: the AMLB / TabArena overlap behind `--suite dev` |
 | `scripts/v2_prior_diag/` | diagnostics of the v1 weights for the v2 prior (forecast extrapolation, calibration, contaminated context); `attention_temperatures.py`: the learned attention temperatures of saved weights |
 | `scripts/v2_eff/` | step-time measurements for the v2 plan's GPU cost: `step_probe.py` (runs `train.py` and times the optimizer step, each GPU's data wait and the garbage collector), `timing.yaml` (its job spec), `step_breakdown.py` (the step time by part from a run's records) |

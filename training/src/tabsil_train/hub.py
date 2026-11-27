@@ -115,8 +115,9 @@ def run_architecture(params: dict[str, str]) -> dict:
 
 def hub_init_checkpoint(spec: str, config: TrainConfig, path: Path) -> Path:
     """The weights and regression borders of a Hub repo (`repo@revision`) or a local
-    `save_pretrained` folder, written to `path` as a `save_checkpoint` file for `init_from`, after
-    checking that the model matches the config (before the MLflow run is opened)."""
+    `save_pretrained` folder, written to `path` as a `save_checkpoint` file for `init_from` and
+    then checked against the config, so that a model that does not match stops the script before
+    the MLflow run is opened (the file stays at `path`)."""
     # The checkpoint check belongs to the training loop. It is imported here, where a training run
     # starts from Hub weights, and not at the top: evaluation and the Hub upload import this module
     # to load models and must not load the training loop
