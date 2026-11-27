@@ -16,6 +16,14 @@ Amazon.com, Inc. or its affiliates, licensed under the Apache License 2.0:
   Apache License 2.0), and `freq_seasonality` the frequency table of autogluon.timeseries
   `get_seasonality` (https://github.com/autogluon/autogluon, Apache License 2.0)
 
+This product includes software adapted from TabArena (https://github.com/autogluon/tabarena,
+commit c9f57b2), Copyright 2025-2026 TabArena Maintainers, licensed under the Apache License 2.0:
+- src/tabsil_train/benchmarks/_elo.py `fit`, `table`: reimplement TabArena's Elo
+  (packages/bencheval/src/bencheval/elo_utils.py `EloHelper.compute_mle_elo`, which states that it
+  is adapted from Chatbot Arena, and packages/bencheval/src/bencheval/evaluator.py
+  `BenchmarkEvaluator.compute_elo`): the Bradley-Terry maximum likelihood fit, a total weight of 1
+  per table or task, the bootstrap interval and the anchor method moved to 1000
+
 This product includes software adapted from ADBench (https://github.com/Minqi824/ADBench),
 Copyright (c) 2022, Mickey (Minqi), licensed under the BSD 2-Clause License
 (LICENSES/ADBench-BSD-2-Clause.txt in the repository root):
