@@ -30,10 +30,11 @@ extension and the usual baselines, every method on the same rows and masks.
   given the table's categorical columns; both TabPFN extension methods add the numeric columns
   they infer as categorical (`extension_categorical`), and `tabsil_inferred` (TabSil's mean with
   those same column kinds) is the ablation for that difference
-- random numbers: every method draws its own from the split's `seed`, so a second run on the same
-  machine gives the same rows. Two baselines need help for that: MissForest predicts on one thread
-  (`impute_missforest`), and both global generators the official extension draws from are seeded
-  (`tabpfn_imputer`)
+- reruns: the same command on the same hardware gives the same rows a second time. No method
+  draws from an unseeded generator: TabSil, MissForest and `tabpfn_impute` draw from the split's
+  `seed`, the TabPFN estimators keep their own fixed seed, and `mean`, `knn` and `mice` draw
+  nothing. For this MissForest predicts on one thread (`impute_missforest`), and
+  `tabpfn_imputer` seeds both global generators the official `impute` draws from
 
 `run` writes one row per (table, rate, seed, method) to `results.csv` as it goes and skips rows
 already there, so a rerun resumes. A row is reused only with the settings it was computed with
@@ -306,8 +307,8 @@ def impute_mice(X: np.ndarray, categorical: list[int], seed: int, max_iter: int 
 
 def n_jobs() -> int:
     """Parallel jobs of MissForest's forest fits: `$TABSIL_IMPUTE_N_JOBS` (set per worker by
-    `eval.py --suite impute --shards`), else -1 (every core). The imputation is the same for
-    every value."""
+    `eval.py --suite impute --shards`), else -1 (every core). The count changes the time, not
+    the imputation."""
     return int(os.environ.get("TABSIL_IMPUTE_N_JOBS", -1))
 
 
@@ -398,8 +399,9 @@ def tabpfn_imputer(device: str, simple: bool) -> Callable:
     defaults and the given categorical columns (`official_model_class`: with the missing-value
     fix of `use_classifier_`), or `simple_impute(X, clf, reg, categorical_features)`. Both add the
     numeric columns they infer as categorical (at most 40 values, more than 10 rows per value);
-    such columns are still scored as numeric. `seed` seeds the two global generators the official
-    code draws from: torch's (its samples) and Python's `random` (its column orders)."""
+    such columns are still scored as numeric. `seed` seeds the two global generators `impute`
+    draws from, torch's (its samples) and Python's `random` (its column orders); `simple_impute`
+    draws from neither."""
 
     def impute(X: np.ndarray, categorical: list[int], seed: int) -> np.ndarray:
         import torch
