@@ -116,6 +116,16 @@ class TrainConfig:
     # 8 GPUs the default's head start is about 14 s, and `graph_scm_base_realism` has micro
     # batches that take 20 to 45 s
     prefetch_factor: int = 4
+    # Python's garbage collector. A full pass walks every object it tracks, and nearly all of them
+    # live for the whole run (the model, the optimizer state, the compiled graphs): 1.2 to 2.1
+    # million per process, 0.7 to 1.2 s per pass. A pass stops its process, and every other GPU
+    # waits for it in the gradient all-reduce. On (default): at every log step each process
+    # collects once and then calls `gc.freeze()`, which moves the objects alive at that point out
+    # of the collector's reach, so later passes walk only what was made since. Every GPU does it
+    # at the same step, so the passes run side by side. `train` unfreezes at the end. The training
+    # computation is the same on or off. Measurements: `training/docs/v2-experiment-results.md`,
+    # "Collector pauses"
+    gc_freeze: bool = True
     log_every: int = 100
     val_every: int = 5_000
     val_batch: int = 8  # datasets per val batch; separate from micro_batch so the val set is fixed
