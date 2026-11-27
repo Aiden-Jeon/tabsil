@@ -143,11 +143,11 @@ from tabsil.inference.ensemble import (
     max_features_of,
 )
 from tabsil.inference.preprocessing import CATEGORY_ENCODINGS
-from tabsil.inference.subsample import SubsampledEstimator
 from tabsil.recipe import SUPPORTED_SIZE, default_inference, resolve_member_kinds
 from tabsil_train.benchmarks import amlb as bm
 from tabsil_train.benchmarks import uncertainty as unc
 from tabsil_train.hub import load_model
+from tabsil_train.subsample import SubsampledEstimator
 from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
