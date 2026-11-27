@@ -125,7 +125,9 @@ class TrainConfig:
     # does it at the same step, so the passes run side by side. Until the first log step of a run
     # or a resumed chunk nothing is frozen. `train` unfreezes at the end. The training computation
     # is the same on or off. It is set per chunk, and the run param holds the first chunk's value.
-    # Measurements: `training/docs/v2-experiment-results.md`, "Collector pauses"
+    # Measured on 8 H100 over the same tables: 6.7% less per step in stage 1 and 2.3% in stage 2
+    # (`training/docs/v2-experiment-results.md`, "Collector pauses" and "The collector change as
+    # merged")
     gc_freeze: bool = True
     log_every: int = 100
     val_every: int = 5_000
