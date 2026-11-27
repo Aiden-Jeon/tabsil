@@ -166,7 +166,7 @@ uv run --package tabsil-train python training/scripts/eval.py --suite all \
   --regressor-path hf://aiden-jeon/tabsil@v1.1
 ```
 
-`--suite tabarena-lite` and `--suite beyondarena` run the arena suites (they need the `arena` extra; see the repository README). They fit each split once without bagging, a quicker check; the official-protocol TabArena-Lite result above is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)).
+`--suite tabarena-lite` and `--suite beyondarena` run the arena suites (they need the `arena` extra; see `training/README.md` in the repository). They fit each split once without bagging, a quicker check; the official-protocol TabArena-Lite result above is reproduced with TabArena's `TabSil` model ([autogluon/tabarena#753](https://github.com/autogluon/tabarena/pull/753)).
 
 ## Intermediate checkpoints
 

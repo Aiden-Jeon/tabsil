@@ -15,7 +15,12 @@
 #                (batch 32 keeps the 8 micro batches per GPU and step of batch 256 on 8 GPUs.
 #                torchrun sets OMP_NUM_THREADS=1 only for more than one process; without it a
 #                stage-1 run from scratch hangs in the regression borders' process pool)
-#   collector:   --override env_variables.TABSIL_EFF_GC=freeze:100 (or off)
+#   collector:   the loop freezes the collector's objects at every log step (TrainConfig.gc_freeze);
+#                --override env_variables.TABSIL_GC_FREEZE=0 turns that off.
+#                --override env_variables.TABSIL_EFF_GC=freeze:100 (or off) turns it off as well and
+#                freezes once after 100 steps (or disables the collector)
+#                --override env_variables.TABSIL_EFF_PREFORK_FREEZE=1 also freezes right before the
+#                prior workers are forked (not something the loop does: what it would give)
 experiment_name: tabsil
 mlflow_run_name: tabsil-v2-eff-s1-m-mb4-probe
 environment:

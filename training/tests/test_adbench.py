@@ -1,7 +1,10 @@
-"""ADBench suite: split protocol, run bookkeeping (resume, failures) and the Elo against the
-copied fm-agent-bench results. No download: tables are synthetic or monkeypatched."""
+"""ADBench suite: split protocol, run bookkeeping (resume, failures, rows reused only with the
+same weights and settings) and the Elo against the copied fm-agent-bench results. No download:
+tables are synthetic or monkeypatched."""
 
 from __future__ import annotations
+
+import json
 
 import numpy as np
 import pandas as pd
@@ -72,6 +75,130 @@ def test_reference_elo_reproduces_fm_agent_bench():
     old = old.set_index("method")
     for col in ("elo", "elo+", "elo-", "imputed"):
         np.testing.assert_allclose(ours.loc[old.index, col], old[col], atol=0.06)
+
+
+def _eval_script():
+    import train_helpers as helpers
+
+    return helpers.load_script("scripts/eval.py", "eval_script_adbench")
+
+
+def _args(out, model, *more):
+    return ["--suite", "adbench", "--regressor-path", str(model), "--datasets", "yeast",
+            "--adbench-splits", "s1", "--n-estimators", "1", "--n-permutations", "1",
+            "--device", "cpu", "--out-dir", str(out), *more]  # fmt: skip
+
+
+@pytest.fixture
+def suite(tmp_path, monkeypatch):
+    """`eval.py` on a synthetic table: (script, output folder, results.csv, IsolationForest
+    calls)."""
+    monkeypatch.setattr(ab, "load", lambda dataset, root=None: _table(1500))
+    monkeypatch.delenv("MLFLOW_RUN_ID", raising=False)
+    calls, iforest = [], ab.iforest_scores
+    monkeypatch.setattr(ab, "iforest_scores", lambda *a: calls.append(1) or iforest(*a))
+    out = tmp_path / "eval"
+    return _eval_script(), out, out / "adbench" / "results.csv", calls
+
+
+def test_eval_suite_adbench_reuses_rows_of_the_same_weights_and_settings(suite, tmp_path):
+    from train_helpers import tiny_checkpoint
+
+    from tabsil_train.hub import load_model, weights_digest
+
+    script, out, results, iforest_calls = suite
+    model = tiny_checkpoint(tmp_path / "a.pt")
+    script.main(_args(out, model))
+    rows = pd.read_csv(results)
+    assert sorted(rows.method) == ["iforest", "tabsil_unsup", "tabsil_unsup+clean"]
+    ours = rows[rows.method != "iforest"]
+    digest = weights_digest(*load_model(model, "regression", tmp_path))
+    settings = f"weights={digest} n_estimators=1 seed=0 n_permutations=1 "
+    assert ours.opts.str.startswith(settings).all()
+    assert ours.opts.nunique() == 1  # the +clean row has its method's settings
+    first = results.read_text()
+    summary = out / "adbench" / "summary.json"
+    assert "mean_auroc" in json.loads(summary.read_text())
+    assert (out / "adbench" / "summary.csv").exists()
+
+    # the same weights at another path: the rerun resumes, nothing is computed again
+    script.main(_args(out, tiny_checkpoint(tmp_path / "copy.pt")))
+    assert results.read_text() == first and len(iforest_calls) == 1
+
+    # other weights stop the run, also when they replace the file at the first path
+    for path in (tmp_path / "b.pt", tmp_path / "a.pt"):
+        with pytest.raises(ValueError, match="other settings"):
+            script.main(_args(out, tiny_checkpoint(path, seed=1)))
+    # and so do other settings of the same weights
+    for flags in (["--seed", "1"], ["--n-permutations", "2"], ["--n-estimators", "2"]):
+        with pytest.raises(ValueError, match="other settings"):
+            script.main(_args(out, tmp_path / "copy.pt", *flags))
+
+    # the IsolationForest row does not depend on the model: it is reused with other weights
+    script.main(_args(out, tmp_path / "b.pt", "--adbench-methods", "iforest"))
+    assert results.read_text() == first and len(iforest_calls) == 1
+    # and the report is of that run's method only: the TabSil rows in the file are the first
+    # model's, so neither their numbers nor the first run's summary.csv are in it
+    assert "mean_auroc" not in json.loads(summary.read_text())
+    assert not (out / "adbench" / "summary.csv").exists()
+    assert (out / "adbench" / "table_d4.csv").exists()
+
+
+def test_eval_suite_adbench_shards_check_the_settings_before_the_workers(
+    suite, tmp_path, monkeypatch
+):
+    import mlflow
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, iforest_calls = suite
+    local = tiny_checkpoint(tmp_path / "a.pt")
+    # the parent gets a runs:/ URI and hands its download, a local path, to the workers
+    monkeypatch.setattr(
+        mlflow.artifacts, "download_artifacts", lambda artifact_uri, dst_path: local
+    )
+    uri = "runs:/abc123/checkpoints/latest.pt"
+    workers = in_process_workers(script, monkeypatch)
+    script.main(_args(out, uri, "--shards", "2"))
+    assert len(workers) == 2 and all(local in argv and uri not in argv for argv in workers)
+    rows = pd.read_csv(results)
+    assert sorted(rows.method) == ["iforest", "tabsil_unsup", "tabsil_unsup+clean"]
+    assert rows[rows.method != "iforest"].opts.nunique() == 1
+    first = results.read_text()
+
+    # the workers' rows carry the settings the parent expects: reruns find every job finished
+    script.main(_args(out, uri, "--shards", "2"))
+    script.main(_args(out, local))
+    assert len(workers) == 2 and results.read_text() == first and len(iforest_calls) == 1
+
+    # other weights: the parent stops before it filters the finished jobs and starts workers
+    with pytest.raises(ValueError, match="other settings"):
+        script.main(_args(out, tiny_checkpoint(tmp_path / "b.pt", seed=1), "--shards", "2"))
+    assert len(workers) == 2 and results.read_text() == first
+
+
+def test_eval_suite_adbench_without_a_model(suite):
+    # only IsolationForest: no model is given, and the --shards parent has no job to start
+    script, out, results, _ = suite
+    args = ["--suite", "adbench", "--datasets", "yeast", "--adbench-splits", "s1",
+            "--shards", "2", "--device", "cpu", "--out-dir", str(out)]  # fmt: skip
+    script.main([*args, "--adbench-methods", "iforest"])
+    assert list(pd.read_csv(results).method) == ["iforest"]
+    assert (out / "adbench" / "summary.json").exists()
+    with pytest.raises(SystemExit, match="adbench needs --regressor-path"):
+        script.main(args)  # the default methods have TabSil's
+
+
+def test_eval_suite_adbench_shards_write_the_header_of_an_empty_file(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+    results.parent.mkdir(parents=True)
+    results.touch()  # a run cut short before its first row
+    in_process_workers(script, monkeypatch)
+    model = tiny_checkpoint(tmp_path / "a.pt")
+    script.main(_args(out, model, "--shards", "2", "--adbench-methods", "tabsil_unsup"))
+    rows = pd.read_csv(results)
+    assert list(rows.columns) == ab.RESULT_COLUMNS and list(rows.method) == ["tabsil_unsup"]
 
 
 def test_elo_pool_and_summary_with_our_method():

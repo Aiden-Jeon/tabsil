@@ -16,10 +16,18 @@ loss. Only that behavior is reimplemented here.
   target-transform members, distributional metrics) is thus reused unchanged. The mass outside the
   lowest and the highest quantile (1/(n + 1) each) goes to the bucket holding that quantile (our
   choice)
+
+`bucket_quantiles` goes the other way and is not from Kumo-Tabular: the quantiles of a bucket
+distribution, with the density taken as uniform within a bucket. It is applied to the ensemble's
+predictive distribution (numpy, float64), for quantile forecasts (`tabsil.tasks.forecast`) and
+for medians and draws (`tabsil.tasks.unsupervised`).
 """
 
 from __future__ import annotations
 
+from typing import Any
+
+import numpy as np
 import torch
 
 N_QUANTILES = 999
@@ -84,3 +92,29 @@ def quantiles_to_bucket_probs(q: torch.Tensor, borders: torch.Tensor) -> torch.T
         cdf[:, -1] = 1.0
         out.append((cdf[:, 1:] - cdf[:, :-1]).clamp_min(0.0))
     return torch.cat(out).reshape(*shape[:-1], borders.numel() - 1)
+
+
+def bucket_quantiles(
+    log_probs: torch.Tensor | np.ndarray, borders: torch.Tensor | np.ndarray, levels: Any
+) -> np.ndarray:
+    """Quantiles (n, m) of bucket distributions: log probabilities (n, K) on `borders`
+    (K + 1,), with the density uniform within each bucket (the CDF is linear between borders).
+    `levels` is m levels shared by every row, or an (n, m) array of levels per row (uniform
+    levels give draws: `tabsil.tasks.unsupervised.NumericConditional.sample`). A level q falls in
+    the bucket k with cdf[k] < q <= cdf[k + 1], so a bucket without probability is never chosen."""
+    probs = np.exp(np.asarray(log_probs, dtype=np.float64))
+    probs = probs / probs.sum(-1, keepdims=True)
+    b = np.asarray(borders, dtype=np.float64)
+    cdf = np.concatenate([np.zeros((len(probs), 1)), np.cumsum(probs, -1)], axis=-1)
+    cdf[:, -1] = 1.0
+    levels = np.asarray(levels, dtype=np.float64)
+    per_row = levels.ndim == 2
+    rows = np.arange(len(probs))
+    out = np.empty((len(probs), levels.shape[-1]))
+    for j in range(levels.shape[-1]):
+        q = levels[:, j] if per_row else np.full(len(probs), levels[j])
+        k = np.clip((cdf < q[:, None]).sum(-1) - 1, 0, len(b) - 2)
+        p = probs[rows, k]
+        share = np.where(p > 0, (q - cdf[rows, k]) / np.where(p > 0, p, 1.0), 0.0)
+        out[:, j] = b[k] + np.clip(share, 0.0, 1.0) * (b[k + 1] - b[k])
+    return out

@@ -1,5 +1,5 @@
 """ADBench unsupervised outlier detection: 12 classical tables x 3 seeds, TabSil's chain-rule log
-density (`tabsil.unsupervised`) against the official TabPFN v2 extension and pyod baselines.
+density (`tabsil.tasks.unsupervised`) against the official TabPFN v2 extension and pyod baselines.
 
 The protocol, the 12 tables, the comparison numbers and the Elo are those of the fm-agent-bench
 anomaly track (`docs/anomaly.md`, `fab/bench/anomaly/`, results at commit
@@ -27,24 +27,25 @@ e4235ac8e6c42ac6b781ac41f8d2102fe5ba1e33, copied to `adbench_reference/`):
   reference imputed with the IsolationForest value stay imputed, `imputed`) plus TabSil
 
 `run` writes one row per (table, split, method) to `results.csv` as it goes and skips rows
-already there, so a rerun resumes. A failed (table, split, method) is reported and the run ends with
-an error after the others; nothing is imputed for our methods.
+already there, so a rerun resumes. A row is reused only with the settings it was computed with
+(`opts`; for TabSil the weights, member count, seed, number of column orders and saved inference
+settings, `_files.model_settings`): a rerun with another model into the same folder stops, and
+IsolationForest rows are reused whatever the model. A failed (table, split, method) is reported
+and the run ends with an error after the others; nothing is imputed for our methods.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import random
 import time
-import traceback
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks import _elo, _files
 from tabsil_train.benchmarks._files import download_verified
 
 ADBENCH_REPO = "Minqi824/ADBench"
@@ -93,8 +94,6 @@ METHODS = ("tabsil_unsup", "iforest")
 ANCHOR = "iforest"  # Elo 1000
 OURS = "tabsil_unsup"
 OFFICIAL = "tabpfn_unsup"
-# Elo (fm-agent-bench elo.py)
-ELO_SCALE, ELO_INIT, ELO_ROUNDS, ELO_SEED = 400, 1000.0, 200, 0
 RESULT_COLUMNS = [
     "dataset", "split", "seed", "method", "auroc", "aupr", "seconds", "n_context", "n_test",
     "test_anomalies", "n_features", "opts",
@@ -182,7 +181,7 @@ def tabsil_scorer(model, borders, n_permutations: int, n_estimators: int | None,
                   seed_offset: int = 0) -> Callable:  # fmt: skip
     """fit(X_train) -> outlier_score(X_test) of `TabSilUnsupervised`, random_state = the ADBench
     seed + `seed_offset` (column orders and members)."""
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil.tasks.unsupervised import TabSilUnsupervised
 
     def score(X_train: np.ndarray, X_test: np.ndarray, seed: int) -> np.ndarray:
         est = TabSilUnsupervised(
@@ -212,6 +211,12 @@ def read_results(path: Path) -> pd.DataFrame:
     return _files.read_results(path, RESULT_COLUMNS)
 
 
+def row_settings(methods: list[str], opts: dict[str, str] | None) -> dict[str, str]:
+    """Method -> the settings string (`opts`) of its rows: its base method's (a `+clean` row is
+    computed with the settings of the method it is a diagnostic of)."""
+    return {m: (opts or {}).get(base(m), "") for m in methods}
+
+
 def run(
     scorers: dict[str, Callable],
     datasets: list[str],
@@ -223,14 +228,14 @@ def run(
 ) -> tuple[pd.DataFrame, list[dict]]:
     """Score every (table, split, method) not yet in `out_dir/results.csv`, appending a row as
     each finishes. `scorers[base method](X_train, X_test, seed)` -> test scores (higher = more
-    anomalous). Returns (all rows, failures)."""
+    anomalous). `opts[base method]` is the settings string written with its rows; rows of
+    `methods` already there with another string stop the run (`_files.check_settings`). Returns
+    (all rows, failures)."""
     from sklearn.metrics import average_precision_score, roc_auc_score
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "results.csv"
-    done = read_results(path)
+    results = _files.Results(out_dir, RESULT_COLUMNS, row_settings(methods, opts), "adbench", log)
+    done = results.done
     finished = set(zip(done.dataset, done.split, done.method, strict=True))
-    failures = []
     for dataset in datasets:
         X, y = load(dataset)
         for split in splits:
@@ -249,10 +254,7 @@ def run(
                             "non-finite values"
                         )
                 except Exception as e:  # noqa: BLE001 - record and go on; the run fails at the end
-                    failures.append(
-                        dict(dataset=dataset, split=split, method=method, error=repr(e))
-                    )
-                    log(f"[adbench] {dataset} {split} {method} FAILED:\n{traceback.format_exc()}")
+                    results.fail(dict(dataset=dataset, split=split, method=method), e)
                     continue
                 row = dict(
                     dataset=dataset, split=split, seed=seed, method=method,
@@ -262,17 +264,13 @@ def run(
                     test_anomalies=int(y_test.sum()), n_features=X.shape[1],
                     opts=(opts or {}).get(base(method), ""),
                 )  # fmt: skip
-                pd.DataFrame([row], columns=RESULT_COLUMNS).to_csv(
-                    path, mode="a", header=not path.exists() or not path.stat().st_size, index=False
-                )
+                results.append([row])
                 log(
                     f"[adbench] {dataset} {split} {method}: AUROC {row['auroc']:.4f} "
                     f"AUPRC {row['aupr']:.4f} ({row['seconds']:.0f}s, context {len(X_fit)}, "
                     f"test {len(X_test)})"
                 )
-    if failures:
-        (out_dir / "failures.json").write_text(json.dumps(failures, indent=1))
-    return read_results(path), failures
+    return results.finish()
 
 
 # --- reference and comparison ---------------------------------------------------------------
@@ -314,34 +312,14 @@ def table_d4_check(ours: pd.DataFrame, method: str = ANCHOR) -> pd.DataFrame:
     return out.reset_index(names="dataset")
 
 
-# --- Elo (fm-agent-bench fab/bench/tabarena/elo.py) ------------------------------------------
+# --- Elo (`_elo`: fm-agent-bench fab/bench/tabarena/elo.py) -----------------------------------
 
 
-def _elo_fit(err: np.ndarray, weight: np.ndarray) -> np.ndarray:
-    """err (methods, units) without gaps, weight per unit -> uncalibrated Elo per method."""
-    from sklearn.linear_model import LogisticRegression
-
-    m = err.shape[0]
-    i, j = np.triu_indices(m, 1)
-    a, b = err[i], err[j]
-    win_i = ((a < b) + 0.5 * (a == b)) @ weight
-    win_j = ((a > b) + 0.5 * (a == b)) @ weight
-    x = np.zeros((len(i), m))
-    x[np.arange(len(i)), i], x[np.arange(len(i)), j] = np.log(10), -np.log(10)
-    keep = (win_i + win_j) > 0
-    X = np.vstack([x[keep], x[keep]])
-    y = np.r_[np.ones(keep.sum()), np.zeros(keep.sum())]
-    w = np.r_[win_i[keep], win_j[keep]]
-    lr = LogisticRegression(fit_intercept=False, C=1e6, tol=1e-10, max_iter=1000)
-    lr.fit(X, y, sample_weight=w)
-    return ELO_SCALE * lr.coef_[0] + ELO_INIT
-
-
-def elo(long: pd.DataFrame, anchor: str = ANCHOR, rounds: int = ELO_ROUNDS,
-        seed: int = ELO_SEED) -> pd.DataFrame:  # fmt: skip
+def elo(long: pd.DataFrame, anchor: str = ANCHOR, rounds: int = _elo.ROUNDS,
+        seed: int = _elo.SEED) -> pd.DataFrame:  # fmt: skip
     """long: method, dataset, split, metric_error (+ imputed 0/1) without gaps -> per method elo,
     elo+, elo- (95% bootstrap over tables), rank, winrate, imputed share. Pairs compare within a
-    (table, split), weighted 1 / (splits of the table)."""
+    (table, split), weighted 1 / (splits of the table) (`_elo.table`)."""
     key = ["method", "dataset", "split"]
     if long.duplicated(key).any():
         raise ValueError("repeated (method, dataset, split) rows")
@@ -355,33 +333,10 @@ def elo(long: pd.DataFrame, anchor: str = ANCHOR, rounds: int = ELO_ROUNDS,
         raise ValueError(f"{int(wide.isna().sum().sum())} gaps: fill them first")
     imp = long.pivot(index="method", columns=["dataset", "split"], values="imputed")
     imp = imp.reindex_like(wide)
-    ds = wide.columns.get_level_values("dataset").to_numpy()
-    names, ds_idx = np.unique(ds, return_inverse=True)
-    weight = 1.0 / np.bincount(ds_idx)[ds_idx]
-    err = wide.to_numpy(float)
-    raw = _elo_fit(err, weight)
-    rng = np.random.default_rng(seed)
-    boots = []
-    for _ in range(rounds):
-        pick = np.bincount(rng.integers(0, len(names), len(names)), minlength=len(names))
-        w = weight * pick[ds_idx]
-        boots.append(_elo_fit(err[:, w > 0], w[w > 0]))
-    boots = np.array(boots)
-    lo, hi = np.quantile(boots, 0.025, axis=0), np.quantile(boots, 0.975, axis=0)
-    a = list(wide.index).index(anchor)
-    rank = wide.rank(axis=0, method="average").to_numpy()
-    m = len(wide)
-    out = pd.DataFrame(
-        {
-            "elo": raw - raw[a] + ELO_INIT,
-            "elo+": np.clip(hi - raw, 0, None),
-            "elo-": np.clip(raw - lo, 0, None),
-            "rank": (rank * weight).sum(1) / weight.sum(),
-            "winrate": ((m - rank) / (m - 1) * weight).sum(1) / weight.sum(),
-            "imputed": (imp.fillna(0.0).to_numpy(float) * weight).sum(1) / weight.sum(),
-            "datasets": len(names),
-        },
-        index=wide.index,
+    names, _, weight = _elo.unit_weights(wide)
+    out = _elo.table(wide, anchor, rounds, seed).assign(
+        imputed=(imp.fillna(0.0).to_numpy(float) * weight).sum(1) / weight.sum(),
+        datasets=len(names),
     )
     return out.sort_values("elo", ascending=False).rename_axis("method").reset_index()
 
@@ -443,10 +398,20 @@ def summary_table(ours: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index()
 
 
+# the files `report` writes
+REPORT_FILES = ("table_d4.csv", "summary.csv", "elo.csv")
+
+
 def report(ours: pd.DataFrame, out_dir: Path, methods: list[str] = (OURS,)) -> dict:
-    """Write `summary.csv` (per table), `elo.csv` (pool with IsolationForest = 1000), `clean.csv`
-    (contaminated vs clean context) and `table_d4.csv` (the split check), and return the main
-    numbers. The Elo needs every (table, split) of our methods (it does not impute ours)."""
+    """Write `table_d4.csv` (the split check, with IsolationForest rows), `summary.csv` (per table,
+    with TabSil rows) and `elo.csv` (pool with IsolationForest = 1000), and return the main
+    numbers. The Elo needs every (table, split) of our methods (it does not impute ours).
+
+    `ours` is the rows to report: the caller passes those of the methods its run asked for (other
+    rows of `results.csv` can be an earlier run's, of another model). A file an earlier report
+    wrote and this one does not is removed, so the folder holds one report."""
+    for name in REPORT_FILES:
+        (out_dir / name).unlink(missing_ok=True)
     out: dict = {}
     if ANCHOR in set(ours.method):
         check = table_d4_check(ours)

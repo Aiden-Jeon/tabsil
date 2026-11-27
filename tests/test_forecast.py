@@ -1,4 +1,5 @@
-"""Forecasting with TabSil regression (`tabsil.forecast`), run on a tiny randomized model."""
+"""Forecasting with TabSil regression (`tabsil.tasks.forecast`), run on a tiny randomized
+model."""
 
 import numpy as np
 import pandas as pd
@@ -6,14 +7,14 @@ import pytest
 import torch
 from helpers import tiny_model
 
-from tabsil.forecast import (
+from tabsil.models.quantile_distribution import bucket_quantiles
+from tabsil.recipe import SUPPORTED_SIZE
+from tabsil.tasks.forecast import (
     DEFAULT_QUANTILE_LEVELS,
     TabSilForecaster,
-    bucket_quantiles,
     seasonal_periods,
     time_features,
 )
-from tabsil.recipe import SUPPORTED_SIZE
 
 BORDERS = torch.linspace(-4, 4, 33)
 LEVELS = [str(q) for q in DEFAULT_QUANTILE_LEVELS]

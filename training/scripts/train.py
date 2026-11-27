@@ -52,6 +52,10 @@ gradient norms; `--grad-cosine` (`TABSIL_GRAD_COSINE=1`) adds the per-group cosi
 tasks' gradients, and `--rank-timing` (`TABSIL_RANK_TIMING=1`) adds per-GPU forward/backward time
 and table size. They do not change the training computation and are not inherited on resume (set
 them per chunk).
+Python's garbage collector: at every log step each GPU's process collects once and freezes its
+live objects (`gc.freeze()`), so that the collector's full passes stop pausing one GPU while the
+others wait for it (`TrainConfig.gc_freeze`). It is on by default and does not change the training
+computation; `--no-gc-freeze` (`TABSIL_GC_FREEZE=0`) turns it off, per chunk like the diagnostics.
 If the train loss jumps and does not recover, training rewinds to a healthy state kept in memory
 and continues on different data (collapse threshold `TABSIL_COLLAPSE_THRESHOLD`, default 0.5,
 `off` disables it). Each rewind multiplies the base lr by `TABSIL_REWIND_LR_FACTOR` (0.5 for
@@ -139,6 +143,12 @@ def _env_flag(name: str) -> bool:
     )
 
 
+def _env_switch(name: str) -> bool | None:
+    """An on/off environment variable (`_env_flag`) of an option that is on by default: None when
+    it is unset or empty, so that the preset's value is kept."""
+    return _env_flag(name) if os.environ.get(name, "").strip() else None
+
+
 def _env(name: str, cast=str):
     value = os.environ.get(name)
     return cast(value) if value else None
@@ -176,6 +186,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     for flag in ("grad-cosine", "rank-timing"):
         env = "TABSIL_" + flag.upper().replace("-", "_")
         parser.add_argument(f"--{flag}", action="store_true", default=_env_flag(env))
+    # The collector freeze (TrainConfig comment) is on by default, so it has an off switch. It does
+    # not change the training computation either and is set per chunk
+    parser.add_argument(
+        "--gc-freeze",
+        action=argparse.BooleanOptionalAction,
+        default=_env_switch("TABSIL_GC_FREEZE"),
+    )
     parser.add_argument("--weight-average", type=int, default=_env("TABSIL_WEIGHT_AVERAGE", int))
     parser.add_argument(
         "--weight-average-every", type=int, default=_env("TABSIL_WEIGHT_AVERAGE_EVERY", int)
@@ -452,6 +469,7 @@ def _override_values(args: argparse.Namespace) -> dict:
         "micro_batch": args.micro_batch,
         "num_workers": args.num_workers,
         "prefetch_factor": args.prefetch_factor,
+        "gc_freeze": args.gc_freeze,
         "lr": args.lr,
         "stop_step": args.stop_step,
         "checkpoint_every": args.checkpoint_every,

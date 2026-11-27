@@ -1,4 +1,4 @@
-"""Treatment effect estimation (`tabsil.causal`).
+"""Treatment effect estimation (`tabsil.tasks.causal`).
 
 Shapes, determinism and the TabSil plumbing run on a tiny randomized model (it predicts nothing
 useful). Whether a learner recovers known effects is checked with scikit-learn base learners
@@ -11,7 +11,7 @@ from helpers import tiny_model
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression, LogisticRegression
 
-from tabsil.causal import LEARNERS, TabSilCATE
+from tabsil.tasks.causal import LEARNERS, TabSilCATE
 
 BORDERS = torch.linspace(-4, 4, 33)
 
