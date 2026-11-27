@@ -1,5 +1,7 @@
-"""A resumed run keeps the table sizes and prior settings it was trained with: `DATA_OPTIONS` and
-`resume_data_options` of the training script (`scripts/train.py`).
+"""A resumed run keeps what it was trained with (the training script, `scripts/train.py`): its
+preset (`check_resume_config_name`), its table sizes and prior settings (`DATA_OPTIONS`,
+`resume_data_options`) and the settings that fit them on a GPU (`MEMORY_OPTIONS`,
+`resume_memory_options`).
 
 No model is trained here. A run is the dict of its MLflow params (strings, as MLflow stores them),
 and where `main` is called, MLflow, the checkpoint and the training loop are replaced.
@@ -7,6 +9,7 @@ and where `main` is called, MLflow, the checkpoint and the training loop are rep
 
 import os
 import re
+import shlex
 import types
 from dataclasses import asdict, replace
 
@@ -68,11 +71,20 @@ def _data(script, config: TrainConfig) -> dict:
     return {name: getattr(config, name) for name in script.DATA_OPTIONS}
 
 
-def _main_config(script, monkeypatch, tmp_path, argv, params) -> TrainConfig:
+def _tags(config_name: str) -> dict[str, str]:
+    """The tags of a run started as on AI Runtime, with `TABSIL_CONFIG_NAME` in the environment
+    and no arguments (`log_run_source`)."""
+    return {"command": "train.py", "env.TABSIL_CONFIG_NAME": config_name}
+
+
+def _main_config(script, monkeypatch, tmp_path, argv, params, tags=None) -> TrainConfig:
     """The config `main` hands to the training loop for a command that resumes, or takes the
-    weights of, a run with `params`. The checkpoint download fails the test if `main` gets that
-    far after it should have stopped."""
-    run = types.SimpleNamespace(data=types.SimpleNamespace(params=params, tags={}))
+    weights of, a run with `params` and `tags` (default: the run was started with this command's
+    config name). The checkpoint download fails the test if `main` gets that far after it should
+    have stopped."""
+    if tags is None:
+        tags = _tags(script.parse_args(argv).config_name)
+    run = types.SimpleNamespace(data=types.SimpleNamespace(params=params, tags=tags))
     client = types.SimpleNamespace(get_run=lambda run_id: run)
     monkeypatch.setattr(script.mlflow, "MlflowClient", lambda: client)
     seen = {"downloads": 0}
@@ -235,20 +247,25 @@ def test_a_chunk_submitted_again_with_the_same_settings_trains_as_before(
     # every setting is the first chunk's; only the stop step is the chunk's own, and the lr is
     # the checkpoint's
     assert config == replace(first, stop_step=10_000, lr=CHECKPOINT_LR)
+    # a chunk that leaves the micro batch override out trains with the run's all the same
+    monkeypatch.delenv("TABSIL_MICRO_BATCH", raising=False)
+    assert _main_config(script, monkeypatch, tmp_path, [], _params(first)) == config
 
 
 def test_taking_only_the_weights_is_not_affected(script, monkeypatch, tmp_path):
-    # --init-run-id starts a new run: the preset's tables, or the given ones (and the preset's
-    # lr, not the checkpoint's)
+    # --init-run-id starts a new run, here the next stage from a stage-1 run: the preset's tables,
+    # or the given ones (and the preset's lr, not the checkpoint's)
     params = _params(replace(recipe.curriculum(1), **CUSTOM))
+    stage1 = _tags("stage1")
     argv = ["--config-name", "stage2", "--init-run-id", "abc"]
     assert script.resume_data_options(script.parse_args(argv), params) == {}
-    assert _main_config(script, monkeypatch, tmp_path, argv, params) == recipe.curriculum(2)
+    script.check_resume_config_name(script.parse_args(argv), stage1)  # another preset is fine
+    assert _main_config(script, monkeypatch, tmp_path, argv, params, stage1) == recipe.curriculum(2)
     argv = [*argv, "--min-rows", "500", "--binary-prob", "0.1"]
     expected = replace(recipe.curriculum(2), min_rows=500, binary_prob=0.1)
-    assert _main_config(script, monkeypatch, tmp_path, argv, params) == expected
-    # a run that only gives its weights need not have recorded the settings either
-    assert _main_config(script, monkeypatch, tmp_path, argv, {}) == expected
+    assert _main_config(script, monkeypatch, tmp_path, argv, params, stage1) == expected
+    # a run that only gives its weights need not have recorded the settings or its command
+    assert _main_config(script, monkeypatch, tmp_path, argv, {}, {}) == expected
 
 
 def test_on_off_settings_follow_the_resumed_run(script, monkeypatch, tmp_path):
@@ -299,26 +316,105 @@ def test_a_run_that_did_not_record_the_settings_stops(script, monkeypatch, tmp_p
         _main_config(script, monkeypatch, tmp_path, [*argv, "--min-rows", "1024"], params)
 
 
-def test_another_config_name_keeps_the_runs_tables(script, monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "argv, env, expected",
+    [
+        ([], "stage1", "stage1"),  # AI Runtime: the variable alone
+        (["--init-hub", "aiden-jeon/tabsil@stage1-150k"], "stage2", "stage2"),
+        (["--config-name", "stage1", "--steps", "1000"], "stage2", "stage1"),  # the argument wins
+        (["--config-name=medium"], None, "medium"),
+        # an abbreviation, which argparse accepts
+        (["--config", "stage3", "--lr", "1e-4", "--init-run-id", "abc"], None, "stage3"),
+        (["--compile", "--out-dir", "my run"], None, "smoke"),  # neither: the default
+    ],
+)
+def test_the_config_name_of_a_run_is_read_as_the_script_parsed_it(
+    script, monkeypatch, argv, env, expected
+):
+    # the tags as `log_run_source` writes them for this command
+    tags = {"command": shlex.join(["train.py", *argv])}
+    if env is not None:
+        monkeypatch.setenv("TABSIL_CONFIG_NAME", env)
+        tags["env.TABSIL_CONFIG_NAME"] = env
+    assert script.parse_args(argv).config_name == expected
+    # read from the tags alone, whatever the environment of the resume command is
+    monkeypatch.setenv("TABSIL_CONFIG_NAME", "medium")
+    assert script.run_config_name(tags) == expected
+    # without a `command` tag the run was not started by this script
+    assert script.run_config_name({}) is None
+    assert script.run_config_name({"env.TABSIL_CONFIG_NAME": "stage1"}) is None
+
+
+def test_another_config_name_stops(script, monkeypatch, tmp_path):
+    # the preset also sets the micro batch, the gradient clipping and the checkpoint intervals, so
+    # a run is resumed with the one it was started with
     stage1, stage2 = recipe.curriculum(1, steps=30_000), recipe.curriculum(2)
-    assert _data(script, stage1) != _data(script, stage2)
-    # a stage-1 run resumed with the stage-2 preset trains on stage-1 tables, and the reverse
+    cases = (
+        (stage1, "stage1", "stage2"),
+        (stage2, "stage2", "stage1"),
+        (stage2, "stage2", "stage3"),
+    )
+    for run, name, other in cases:
+        argv = ["--config-name", other, *RESUME]
+        message = f"--config-name {other} differs from the resumed run's config name {name}"
+        with pytest.raises(SystemExit, match=re.escape(message)) as stopped:
+            _main_config(script, monkeypatch, tmp_path, argv, _params(run), _tags(name))
+        assert "--init-run-id" in str(stopped.value)
+    # the name can come from the environment, as on AI Runtime (train.yaml's default is stage1)
+    params, tags = _params(stage2), _tags("stage2")
+    monkeypatch.setenv("TABSIL_CONFIG_NAME", "stage1")
+    with pytest.raises(SystemExit, match="differs from the resumed run's config name stage2"):
+        _main_config(script, monkeypatch, tmp_path, RESUME, params, tags)
+    monkeypatch.setenv("TABSIL_CONFIG_NAME", "stage2")
+    config = _main_config(script, monkeypatch, tmp_path, RESUME, params, tags)
+    assert config == replace(stage2, lr=CHECKPOINT_LR)
+    monkeypatch.delenv("TABSIL_CONFIG_NAME")
+    # a run without a `command` tag was not started by this script: its preset is not known
     argv = ["--config-name", "stage2", *RESUME]
-    config = _main_config(script, monkeypatch, tmp_path, argv, _params(stage1))
-    assert _data(script, config) == _data(script, stage1)
-    assert (config.min_rows, config.max_rows, config.max_cells) == (1024, 1024, 102_400)
-    assert not config.log_uniform_rows
-    argv = ["--config-name", "stage1", *RESUME]
-    config = _main_config(script, monkeypatch, tmp_path, argv, _params(stage2))
-    assert _data(script, config) == _data(script, stage2)
-    # the stage-3 preset on a stage-2 run: the longer tables of stage 3 do not come in
-    argv = ["--config-name", "stage3", *RESUME]
-    config = _main_config(script, monkeypatch, tmp_path, argv, _params(stage2))
-    assert (config.max_rows, config.max_cells) == (10_240, 1_024_000)
-    # an override that belongs to the other preset is a different value, so it stops
-    argv = ["--config-name", "stage2", *RESUME, "--max-rows", "10240"]
-    with pytest.raises(SystemExit, match="max_rows 1024"):
-        _main_config(script, monkeypatch, tmp_path, argv, _params(stage1))
+    with pytest.raises(SystemExit, match="no `command` tag"):
+        _main_config(script, monkeypatch, tmp_path, argv, params, {})
+    # the tables are read from the run alone, so they do not follow a preset that changes
+    # between two chunks either
+    args = script.parse_args(argv)
+    assert script.resume_data_options(args, _params(stage1)) == _data(script, stage1)
+
+
+def test_the_micro_batch_and_activation_checkpointing_are_the_runs(script, monkeypatch, tmp_path):
+    # the run was started with another micro batch than its preset's (as `tabsil-v2-s2-l20`), and
+    # its activation checkpointing threshold is not the preset's
+    preset = recipe.curriculum(2)
+    assert (preset.micro_batch, preset.activation_checkpointing_rows) == (1, 2048)
+    run = replace(preset, micro_batch=2, activation_checkpointing_rows=1024)
+    params = _params(run)
+    argv = ["--config-name", "stage2", *RESUME]
+    args = script.parse_args(argv)
+    kept = {"micro_batch": 2, "activation_checkpointing_rows": 1024}
+    assert script.resume_memory_options(args, params) == kept
+    resumed = replace(run, lr=CHECKPOINT_LR)
+    assert _main_config(script, monkeypatch, tmp_path, argv, params) == resumed
+    # a given micro batch is used (a chunk on other GPUs may need another); the threshold stays
+    given = [*argv, "--micro-batch", "4"]
+    assert script.resume_memory_options(script.parse_args(given), params) == {
+        "activation_checkpointing_rows": 1024
+    }
+    config = _main_config(script, monkeypatch, tmp_path, given, params)
+    assert config == replace(resumed, micro_batch=4)
+    # a run without activation checkpointing keeps none
+    off = _params(replace(preset, activation_checkpointing_rows=None))
+    config = _main_config(script, monkeypatch, tmp_path, argv, off)
+    assert config.activation_checkpointing_rows is None
+    # a run that did not record them stops, and so does a param that does not read
+    for missing in script.MEMORY_OPTIONS:
+        without = {k: v for k, v in params.items() if k != missing}
+        with pytest.raises(SystemExit, match=f"did not record {missing}"):
+            _main_config(script, monkeypatch, tmp_path, argv, without)
+    for name, text in (("micro_batch", "two"), ("activation_checkpointing_rows", "2048.0")):
+        with pytest.raises(SystemExit, match=f"{name} param"):
+            script.resume_memory_options(args, {**params, name: text})
+    # a run that only gives its weights uses the preset's
+    init = ["--config-name", "stage2", "--init-run-id", "abc"]
+    assert script.resume_memory_options(script.parse_args(init), params) == {}
+    assert _main_config(script, monkeypatch, tmp_path, init, params) == preset
 
 
 @pytest.mark.parametrize(

@@ -37,10 +37,13 @@ The table size and prior settings (`TrainConfig` comments) can be changed with
 `TABSIL_MAX_TRAIN_FRACTION`, `TABSIL_BINARY_PROB`, `TABSIL_FILTER_UNPREDICTABLE=1`
 (unset values keep the preset). A resumed run keeps the tables it was trained on: these six
 settings and the four that only the preset sets (`max_features`, `log_uniform_rows`, `max_cells`,
-`missing_dataset_prob`) are taken from the original run's params (`DATA_OPTIONS`), whatever the
-`--config-name` of the resume command. A different value given on resume is an error, and so is
-resuming a run that did not record them. A run that takes only the weights (`--init-run-id`)
-uses the preset's or the given values.
+`missing_dataset_prob`) are taken from the original run's params (`DATA_OPTIONS`). A different
+value given on resume is an error, and so is resuming a run that did not record them. The two
+settings that fit those tables on a GPU are the run's as well (`MEMORY_OPTIONS`): its activation
+checkpointing threshold, and its micro batch unless `--micro-batch` is given. A run is resumed
+with the `--config-name` it was started with, because the preset also sets the gradient clipping
+and the checkpoint intervals: another one is an error. A run that takes only the weights
+(`--init-run-id`) uses the preset's or the given values, under any preset.
 Training recipe options of the v2 experiments (`TrainConfig` comments; off by default, and a
 resumed run keeps the original run's values): `--target-train-rows` (`TABSIL_TARGET_TRAIN_ROWS=1`)
 standardizes the regression target again with the train rows, as inference does.
@@ -94,6 +97,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import sys
 from dataclasses import replace
 from datetime import datetime
@@ -132,6 +136,8 @@ PRESETS = {
 }
 CONFIG_NAMES = tuple(PRESETS)
 CURRICULUM_NAMES = {f"stage{n}": n for n in recipe.CURRICULUM}
+# The preset when neither --config-name nor TABSIL_CONFIG_NAME is given
+DEFAULT_CONFIG_NAME = "smoke"
 # Model size settings that can be changed (TrainConfig fields of the model structure). Unset values
 # keep the preset's; a run that resumes or takes weights from another run is checked against them
 STRUCTURE_ARGS = ("emsize", "n_cls")
@@ -166,13 +172,16 @@ def _env(name: str, cast=str):
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # A run is resumed with the config name it was started with (`check_resume_config_name`)
     parser.add_argument(
         "--config-name",
         choices=CONFIG_NAMES,
-        default=os.environ.get("TABSIL_CONFIG_NAME", "smoke"),
+        default=os.environ.get("TABSIL_CONFIG_NAME", DEFAULT_CONFIG_NAME),
     )
     parser.add_argument("--steps", type=int, default=_env("TABSIL_STEPS", int))
     parser.add_argument("--batch-size", type=int, default=_env("TABSIL_BATCH_SIZE", int))
+    # A resumed run keeps the original run's micro batch unless one is given
+    # (`resume_memory_options`)
     parser.add_argument("--micro-batch", type=int, default=_env("TABSIL_MICRO_BATCH", int))
     parser.add_argument("--num-workers", type=int, default=_env("TABSIL_NUM_WORKERS", int))
     # micro batches requested ahead per prior worker (TrainConfig comment); the data is the same
@@ -325,6 +334,44 @@ def source_speed_options(params: dict[str, str]) -> dict:
     return out
 
 
+def run_config_name(tags: dict[str, str]) -> str | None:
+    """The `--config-name` a training run was started with, from the tags `log_run_source` wrote
+    for it, read as `parse_args` read the command: the argument in the `command` tag, else the
+    `env.TABSIL_CONFIG_NAME` tag, else the default. None for a run without a `command` tag (it
+    was not started by this script)."""
+    if "command" not in tags:
+        return None
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--config-name")
+    given, _ = parser.parse_known_args(shlex.split(tags["command"])[1:])
+    return given.config_name or tags.get("env.TABSIL_CONFIG_NAME") or DEFAULT_CONFIG_NAME
+
+
+def check_resume_config_name(args: argparse.Namespace, tags: dict[str, str]) -> None:
+    """On resume, stop unless `--config-name` is the one the original run was started with
+    (`run_config_name`). The preset sets more than the resumed run takes from the original run
+    (the gradient clipping, the checkpoint and validation intervals), so under another preset the
+    run would continue with settings no run was started with. A run that takes only the weights
+    (`--init-run-id`) starts anew under any preset."""
+    if not args.resume_run_id:
+        return
+    saved = run_config_name(tags)
+    if saved is None:
+        raise SystemExit(
+            "the resumed run has no `command` tag, so the --config-name it was started with is not"
+            " known. Check that --resume-run-id is a training run of this script; to train anew"
+            " from its weights use --init-run-id"
+        )
+    if args.config_name != saved:
+        raise SystemExit(
+            f"--config-name {args.config_name} differs from the resumed run's config name {saved}."
+            " A run is resumed with the preset it was started with, which also sets the gradient"
+            f" clipping and the checkpoint intervals: give --config-name {saved} (or"
+            f" TABSIL_CONFIG_NAME={saved}), or train anew from the run's weights with"
+            " --init-run-id"
+        )
+
+
 def inherit_batch_size(args: argparse.Namespace, params: dict[str, str]) -> None:
     """On resume without `--batch-size`, use the original run's batch (instead of silently falling
     back to the preset's). Training anew from a run's weights (`--init-run-id`) keeps the preset
@@ -446,9 +493,10 @@ def _run_param(name: str, default, text: str):
 
 def resume_data_options(args: argparse.Namespace, params: dict[str, str]) -> dict:
     """On resume, the table size and prior settings to train with (`DATA_OPTIONS`): the original
-    run's, read from its params, so that the run stays on the tables it was trained on whatever
-    preset and arguments the resume command has (`build_config` puts them over the preset). A
-    different value given on resume stops the script, and so does a run that did not record them
+    run's, read from its params and not from the preset, so that the run stays on the tables it
+    was trained on (`build_config` puts them over the preset; also when the preset's values have
+    changed since, or the run was started with other values than its preset's). A different
+    value given on resume stops the script, and so does a run that did not record them
     (nothing says which tables it saw). An on/off setting follows `inherit_recipe_options`: its
     flag can only turn it on, so turning on what the run had off stops the script. Empty unless
     resuming: a run that takes only the weights (`--init-run-id`) uses the preset's or the given
@@ -482,17 +530,58 @@ def resume_data_options(args: argparse.Namespace, params: dict[str, str]) -> dic
     return saved
 
 
+# The two settings that fit a run's tables on a GPU. A resumed run takes them from the original run
+# as well: the preset picks them for its own tables, and the run may have been started with other
+# ones. `activation_checkpointing_rows` has no argument. The micro batch is the run's unless one is
+# given, which is allowed: a chunk on other GPUs may need another, and it sets how many tables
+# share a size in a forward pass, not which tables are drawn. Every run of this script has
+# recorded both
+MEMORY_OPTIONS = ("micro_batch", "activation_checkpointing_rows")
+
+
+def resume_memory_options(args: argparse.Namespace, params: dict[str, str]) -> dict:
+    """On resume, the settings that fit the run's tables on a GPU (`MEMORY_OPTIONS`), from the
+    original run's params: its activation checkpointing threshold and, unless `--micro-batch` is
+    given, its micro batch (the per-GPU micro batch it trained with; `for_world_size` still
+    shrinks it for more GPUs). A run that did not record them stops the script. Empty unless
+    resuming: a run that takes only the weights (`--init-run-id`) uses the preset's or the given
+    values."""
+    if not args.resume_run_id:
+        return {}
+    missing = [name for name in MEMORY_OPTIONS if name not in params]
+    if missing:
+        raise SystemExit(
+            f"the resumed run did not record {', '.join(missing)}, so the micro batch and the"
+            " activation checkpointing it was trained with are not known and cannot be kept."
+            " Check that --resume-run-id is a training run that logged its params; to train anew"
+            " from its weights use --init-run-id"
+        )
+    text = params["activation_checkpointing_rows"]
+    try:
+        saved = {"activation_checkpointing_rows": None if text == "None" else int(text)}
+    except ValueError:
+        raise SystemExit(
+            "the resumed run's activation_checkpointing_rows param does not read as int or None:"
+            f" {text!r}"
+        ) from None
+    if args.micro_batch is None:
+        default = TrainConfig().micro_batch
+        saved["micro_batch"] = _run_param("micro_batch", default, params["micro_batch"])
+    return saved
+
+
 def build_config(
     args: argparse.Namespace,
     source: dict | None = None,
     speed_options: dict | None = None,
-    data_options: dict | None = None,
+    resume_options: dict | None = None,
 ) -> TrainConfig:
     """The training config. `source` is the model structure of the run being resumed or whose
     weights are taken (`tabsil_train.hub.run_architecture`); it must match the preset's structure.
     `speed_options` are that run's training speed options (`source_speed_options`), and
-    `data_options` its table size and prior settings when it is resumed (`resume_data_options`),
-    which replace the preset's."""
+    `resume_options` what it keeps over the preset when it is resumed: its table size and prior
+    settings (`resume_data_options`) and the settings that fit them on a GPU
+    (`resume_memory_options`)."""
     try:
         if args.config_name in CURRICULUM_NAMES:
             # The curriculum sets the warmup from the step count, so --steps goes to the recipe
@@ -521,13 +610,14 @@ def build_config(
             f" {args.config_name}: {base.phases}"
         )
     # Apply the original run's structure and options and the arguments at once (so the config
-    # check never sees an intermediate state). The resumed run's table settings come last: a
-    # given value equals them (`resume_data_options`), and an on/off one may be off in the run
+    # check never sees an intermediate state). What a resumed run keeps comes last: a given table
+    # setting equals the run's (`resume_data_options`), an on/off one may be off in the run, and
+    # the run's micro batch is only among them when none is given
     changes = {
         **source,
         **(speed_options or {}),
         **_override_values(args),
-        **(data_options or {}),
+        **(resume_options or {}),
     }
     return _replace(base, changes)
 
@@ -660,9 +750,10 @@ def main(argv: list[str] | None = None) -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    source, speed_options, data_options = None, None, None
+    source, speed_options, resume_options = None, None, None
     if args.init_run_id or args.resume_run_id:
         run = mlflow.MlflowClient().get_run(args.init_run_id or args.resume_run_id)
+        check_resume_config_name(args, run.data.tags)
         params = source_params(run.data.params, run.data.tags)
         try:
             source = run_architecture(params)
@@ -678,8 +769,11 @@ def main(argv: list[str] | None = None) -> None:
         inherit_prior_type(args, params)
         inherit_reference_val(args, params)
         inherit_recipe_options(args, params)
-        data_options = resume_data_options(args, params)
-    config = build_config(args, source, speed_options, data_options)
+        resume_options = {
+            **resume_data_options(args, params),
+            **resume_memory_options(args, params),
+        }
+    config = build_config(args, source, speed_options, resume_options)
     if args.resume_run_id:
         config = resume_phase_lr(config, args, params)  # checked before the checkpoint download
 
