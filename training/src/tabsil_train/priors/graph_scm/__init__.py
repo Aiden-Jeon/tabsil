@@ -1,6 +1,13 @@
 """Graph SCM prior (prior axis, `prior_type="graph_scm"`): the TabICLv2 graph SCM generator plus a
-table size rule and missing values. It chains the parts (`tabsil_train.priors.generators.graph_scm`,
-`transforms`) with `Pipeline`, and is the prior used by the TabSil recipe (`tabsil_train.recipe`).
+table size rule and missing values. It chains the parts (`generator.GraphSCM` in this folder,
+`tabsil_train.priors.transforms`) with `Pipeline`, and is the prior used by the TabSil recipe
+(`tabsil_train.recipe`).
+
+This folder holds what is specific to the graph SCM. This module is the prior: `GraphSCMPrior`,
+and `make_prior`, `make_borders` and `check_config`, which build it from a training config.
+`generator` is the generator it wraps. `variants` holds the priors that are this one with some of
+its options at fixed values (`graph_scm_hicard_missing`, `graph_scm_realism`,
+`graph_scm_base_realism`).
 
 1. Table size: each batch draws the rows (train + eval) and the train-row share, then the feature
    count, with the TabICLv2 training-script rule (`table_size.sample_split_size`). All datasets
@@ -36,10 +43,10 @@ borders are drawn with them (`make_borders(..., **options)`, `TARGET_FIELDS`):
   factors (x only). `correlate_discrete_levels` (default 100) is the most distinct values of a
   column that blending keeps as they are
 - `relabel_prob` (`transforms.Relabel`): the target recomputed from 1-4 columns
-- `corrected_num_converters`, `corrected_cat_sizes` (`generators.graph_scm.GraphSCM`): the two
-  TabICL `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 200 categories)
-- `reject_trivial_prob` (`generators.graph_scm.GraphSCM`): with this probability a dataset that an
-  ExtraTrees probe predicts almost perfectly is drawn again
+- `corrected_num_converters`, `corrected_cat_sizes` (`generator.GraphSCM`): the two TabICL
+  `PriorConfig` corrections (Kumaraswamy-warped dataset columns, up to 200 categories)
+- `reject_trivial_prob` (`generator.GraphSCM`): with this probability a dataset that an ExtraTrees
+  probe predicts almost perfectly is drawn again
 
 Regression target scaling, off by default: with `target_train_rows`
 (`transforms.TrainRowTargetScale`, a training config field like `filter_unpredictable`), the
@@ -276,7 +283,7 @@ SIZE_FIELDS = tuple(SIZE_DEFAULTS)
 # Prior options that change the training data distribution
 PRIOR_FIELDS = ("binary_prob", "filter_unpredictable", "target_train_rows")
 # Options that change only x, off by default (module docstring). They are not training config
-# fields: a prior that turns them on is its own module with fixed values (`tabsil_train.priors`)
+# fields: a prior that turns them on is a variant with fixed values (`variants`)
 REALISM_FIELDS = (
     "noise_prob",
     "coarsen_prob",
@@ -287,11 +294,11 @@ REALISM_FIELDS = (
     "correlate_prob",
     "correlate_discrete_levels",
 )
-# The MCAR missing values (step 3; x only). missing_dataset_prob is a training config field; a prior
-# module may fix it and the rates instead (then the config value is not used)
+# The MCAR missing values (step 3; x only). missing_dataset_prob is a training config field; a
+# variant may fix it and the rates instead (then the config value is not used)
 MISSING_FIELDS = ("missing_dataset_prob", "max_missing_rate", "min_missing_rate")
 # Options that also change the target, off by default. Like REALISM_FIELDS they are fixed by a
-# prior module, which passes them to `make_borders` too
+# variant, which passes them to `make_borders` too
 TARGET_FIELDS = (
     "relabel_prob",
     "corrected_num_converters",

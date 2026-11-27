@@ -4,16 +4,25 @@ settings live in `tabsil_train.recipe`.
 A tabular prior is built by chaining per-stage parts with `pipeline.Pipeline`. A new prior usually
 adds one generator or a few transforms and reuses the other parts.
 
+Parts that priors share:
+
 - `base`: `PriorBatch`, the batch handed to the training loop, and `IGNORE_INDEX`, the target the
   loss ignores
 - `pipeline`: the hyperparameters -> generator -> transforms -> `PriorBatch` assembler
 - `table_size`: the table size rule that draws the train rows and feature count of each batch
-- `hyperparameters`: class count
-- `generators`: the continuous table of one group (graph SCM)
 - `transforms`: group post-processing (classes, missing values, high-cardinality categorical
   columns, coarse and noisy values, filters)
 
-Assembled priors:
+The graph SCM, in one folder:
+
+- `graph_scm`: the assembled prior (generator + class count + table size rule + missing values)
+  and its options, all off by default
+- `graph_scm.generator`: its generator, the continuous table of one group from the TabICLv2 graph
+  SCM
+- `graph_scm.variants`: the prior with some of its options at fixed values, each under its own
+  name
+
+Registered priors (`PRIOR_TYPES`; the last three are the variants):
 
 - `graph_scm`: graph SCM generator + table size rule + missing values (TabSil's training prior)
 - `graph_scm_hicard_missing`: `graph_scm` with high-cardinality categorical columns and structured
@@ -27,7 +36,8 @@ Assembled priors:
   again)
 
 The training loop (`tabsil_train.training.loop`) picks its prior from `PRIOR_TYPES` by name
-(`TrainConfig.prior_type`). A prior module provides:
+(`TrainConfig.prior_type`). What a name is registered to (`prior_module`: the `graph_scm` module,
+or a `Variant` of `graph_scm.variants`) provides:
 
 - `make_prior(config, task, seed)`: the `task` prior, an object whose `sample_batch(batch_size)`
   gives a `PriorBatch`. The table size settings are read from `config` (`TrainConfig`)
@@ -36,11 +46,13 @@ The training loop (`tabsil_train.training.loop`) picks its prior from `PRIOR_TYP
 - `check_config(config)`: whether the prior can produce the table size settings (both tasks,
   ValueError otherwise)
 - `MAX_CLASSES`: the most classes of a classification dataset (the classifier's output count)
+- `OPTIONS` (variants only): the options it fixes, recorded as the `prior_options` run parameter
 
-Only fully assembled priors are registered by name (one combination = one module in this folder
-= one name). An experiment that changes parts or numbers gets a new assembly module and its own
-name, and the training config only names it, so the `prior_type` run parameter alone tells which
-data a model was trained on. Like the other axes, names are generic nouns for what the prior is.
+Only fully assembled priors are registered by name (one combination = one name). An experiment
+that changes parts or numbers gets its own name (for `graph_scm` options, a new `Variant` in
+`graph_scm.variants`), and the training config only names it, so the `prior_type` run parameter
+alone tells which data a model was trained on. Like the other axes, names are generic nouns for
+what the prior is.
 """
 
 from __future__ import annotations

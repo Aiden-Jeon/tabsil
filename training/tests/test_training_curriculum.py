@@ -365,7 +365,7 @@ def _smoke_curriculum(base=None, **changes):
 
 def test_curriculum_trains_and_resumes(tmp_path, monkeypatch):
     # regression borders are built in a process pool, so their string hash seed must be fixed for
-    # runs to share borders (TabICL prior; see the `generators.graph_scm` comment)
+    # runs to share borders (TabICL prior; see the `graph_scm.generator` comment)
     monkeypatch.setenv("PYTHONHASHSEED", "0")
     full = train(_smoke_curriculum(), tmp_path / "full", mlflow_log=False)
     assert all(np.isfinite(full["history"]["train_loss"]))
