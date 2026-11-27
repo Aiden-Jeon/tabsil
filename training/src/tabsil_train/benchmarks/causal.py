@@ -1,5 +1,5 @@
 """Treatment effect benchmarks: IHDP (100 realizations) and ACIC 2016 (10 simulations), TabSil
-meta-learners (`tabsil.causal.TabSilCATE`) against EconML baselines run on the same splits.
+meta-learners (`tabsil.TabSilCATE`) against EconML baselines run on the same splits.
 
 Benchmarks (`BENCHMARKS`):
 
@@ -201,7 +201,7 @@ def check_methods(methods: list[str]) -> list[str]:
 def tabsil_estimator(model, borders, learner: str, n_estimators: int | None, device: str,
                      seed_offset: int = 0) -> Estimator:  # fmt: skip
     """`TabSilCATE(learner)` fitted on the training rows; random_state = seed + `seed_offset`."""
-    from tabsil.causal import TabSilCATE
+    from tabsil.tasks.causal import TabSilCATE
 
     def estimate(split: Split, seed: int):
         est = TabSilCATE(

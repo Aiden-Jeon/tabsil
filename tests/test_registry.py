@@ -105,7 +105,8 @@ def test_hub_config_records_the_model_type(tmp_path):
 
 def test_inference_defaults_for_another_model_type(tiny):
     # Inference classes use TabSil defaults for models added to the registry too
-    from tabsil.recipe import INFERENCE, TabSilClassifier, default_inference
+    from tabsil.recipe import INFERENCE, default_inference
+    from tabsil.tasks.classification import TabSilClassifier
 
     model = TinyModel(TinyConfig())
     assert default_inference(model, "classification")["member_kinds"] == INFERENCE["member_kinds"]

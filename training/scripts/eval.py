@@ -48,13 +48,13 @@ the arena feature limit is then the supported size). With a cap, the TabArena / 
 limit is lifted, so splits wider than the supported size run.
 
 `--subsample-train-rows N` uses at most N random training rows per fit as the context
-(`tabsil.inference.subsample`; stratified by class for classification with at least one row per
+(`tabsil_train.subsample`; stratified by class for classification with at least one row per
 class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters splits by
 their original training row count.
 
 `--suite fev` is time series forecasting on 10 fev-bench tasks (`tabsil_train.benchmarks.fevbench`,
 needs the `fev` extra, installed apart from the dev group like the arena extra: `uv sync --package
-tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.forecast.TabSilForecaster` with the
+tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.TabSilForecaster` with the
 `--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in an Elo
 pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7 methods. Our
 Seasonal Naive is recomputed on the same windows and must match those. `--datasets` picks tasks,
@@ -67,7 +67,7 @@ drops out). A failed series, window or task stops the run (nothing is imputed). 
 
 `--suite causal` is treatment effect estimation on IHDP (100 realizations) and ACIC 2016 (10
 simulations) (`tabsil_train.benchmarks.causal`, needs the `causal` extra for the EconML baselines:
-`uv sync --package tabsil-train --extra causal`): `tabsil.causal.TabSilCATE` with the S-, T-, X-
+`uv sync --package tabsil-train --extra causal`): `tabsil.TabSilCATE` with the S-, T-, X-
 and DR-learner on the `--regressor-path` model (it must serve classification too, for the
 propensity), and EconML's causal forest and GBM-based meta-learners on the same splits. √PEHE and
 the ATE error within-sample and out-of-sample. `--datasets` picks the benchmarks (ihdp, acic2016),
@@ -88,7 +88,7 @@ and the baselines' value on the same splits, `time_baselines`) and `comparison.c
 each fold's fit and prediction time to `<out-dir>/fits_<suite>.jsonl` and `eval_rows.csv`.
 
 `--suite adbench` is unsupervised outlier detection on 12 ADBench tables x 3 seeds
-(`tabsil_train.benchmarks.adbench`): `tabsil.unsupervised.TabSilUnsupervised` fitted on the
+(`tabsil_train.benchmarks.adbench`): `tabsil.TabSilUnsupervised` fitted on the
 unlabeled (contaminated) training rows scores the test rows, next to the official TabPFN v2
 extension and pyod's methods from the fm-agent-bench run, with IsolationForest = 1000 Elo. One
 multitask model serves both column kinds (`--regressor-path`, or `--classifier-path`).
@@ -143,11 +143,11 @@ from tabsil.inference.ensemble import (
     max_features_of,
 )
 from tabsil.inference.preprocessing import CATEGORY_ENCODINGS
-from tabsil.inference.subsample import SubsampledEstimator
 from tabsil.recipe import SUPPORTED_SIZE, default_inference, resolve_member_kinds
 from tabsil_train.benchmarks import amlb as bm
 from tabsil_train.benchmarks import uncertainty as unc
 from tabsil_train.hub import load_model
+from tabsil_train.subsample import SubsampledEstimator
 from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
@@ -1317,7 +1317,7 @@ def main(argv: list[str] | None = None) -> None:
 def run_fev(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
     """Forecasting on fev-bench (`tabsil_train.benchmarks.fevbench`): every window of each task,
     our Seasonal Naive check, the comparison table and the Elo pools."""
-    from tabsil.forecast import TabSilForecaster
+    from tabsil.tasks.forecast import TabSilForecaster
     from tabsil_train.benchmarks import fevbench
 
     if args.regressor_path is None:

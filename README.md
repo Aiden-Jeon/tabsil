@@ -91,7 +91,7 @@ tau = est.effect(X_test)  # CATE per row
 ate = est.ate()  # mean CATE over the training rows
 ```
 
-The module docstrings of `src/tabsil/forecast.py`, `unsupervised.py` and `causal.py` give the defaults, the missing value handling and the differences from TabPFN-TS, the TabPFN extension and EconML.
+The module docstrings of `src/tabsil/tasks/forecast.py`, `unsupervised.py` and `causal.py` give the defaults, the missing value handling and the differences from TabPFN-TS, the TabPFN extension and EconML.
 
 ## Benchmarks
 
