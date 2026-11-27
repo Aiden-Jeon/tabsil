@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 import train_helpers as helpers
 
-from tabsil_train.benchmarks import arena, beyondarena, tabarena
+from tabsil_train.benchmarks.tabular import arena, beyondarena, tabarena
 
 
 def _row(**kw):
@@ -220,7 +220,7 @@ def test_suites_point_at_the_official_splits_and_public_tables():
 
 def _system():
     pytest.importorskip("tabarena")
-    from tabsil_train.benchmarks import _arena_system
+    from tabsil_train.benchmarks.tabular import _arena_system
 
     return _arena_system
 
@@ -753,7 +753,7 @@ def test_split_rows_takes_the_largest_train_plus_test():
 
 def test_register_factory_gives_the_same_key_to_the_same_function():
     pytest.importorskip("tabarena")
-    from tabsil_train.benchmarks import _arena_system as system
+    from tabsil_train.benchmarks.tabular import _arena_system as system
 
     def make(problem_type, categorical):
         return None

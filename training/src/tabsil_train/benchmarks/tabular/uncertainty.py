@@ -64,7 +64,7 @@ import numpy as np
 import pandas as pd
 from scipy import special, stats
 
-from tabsil_train.benchmarks.amlb import drop_unseen_classes
+from tabsil_train.benchmarks.tabular.amlb import drop_unseen_classes
 
 COVERAGE_LEVELS = (0.5, 0.8, 0.9, 0.95)
 CONFORMAL_ALPHA = 0.1

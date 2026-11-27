@@ -12,7 +12,7 @@ Evaluate with `tabsil_train.benchmarks.arena.run(SUITE, ...)`.
 
 from __future__ import annotations
 
-from tabsil_train.benchmarks.arena import Suite
+from tabsil_train.benchmarks.tabular.arena import Suite
 
 _PUBLIC = (
     "data/entrants_models/imputation_yes/splits_lite/tasks_{tasks}/datasets_all/"

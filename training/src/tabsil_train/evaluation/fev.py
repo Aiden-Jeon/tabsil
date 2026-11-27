@@ -12,7 +12,7 @@ import pandas as pd
 
 from tabsil import TabSilForecaster
 from tabsil.recipe import default_inference
-from tabsil_train.benchmarks import fevbench
+from tabsil_train.benchmarks.forecast import fevbench
 from tabsil_train.hub import load_model
 
 # the `--suite` name: the results folder under --out-dir and the MLflow artifact folder

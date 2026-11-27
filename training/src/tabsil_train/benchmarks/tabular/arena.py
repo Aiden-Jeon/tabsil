@@ -195,7 +195,7 @@ def run(
       `run_jobs` materializes task data first even when cached, so results are passed instead of
       re-reading the cache
     """
-    from tabsil_train.benchmarks import _arena_system as system
+    from tabsil_train.benchmarks.tabular import _arena_system as system
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

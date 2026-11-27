@@ -12,7 +12,7 @@ from pathlib import Path
 import mlflow
 import pandas as pd
 
-from tabsil_train.benchmarks import causal
+from tabsil_train.benchmarks.causal import causal
 from tabsil_train.evaluation.model import suite_model
 
 # the `--suite` name: the results folder under --out-dir and the MLflow artifact folder

@@ -153,8 +153,9 @@ from tabsil.inference.ensemble import (
 )
 from tabsil.inference.preprocessing import CATEGORY_ENCODINGS
 from tabsil.recipe import SUPPORTED_SIZE, default_inference, resolve_member_kinds
-from tabsil_train.benchmarks import amlb as bm
-from tabsil_train.benchmarks import uncertainty as unc
+from tabsil_train.benchmarks.tabular import amlb as bm
+from tabsil_train.benchmarks.tabular import uncertainty as unc
+from tabsil_train.benchmarks.tabular.subsample import SubsampledEstimator
 from tabsil_train.evaluation.adbench import run_adbench
 from tabsil_train.evaluation.causal import run_causal
 from tabsil_train.evaluation.fev import run_fev
@@ -162,7 +163,6 @@ from tabsil_train.evaluation.impute import run_impute
 from tabsil_train.evaluation.shards import clock as _clock
 from tabsil_train.evaluation.shards import strip_flags as _strip_flags
 from tabsil_train.hub import load_model
-from tabsil_train.subsample import SubsampledEstimator
 from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "beyondarena", "beyondarena-lite")
@@ -554,7 +554,7 @@ class RecordedEstimator:
 
 
 def arena_suite(name: str):
-    from tabsil_train.benchmarks import beyondarena, tabarena
+    from tabsil_train.benchmarks.tabular import beyondarena, tabarena
 
     if name == "tabarena-lite":
         return tabarena.SUITE
@@ -568,7 +568,7 @@ def arena_limits(models: dict, args: argparse.Namespace, caps: dict | None = Non
     the output count; column_row_transformer groups label embeddings up to `MAX_CLASSES`). Tasks
     with a columns-per-member cap (`caps`, per task; `--max-features-per-member` if not given)
     have no feature limit."""
-    from tabsil_train.benchmarks.arena import ModelLimits
+    from tabsil_train.benchmarks.tabular.arena import ModelLimits
 
     limits = {}
     for task, (model, _) in models.items():
@@ -650,7 +650,7 @@ def run_arena(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> dict
     """Run TabArena-Lite / BeyondArena and return the scores (the `summary.json` content).
     Estimators come from the same `make_estimator_factory` as the AMLB evaluation (only the
     problem type and categorical columns differ)."""
-    from tabsil_train.benchmarks import arena
+    from tabsil_train.benchmarks.tabular import arena
 
     suite = arena_suite(args.suite)
     paths = {"classification": args.classifier_path, "regression": args.regressor_path}
@@ -1062,7 +1062,7 @@ def run_shards(
     import pickle
     import subprocess
 
-    from tabsil_train.benchmarks import arena
+    from tabsil_train.benchmarks.tabular import arena
 
     n_gpus = torch.cuda.device_count()
     if n_gpus and args.shards > n_gpus:

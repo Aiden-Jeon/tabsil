@@ -12,7 +12,7 @@ import torch
 from train_helpers import load_script, tiny_model
 
 from tabsil.inference.ensemble import EnsembleClassifier, EnsembleRegressor
-from tabsil_train.subsample import SubsampledEstimator
+from tabsil_train.benchmarks.tabular.subsample import SubsampledEstimator
 
 
 def _eval_script():

@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import _files, causal
+from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks.causal import causal
 
 N_ACIC = 200
 

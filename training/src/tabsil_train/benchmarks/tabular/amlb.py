@@ -811,7 +811,7 @@ def time_medians(rows: list[dict]) -> dict[str, float]:
     prediction seconds per 1K of the dataset's mean fold train / test rows, averaged over each
     dataset's folds, then the median over datasets (`time_train_s_per_1K_median`,
     `time_infer_s_per_1K_median`, as `arena.run_times`). Empty dict without rows."""
-    from tabsil_train.benchmarks.arena import PER_1K_ROWS, per_1k_medians
+    from tabsil_train.benchmarks.tabular.arena import PER_1K_ROWS, per_1k_medians
 
     if not rows:
         return {}
@@ -843,7 +843,7 @@ def evaluate_task(
     used (`fit_rows`, fewer with `SubsampledEstimator`), the `fit` time and the prediction time in
     seconds (the one call on the test rows that gives the scored prediction; a regressor's
     `predict_full`, used with `uncertainty`, returns the distribution from the same pass)."""
-    from tabsil_train.benchmarks import uncertainty as unc
+    from tabsil_train.benchmarks.tabular import uncertainty as unc
 
     rows = []
     for fold, train_ix, test_ix in task.folds(n_folds):

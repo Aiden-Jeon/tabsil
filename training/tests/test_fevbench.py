@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import fevbench as fb
+from tabsil_train.benchmarks.forecast import fevbench as fb
 
 
 def _ours(task: str = "ecdc_ili", scale: float = 0.5) -> pd.DataFrame:

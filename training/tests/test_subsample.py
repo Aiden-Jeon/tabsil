@@ -8,7 +8,7 @@ import pytest
 from train_helpers import tiny_model
 
 from tabsil.inference.ensemble import EnsembleClassifier
-from tabsil_train.subsample import SubsampledEstimator, subsample_indices
+from tabsil_train.benchmarks.tabular.subsample import SubsampledEstimator, subsample_indices
 
 
 def _tiny_model():
