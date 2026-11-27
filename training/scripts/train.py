@@ -20,10 +20,11 @@ the CLS token count (the row ICL width is their product); unset, the preset's va
 When resuming or taking weights from a run, that run must have the same structure: a run of another
 size needs the same `--emsize` and `--n-cls` again.
 The scale is set with arguments or environment variables (`TABSIL_CONFIG_NAME`, `TABSIL_STEPS`,
-`TABSIL_BATCH_SIZE`, `TABSIL_MICRO_BATCH`, `TABSIL_NUM_WORKERS`, `TABSIL_LR`,
-`TABSIL_CHECKPOINT_EVERY`, `TABSIL_VAL_EVERY`, `TABSIL_LOG_EVERY`). The training speed options
-(`TrainConfig` comments) are turned on with `--compile`, `--tf32`, `--weight-average K` (or
-`TABSIL_COMPILE=1` etc., `TABSIL_WEIGHT_AVERAGE=K`). The optimizer is Muon on every
+`TABSIL_BATCH_SIZE`, `TABSIL_MICRO_BATCH`, `TABSIL_NUM_WORKERS`, `TABSIL_PREFETCH_FACTOR`,
+`TABSIL_LR`, `TABSIL_CHECKPOINT_EVERY`, `TABSIL_VAL_EVERY`, `TABSIL_LOG_EVERY`). The training
+speed options (`TrainConfig` comments) are turned on with `--compile`, `--tf32`,
+`--weight-average K` (or `TABSIL_COMPILE=1` etc., `TABSIL_WEIGHT_AVERAGE=K`). The optimizer is
+Muon on every
 parameter; its weight decay is `TABSIL_MUON_WEIGHT_DECAY` and its momentum `TABSIL_MUON_MOMENTUM`
 (resuming keeps the original run's values). `--optimizer muon_adamw` (`TABSIL_OPTIMIZER`) puts
 the target encoders, the output and the parameters that are not Linear weights on AdamW instead
@@ -159,6 +160,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=_env("TABSIL_BATCH_SIZE", int))
     parser.add_argument("--micro-batch", type=int, default=_env("TABSIL_MICRO_BATCH", int))
     parser.add_argument("--num-workers", type=int, default=_env("TABSIL_NUM_WORKERS", int))
+    # micro batches requested ahead per prior worker (TrainConfig comment); the data is the same
+    parser.add_argument("--prefetch-factor", type=int, default=_env("TABSIL_PREFETCH_FACTOR", int))
     parser.add_argument("--lr", type=float, default=_env("TABSIL_LR", float))
     parser.add_argument("--stop-step", type=int, default=_env("TABSIL_STOP_STEP", int))
     parser.add_argument("--deadline", default=os.environ.get("TABSIL_DEADLINE"))
@@ -453,6 +456,7 @@ def _override_values(args: argparse.Namespace) -> dict:
         "batch_size": args.batch_size,
         "micro_batch": args.micro_batch,
         "num_workers": args.num_workers,
+        "prefetch_factor": args.prefetch_factor,
         "lr": args.lr,
         "stop_step": args.stop_step,
         "checkpoint_every": args.checkpoint_every,

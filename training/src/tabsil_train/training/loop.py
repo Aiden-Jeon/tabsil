@@ -536,7 +536,7 @@ def _train(
         workers = max(1, workers)
     loader_kwargs = {"num_workers": workers, "pin_memory": use_cuda}
     if workers > 0:
-        loader_kwargs.update(persistent_workers=True, prefetch_factor=4)
+        loader_kwargs.update(persistent_workers=True, prefetch_factor=config.prefetch_factor)
 
     def make_batches(from_step: int, rewinds: int) -> dict:
         # mix the start step into the seed so a resumed run does not see the same data again.

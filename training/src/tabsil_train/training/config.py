@@ -108,6 +108,14 @@ class TrainConfig:
     # run
     seed: int = 0
     num_workers: int = 8
+    # Micro batches each prior worker has requested ahead (the DataLoader's `prefetch_factor`). The
+    # loader hands them over in request order, so one that takes longer to make than its head
+    # start (workers per task x prefetch_factor micro batches) stops its GPU, and every other GPU
+    # waits for it in the gradient all-reduce. A larger value absorbs slower tables at the same
+    # tables in the same order. Priors with `corrected_cat_sizes` have such tables: at stage 1 on
+    # 8 GPUs the default's head start is about 14 s, and `graph_scm_base_realism` has micro
+    # batches that take 20 to 45 s
+    prefetch_factor: int = 4
     log_every: int = 100
     val_every: int = 5_000
     val_batch: int = 8  # datasets per val batch; separate from micro_batch so the val set is fixed
@@ -209,6 +217,8 @@ class TrainConfig:
             )
         if self.optimizer not in OPTIMIZER_NAMES:
             raise ValueError(f"optimizer must be one of {tuple(OPTIMIZER_NAMES)}: {self.optimizer}")
+        if self.prefetch_factor < 1:
+            raise ValueError(f"prefetch_factor must be at least 1: {self.prefetch_factor}")
         if not 0.0 <= self.muon_momentum < 1.0:
             raise ValueError(f"muon_momentum must be in [0, 1): {self.muon_momentum}")
         if self.reference_val_tables < 0 or self.reference_val_tables % REFERENCE_BATCH:
