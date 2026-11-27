@@ -273,7 +273,7 @@ def test_amlb_rows_record_fit_and_prediction_time():
 
 
 def test_amlb_fit_rows_follow_subsampling():
-    from tabsil.inference.subsample import SubsampledEstimator
+    from tabsil_train.subsample import SubsampledEstimator
 
     make = lambda t: SubsampledEstimator(_Mean(), 12, stratify=False)  # noqa: E731
     rows = amlb.evaluate_task(_task(), make, n_folds=1)

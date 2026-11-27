@@ -1,5 +1,5 @@
 """ADBench unsupervised outlier detection: 12 classical tables x 3 seeds, TabSil's chain-rule log
-density (`tabsil.unsupervised`) against the official TabPFN v2 extension and pyod baselines.
+density (`tabsil.tasks.unsupervised`) against the official TabPFN v2 extension and pyod baselines.
 
 The protocol, the 12 tables, the comparison numbers and the Elo are those of the fm-agent-bench
 anomaly track (`docs/anomaly.md`, `fab/bench/anomaly/`, results at commit
@@ -185,7 +185,7 @@ def tabsil_scorer(model, borders, n_permutations: int, n_estimators: int | None,
                   seed_offset: int = 0) -> Callable:  # fmt: skip
     """fit(X_train) -> outlier_score(X_test) of `TabSilUnsupervised`, random_state = the ADBench
     seed + `seed_offset` (column orders and members)."""
-    from tabsil.unsupervised import TabSilUnsupervised
+    from tabsil.tasks.unsupervised import TabSilUnsupervised
 
     def score(X_train: np.ndarray, X_test: np.ndarray, seed: int) -> np.ndarray:
         est = TabSilUnsupervised(

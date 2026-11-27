@@ -8,7 +8,8 @@ Training, the synthetic-data prior, and the benchmark evaluation of [TabSil](../
 | `src/tabsil_train/training/` | training config (`TrainConfig`), the training loop, Muon, losses, stability, diagnostics |
 | `src/tabsil_train/benchmarks/` | AMLB / CTR23, TabArena, BeyondArena, uncertainty metrics |
 | `src/tabsil_train/recipe.py` | the TabICLv2 three-stage curriculum (`curriculum(stage)`) |
-| `src/tabsil_train/hub.py` | MLflow run checkpoints (`runs:/...`) and the model structure in run params |
+| `src/tabsil_train/hub.py` | `load_model` for the scripts (a Hub repo `hf://...`, a `save_pretrained` folder, a checkpoint file or an MLflow run checkpoint `runs:/...`) and the model structure in run params |
+| `src/tabsil_train/subsample.py` | `SubsampledEstimator`: at most N training rows per fit, for context-length experiments (`eval.py --subsample-train-rows`) |
 | `scripts/` | `train.py`, `eval.py` and their Databricks AI Runtime job specs (`*.yaml`) |
 | `hub/` | `push_to_hub.py`, `sync_hub_card.py`: upload weights from a training run and the model card |
 | `tests/` | training, prior, evaluation and upload tests |

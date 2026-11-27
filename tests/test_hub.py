@@ -1,5 +1,5 @@
-"""Checkpoint loading and Hub format tests (no Hub server). MLflow run checkpoints (`runs:/`) are
-tested in training/tests/test_hub_runs.py."""
+"""Hub format tests (no Hub server). `load_model` (Hub repos, folders, checkpoint files and MLflow
+run checkpoints) is `tabsil_train.hub.load_model`, tested in training/tests/test_hub_runs.py."""
 
 import json
 import subprocess
@@ -10,12 +10,7 @@ import torch
 from helpers import smoke_model
 
 from tabsil import hub
-from tabsil.models import config_dict, save_checkpoint
-
-
-@pytest.fixture
-def chdir_tmp(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # keep relative paths from hitting real repo folders
+from tabsil.models import config_dict
 
 
 def _model():
@@ -27,12 +22,6 @@ def _model():
 def _same_weights(a, b):
     for name, tensor in a.state_dict().items():
         assert torch.equal(b.state_dict()[name], tensor), name
-
-
-def _training_state(tmp_path, model):
-    path = tmp_path / "step_0000100.pt"
-    torch.save({"model": model.state_dict(), "step": 100, "borders": None}, path)
-    return path
 
 
 def test_save_and_load_pretrained_keeps_weights_and_borders(tmp_path):
@@ -47,45 +36,6 @@ def test_save_and_load_pretrained_keeps_weights_and_borders(tmp_path):
     loaded, borders = hub.from_pretrained(hub.save_pretrained(reg, edges, tmp_path / "reg"))
     assert torch.equal(borders, edges)
     _same_weights(reg, loaded)
-
-
-def test_load_model_reads_every_kind_of_checkpoint(tmp_path):
-    clf = _model()
-    save_checkpoint(tmp_path / "final.pt", clf)
-    hub.save_pretrained(clf, None, tmp_path / "pretrained")
-    for spec in (tmp_path / "final.pt", tmp_path / "pretrained"):
-        loaded, borders = hub.load_model(str(spec), "classification")
-        assert borders is None
-        _same_weights(clf, loaded)
-    with pytest.raises(SystemExit, match="needs a regression model"):
-        hub.load_model(str(tmp_path / "pretrained"), "regression")
-    # the earlier call with a download folder (`dst`, unused here) still works
-    _same_weights(clf, hub.load_model(str(tmp_path / "final.pt"), "classification", tmp_path)[0])
-
-
-def test_training_checkpoint_without_model_config_is_refused(tmp_path):
-    path = _training_state(tmp_path, _model())
-    with pytest.raises(SystemExit, match="no model config"):
-        hub.load_model(str(path), "classification")
-
-
-def test_hub_needs_the_hf_prefix_and_missing_local_paths_fail(tmp_path, monkeypatch, chdir_tmp):
-    seen = []
-    monkeypatch.setattr(
-        hub,
-        "from_pretrained",
-        lambda spec, revision=None: seen.append((spec, revision)) or (_model(), None),
-    )
-    hub.load_model("hf://owner/name", "classification")
-    assert seen == [("owner/name", None)]
-    hub.load_model("hf://owner/name@step-100k", "classification")  # intermediate checkpoint branch
-    assert seen[-1] == ("owner/name", "step-100k")
-    with pytest.raises(SystemExit, match="hf://"):
-        hub.load_model("models/clf", "classification")  # mistyped local path
-    # MLflow run artifacts are read by tabsil-train (`tabsil_train.hub.load_model`)
-    with pytest.raises(SystemExit, match="tabsil_train"):
-        hub.load_model("runs:/abc/model", "classification")
-    assert len(seen) == 2
 
 
 def test_borders_keep_their_dtype(tmp_path):
@@ -160,16 +110,18 @@ def test_inference_classes_load_weights_without_from_pretrained(tmp_path, monkey
         TabSilRegressor(str(tabsil_dir), borders)
 
 
-def test_import_tabsil_loads_the_hub_and_recipe_on_first_use():
-    # `import tabsil` does not import the Hub or inference code; the names load on first use
+def test_import_tabsil_loads_the_hub_and_estimators_on_first_use():
+    # `import tabsil` does not import the Hub or inference code; the names load on first use.
+    # `tabsil.models` comes with it (`tabsil.models.load_checkpoint` after a bare `import tabsil`)
     code = (
         "import sys, tabsil\n"
-        "assert 'tabsil.hub' not in sys.modules and 'tabsil.recipe' not in sys.modules\n"
+        "assert not {'tabsil.hub', 'tabsil.recipe', 'tabsil.tasks'} & set(sys.modules)\n"
+        "assert tabsil.models.load_checkpoint\n"
         "from tabsil import TabSilClassifier, TabSilRegressor, from_pretrained\n"
-        "import tabsil.hub, tabsil.recipe\n"
+        "import tabsil.hub, tabsil.tasks.classification, tabsil.tasks.regression\n"
         "assert from_pretrained is tabsil.hub.from_pretrained\n"
-        "assert TabSilClassifier is tabsil.recipe.TabSilClassifier\n"
-        "assert TabSilRegressor is tabsil.recipe.TabSilRegressor\n"
+        "assert TabSilClassifier is tabsil.tasks.classification.TabSilClassifier\n"
+        "assert TabSilRegressor is tabsil.tasks.regression.TabSilRegressor\n"
         "assert 'tabsil_train' not in sys.modules and 'mlflow' not in sys.modules\n"
         "assert {'TabSilClassifier', 'from_pretrained'} <= set(dir(tabsil))\n"
     )
@@ -191,6 +143,31 @@ def test_from_pretrained_reads_the_branch_after_at(monkeypatch, tmp_path):
     assert set(calls) == {("owner/name", "step-100k"), ("owner/name", "step-200k")}
     with pytest.raises(ValueError, match="revision"):
         hub.from_pretrained("owner/name@step-100k", revision="step-200k")
+
+
+def test_from_hub_reads_the_hub_when_a_folder_has_the_repo_name(monkeypatch, tmp_path):
+    # A path that exists is read as a folder, also when written like a repo id. `from_hub=True`
+    # asks the Hub whatever is on disk (the `hf://` specs of tabsil-train's `load_model`)
+    monkeypatch.chdir(tmp_path)
+    local = _model()
+    torch.manual_seed(1)
+    remote = smoke_model().eval()
+    with pytest.raises(AssertionError):
+        _same_weights(local, remote)  # two different models
+    hub.save_pretrained(local, None, "owner/name")  # ./owner/name
+    hub.save_pretrained(remote, None, tmp_path / "hub")
+    calls = []
+
+    def download(repo_id, filename, revision=None):
+        calls.append((repo_id, revision))
+        return str(tmp_path / "hub" / filename)
+
+    monkeypatch.setattr(hub, "hf_hub_download", download)
+    _same_weights(local, hub.from_pretrained("owner/name")[0])
+    assert not calls
+    _same_weights(remote, hub.from_pretrained("owner/name", from_hub=True)[0])
+    _same_weights(remote, hub.from_pretrained("owner/name@stage2-10k", from_hub=True)[0])
+    assert set(calls) == {("owner/name", None), ("owner/name", "stage2-10k")}
 
 
 def test_default_weights_are_the_pinned_tag_and_other_revisions_pass_through(monkeypatch, tmp_path):
@@ -228,7 +205,4 @@ def test_default_weights_are_the_pinned_tag_and_other_revisions_pass_through(mon
     }
     assert revisions(lambda: hub.from_pretrained(HUB_REPO, revision="67ef600")) == {
         (HUB_REPO, "67ef600")
-    }
-    assert revisions(lambda: hub.load_model(f"hf://{HUB_REPO}", "classification")) == {
-        (HUB_REPO, None)
     }

@@ -12,13 +12,13 @@ Apache License 2.0:
 This product includes software adapted from tabpfn-extensions
 (https://github.com/PriorLabs/tabpfn-extensions, commit a049fd7), Copyright (c) Prior Labs GmbH
 2025, licensed under the Apache License 2.0:
-- src/tabsil/unsupervised.py: the outlier score (random column orders, the chain rule of
+- src/tabsil/tasks/unsupervised.py: the outlier score (random column orders, the chain rule of
   per-column conditional densities, a noise column as the input of the first column, the
   log-sum-exp mean over orders) adapted from
   src/tabpfn_extensions/unsupervised/unsupervised.py `TabPFNUnsupervisedModel.outliers`, and
   `infer_categorical` from src/tabpfn_extensions/utils.py `infer_categorical_features`
-- src/tabsil/unsupervised.py: the imputation (`missing_conditionals`, one fit per column with a
-  missing value, all other columns as features with their missing values left in, the context
+- src/tabsil/tasks/unsupervised.py: the imputation (`missing_conditionals`, one fit per column with
+  a missing value, all other columns as features with their missing values left in, the context
   rows observing the column) adapted from src/tabpfn_extensions/unsupervised/simple_impute.py
   `impute_column` and `simple_impute`
 - training/src/tabsil_train/benchmarks/impute.py: `extension_categorical` reimplements
@@ -42,14 +42,14 @@ Copyright (c) 2025, Soda team @ Inria, licensed under the BSD 3-Clause License
 This product includes software adapted from TabPFN-TS
 (https://github.com/PriorLabs/tabpfn-time-series), Copyright 2025 Prior Labs GmbH, licensed under
 the Apache License 2.0:
-- src/tabsil/forecast.py `time_features`, `seasonal_periods`: adapted from version 1.0.10,
+- src/tabsil/tasks/forecast.py `time_features`, `seasonal_periods`: adapted from version 1.0.10,
   tabpfn_time_series/features/basic_features.py (`RunningIndexFeature`, `CalendarFeature`,
   `PeriodicSinCosineFeature`) and tabpfn_time_series/features/auto_features.py
   (`AutoSeasonalFeature.find_seasonal_periods`, `detrend`), with their default settings
 
 This product includes software adapted from GluonTS (https://github.com/awslabs/gluonts),
 Copyright 2018 Amazon.com, Inc. or its affiliates, licensed under the Apache License 2.0:
-- src/tabsil/forecast.py `_calendar_index`: the zero-based calendar indices of
+- src/tabsil/tasks/forecast.py `_calendar_index`: the zero-based calendar indices of
   gluonts/time_feature/_base.py (`second_of_minute_index` ... `month_of_year_index`)
 
 This product includes software adapted from ADBench (https://github.com/Minqi824/ADBench, commit

@@ -8,7 +8,7 @@ import pytest
 import torch
 from helpers import tiny_model
 
-from tabsil.unsupervised import (
+from tabsil.tasks.unsupervised import (
     PROBABILITY_FLOOR,
     CategoricalConditional,
     NumericConditional,
