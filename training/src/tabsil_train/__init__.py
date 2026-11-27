@@ -3,6 +3,7 @@
 - `priors`: training data (assembler, generators, transforms, table size rules, graph SCM prior)
 - `training`: training config, the training loop, data feeding, losses, stability
 - `benchmarks`: evaluation (AMLB/CTR23, TabArena, BeyondArena, uncertainty metrics)
+- `evaluation`: the runs `scripts/eval.py` starts for the fev, ADBench, causal and impute suites
 - `recipe`: TabSil's training curriculum (the structure and inference defaults are in
   `tabsil.recipe`)
 - `hub`: `load_model` for the scripts (Hub repos, `save_pretrained` folders, checkpoint files,

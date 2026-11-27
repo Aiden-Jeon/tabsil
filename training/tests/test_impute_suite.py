@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,8 @@ import pandas as pd
 import pytest
 
 from tabsil_train.benchmarks import impute as bi
+from tabsil_train.evaluation import impute as impute_run
+from tabsil_train.evaluation import shards
 
 ARFF = """@relation tiny
 @attribute x numeric
@@ -171,6 +174,9 @@ def test_run_resumes_and_reports_failures(tmp_path, monkeypatch):
     assert len(calls) == 8
     rows, _ = bi.run(imputers, *args, log=lambda _: None)  # resume: nothing reruns
     assert len(calls) == 8 and len(rows) == 24
+    # a rerun without a failed cell leaves no failures.json of the earlier runs
+    _, failures = bi.run(imputers, *args[:3], ["mean", "tabsil"], tmp_path, log=lambda _: None)
+    assert not failures and not (tmp_path / "failures.json").exists()
     mean = rows[rows.method == "mean"]
     assert mean.nrmse.between(0.9, 1.1).all() and mean.accuracy.between(0.2, 0.8).all()
 
@@ -375,6 +381,22 @@ def test_eval_suite_impute_shards_record_a_job_without_rows(suite, tmp_path, mon
     assert json.loads((out / "impute" / "summary.json").read_text())["failures"] == 1
 
 
+def test_eval_suite_impute_shards_write_the_header_of_an_empty_file(suite, tmp_path, monkeypatch):
+    from train_helpers import in_process_workers, tiny_checkpoint
+
+    script, out, results, _ = suite
+    results.parent.mkdir(parents=True)
+    results.touch()  # a run cut short before its first row
+    (results.parent / "failures.json").write_text("[]")  # of an earlier run without --shards
+    in_process_workers(script, monkeypatch)
+    model = tiny_checkpoint(tmp_path / "a.pt")
+    script.main(_args(out, model, "--shards", "2", "--impute-methods", "tabsil"))
+    rows = pd.read_csv(results)
+    assert list(rows.columns) == bi.RESULT_COLUMNS
+    assert sorted(rows.method) == ["tabsil", "tabsil_median"]
+    assert not (results.parent / "failures.json").exists()
+
+
 def test_eval_suite_impute_shards_do_not_merge_rows_of_other_settings(suite, tmp_path, monkeypatch):
     from train_helpers import in_process_workers, tiny_checkpoint
 
@@ -392,11 +414,10 @@ def test_eval_suite_impute_shards_do_not_merge_rows_of_other_settings(suite, tmp
 
 
 def test_worker_threads_split_the_cores(monkeypatch):
-    script = _eval_script()
-    assert script.impute_worker_threads(9, cores=208) == 23
-    assert script.impute_worker_threads(9, cores=4) == 1
-    assert script.impute_worker_threads(0, cores=8) == 8
-    assert "OMP_NUM_THREADS" in script.WORKER_THREAD_VARIABLES
+    assert impute_run.impute_worker_threads(9, cores=208) == 23
+    assert impute_run.impute_worker_threads(9, cores=4) == 1
+    assert impute_run.impute_worker_threads(0, cores=8) == 8
+    assert "OMP_NUM_THREADS" in impute_run.WORKER_THREAD_VARIABLES
     monkeypatch.setenv("TABSIL_IMPUTE_N_JOBS", "3")
     assert bi.n_jobs() == 3
     monkeypatch.delenv("TABSIL_IMPUTE_N_JOBS")
@@ -444,22 +465,21 @@ def test_report_only_covers_the_requested_grid(tmp_path, monkeypatch):
 def test_shard_devices_take_at_most_shards_gpus(monkeypatch):
     import argparse
 
-    script = _eval_script()
-    monkeypatch.setattr(script.torch.cuda, "device_count", lambda: 8)
+    monkeypatch.setattr(shards.torch.cuda, "device_count", lambda: 8)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
-    assert script.shard_devices(argparse.Namespace(shards=2)) == ["0", "1"]
+    assert shards.shard_devices(argparse.Namespace(shards=2)) == ["0", "1"]
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES")
-    assert script.shard_devices(argparse.Namespace(shards=3)) == ["0", "1", "2"]
+    assert shards.shard_devices(argparse.Namespace(shards=3)) == ["0", "1", "2"]
     with pytest.raises(SystemExit, match="exceeds the GPU count"):
-        script.shard_devices(argparse.Namespace(shards=9))
+        shards.shard_devices(argparse.Namespace(shards=9))
 
 
 def test_shard_queue_runs_every_job_on_free_gpus(tmp_path, monkeypatch, capsys):
-    script = _eval_script()
-    started = []
+    started, commands = [], []
 
     class FakeProcess:
         def __init__(self, cmd, stdout, stderr, env):
+            commands.append(cmd)
             started.append((cmd[cmd.index("--out-dir") + 1], env["CUDA_VISIBLE_DEVICES"]))
             self.returncode = 1 if "bad" in cmd else 0
 
@@ -469,7 +489,7 @@ def test_shard_queue_runs_every_job_on_free_gpus(tmp_path, monkeypatch, capsys):
     import subprocess
 
     monkeypatch.setattr(subprocess, "Popen", FakeProcess)
-    monkeypatch.setattr(script.time, "sleep", lambda s: None)
+    monkeypatch.setattr(shards.time, "sleep", lambda s: None)
     done = {}
 
     def on_done(job, returncode, job_dir):
@@ -477,13 +497,53 @@ def test_shard_queue_runs_every_job_on_free_gpus(tmp_path, monkeypatch, capsys):
         return returncode == 0
 
     jobs = [("a",), ("bad",), ("c",)]
-    script._run_shard_queue(
-        "test", jobs, lambda j: (j[0], [j[0]]), on_done, ["0", "1"], ["--suite", "x"],
-        {}, tmp_path / "shards", 60.0, side=[(("cpu",), "cpu", ["side"])],
+    shards.run_shard_queue(
+        "test", jobs, lambda j: (j[0], [j[0]]), on_done, ["0", "1"], "scripts/eval.py",
+        ["--suite", "x"], {}, tmp_path / "shards", 60.0, side=[(("cpu",), "cpu", ["side"])],
     )  # fmt: skip
     assert done == {("a",): (0, "a"), ("bad",): (1, "bad"), ("c",): (0, "c"), ("cpu",): (0, "cpu")}
+    # a worker is the given script with the base arguments, then the job's and its folder
+    worker = [sys.executable, "scripts/eval.py", "--suite", "x", "a", "--out-dir"]
+    assert [*worker, str(tmp_path / "shards" / "a")] in commands
     devices = dict((Path(d).name, dev) for d, dev in started)
     assert devices["cpu"] == "" and {devices["a"], devices["bad"]} == {"0", "1"}
     out = capsys.readouterr().out
     assert "test shards: ('bad',) FAILED (exit 1)" in out and "('c',) done in" in out
     assert (tmp_path / "shards" / "a.log").exists()
+
+
+def test_shard_queue_stops_the_workers_when_a_merge_raises(tmp_path, monkeypatch):
+    killed, logs = [], []
+
+    class FakeProcess:  # "a" ends at once, the others keep running until they are killed
+        def __init__(self, cmd, stdout, stderr, env):
+            self.name = Path(cmd[cmd.index("--out-dir") + 1]).name
+            self.returncode = 0 if self.name == "a" else None
+            logs.append(stdout)
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            killed.append(self.name)
+            self.returncode = -9
+
+        def wait(self):
+            return self.returncode
+
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(shards.time, "sleep", lambda s: None)
+
+    def on_done(job, returncode, job_dir):
+        raise RuntimeError("merge failed")
+
+    with pytest.raises(RuntimeError, match="merge failed"):
+        shards.run_shard_queue(
+            "test", [("a",), ("b",)], lambda j: (j[0], [j[0]]), on_done, ["0", "1"],
+            "scripts/eval.py", [], {}, tmp_path / "shards", 60.0,
+            side=[(("cpu",), "cpu", ["side"])],
+        )  # fmt: skip
+    assert sorted(killed) == ["b", "cpu"]  # no worker is left holding a GPU
+    assert len(logs) == 3 and all(log.closed for log in logs)

@@ -1,8 +1,10 @@
 """Pinned benchmark downloads and result tables shared by the suites (`benchmarks._files`): the
-settings string of a model's rows (with `tabsil_train.hub.weights_digest`) and its check."""
+settings string of a model's rows (with `tabsil_train.hub.weights_digest`), its check, and one
+run's bookkeeping of `results.csv` (`Results`)."""
 
 import hashlib
 import io
+import json
 
 import pandas as pd
 import pytest
@@ -155,3 +157,30 @@ def test_check_settings(tmp_path):
     # the message shows the row's settings and this run's
     with pytest.raises(ValueError, match=r"'weights=b seed=0'; this run: 'weights=a seed=0'"):
         _files.check_settings(_rows(("ours", "weights=b seed=0")), settings, path)
+
+
+def test_results_appends_rows_and_records_failures(tmp_path):
+    out, columns, logs = tmp_path / "out", ["method", "value", "opts"], []
+    results = _files.Results(out, columns, {"a": "s"}, "suite", logs.append)
+    assert results.done.empty and list(results.done.columns) == columns
+    results.append([{"method": "a", "value": 1.5, "opts": "s"}])
+    results.append([{"method": "a", "value": 2.5, "opts": "s"}, {"method": "b", "value": 3.0}])
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError as error:
+        results.fail({"dataset": "d", "method": "a"}, error)
+    rows, failures = results.finish()
+    lines = (out / "results.csv").read_text().splitlines()
+    assert lines[0] == "method,value,opts" and len(lines) == 4  # the header once
+    assert rows.value.tolist() == [1.5, 2.5, 3.0]
+    assert failures == [{"dataset": "d", "method": "a", "error": "RuntimeError('boom')"}]
+    assert json.loads((out / "failures.json").read_text()) == failures
+    assert logs[0].startswith("[suite] d a FAILED:\nTraceback")
+    assert logs[0].rstrip().endswith("RuntimeError: boom")
+    # a rerun starts from those rows; without a failed cell it removes the earlier failures.json
+    again = _files.Results(out, columns, {"a": "s"}, "suite")
+    assert len(again.done) == 3 and again.finish()[1] == []
+    assert not (out / "failures.json").exists()
+    # rows of other settings stop a run when it opens
+    with pytest.raises(ValueError, match="other settings"):
+        _files.Results(out, columns, {"a": "other"}, "suite")
