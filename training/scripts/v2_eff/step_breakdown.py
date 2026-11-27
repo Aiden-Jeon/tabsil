@@ -205,6 +205,16 @@ def main() -> None:
                 f" mean {np.mean(seconds):.3f} s, longest {max(seconds):.3f} s;"
                 f" tracked objects {probes[0]['gc_objects']:,}"
             )
+        # records made before the probe counted the frozen objects have no `freezes`
+        freezes = [p["freezes"] for p in probes if p.get("freezes")]
+        if freezes:
+            steps = [step for step, _ in freezes[0]]
+            first, last = [f[0][1] for f in freezes], [f[-1][1] for f in freezes]
+            print(
+                f"freezes: {len(steps)} per GPU, the first after {steps[0]} steps and the last"
+                f" after {steps[-1]}; frozen objects per GPU {min(first):,}-{max(first):,} after"
+                f" the first and {min(last):,}-{max(last):,} after the last"
+            )
 
 
 if __name__ == "__main__":

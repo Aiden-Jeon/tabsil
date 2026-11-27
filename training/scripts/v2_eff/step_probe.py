@@ -4,18 +4,24 @@ training code. It runs `training/scripts/train.py` in this process after wrappin
 - the optimizer step (`Muon.step`), the gradient clipping and the per-group gradient norms, each
   between two `torch.cuda.synchronize()` calls,
 - the prior DataLoader's `__next__`: the data wait of every GPU (`data_wait_frac` is rank 0's),
-- Python's garbage collector (`gc.callbacks`): the pause of every collection, per generation.
+- Python's garbage collector (`gc.callbacks`): the pause of every collection, per generation,
+  and the number of frozen objects after every `gc.freeze()`.
 
 The wrapped calls sit where the loop already waits for the GPU (the gradient all-reduce before
 them, the loss read after them), so the timing does not move work. The training computation is
 unchanged. Every GPU writes one JSON file with a record per optimizer step, and rank 0 logs them
 to the MLflow run under `eff_probe/`. `step_breakdown.py` joins them with the rank timing records.
 
+The training loop freezes the collector's objects itself at every log step
+(`TrainConfig.gc_freeze`, on by default), and the probe records that. `TABSIL_GC_FREEZE=0` turns it
+off, which gives the loop as it was when the collector's pauses were first measured.
+
 Options (environment variables):
 
 - `TABSIL_EFF_GC`: empty (default) only measures. `freeze:<step>` collects once and calls
   `gc.freeze()` after that many optimizer steps, so that later full collections skip the objects
-  that exist by then (the model, the optimizer and the compiled graphs). `off` disables the
+  that exist by then (the model, the optimizer and the compiled graphs); with `TABSIL_GC_FREEZE=0`
+  the two halves of the run compare the loop with and without one freeze. `off` disables the
   collector for the run.
 
     torchrun --standalone --nproc_per_node=8 training/scripts/v2_eff/step_probe.py
@@ -56,6 +62,9 @@ class Probe:
         self.gc_stats = {g: [0, 0.0, 0.0] for g in range(3)}
         self.gc_events: list[tuple[int, int, float]] = []  # (step, generation, seconds) over 50 ms
         self.frozen_at: int | None = None
+        # (optimizer steps done, frozen objects) after every `gc.freeze()`: the training loop's at
+        # its log steps and this probe's. Frozen objects that only grow would be a leak
+        self.freezes: list[tuple[int, int]] = []
 
     def add(self, name: str, seconds: float) -> None:
         self.current[name] += seconds * 1000.0
@@ -132,6 +141,18 @@ def _wrap_optimizer_step(mode: str, freeze_at: int) -> None:
     muon.Muon.step = timed_step
 
 
+def _wrap_freeze() -> None:
+    """Count the frozen objects after every `gc.freeze()`. The count walks them once (a few
+    milliseconds per million), at the freeze only."""
+    freeze = gc.freeze
+
+    def counted_freeze() -> None:
+        freeze()
+        PROBE.freezes.append((len(PROBE.steps), gc.get_freeze_count()))
+
+    gc.freeze = counted_freeze
+
+
 class _TimedIterator:
     def __init__(self, iterator) -> None:
         self.iterator = iterator
@@ -194,12 +215,15 @@ def _write(path: Path, rank: int, mode: str) -> None:
             for generation, (n, total, top) in PROBE.gc_stats.items()
         },
         "gc_events": PROBE.gc_events,
+        "freezes": PROBE.freezes,
         "gc_objects": len(gc.get_objects()),
         "gc_frozen": gc.get_freeze_count(),
         "compilations": _compilations(),
     }
     path.write_text(json.dumps(record))
-    summary = {k: record[k] for k in ("rank", "gc", "gc_objects", "gc_frozen", "frozen_at")}
+    summary = {
+        k: record[k] for k in ("rank", "gc", "gc_objects", "gc_frozen", "frozen_at", "freezes")
+    }
     print("EFF_PROBE " + json.dumps(summary), flush=True)
 
 
@@ -224,6 +248,7 @@ def main() -> None:
     if mode == "off":
         gc.disable()
     gc.callbacks.append(PROBE.on_gc)
+    _wrap_freeze()
     _wrap_optimizer_step(mode, freeze_at)
     torch.nn.utils.clip_grad_norm_ = _timed("clip_ms", torch.nn.utils.clip_grad_norm_)
     loop.group_norms = _timed("norms_ms", loop.group_norms)

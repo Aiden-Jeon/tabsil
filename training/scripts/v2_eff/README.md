@@ -4,17 +4,23 @@ Short timing jobs that measure what a training step costs and where its time goe
 
 | File | What it does |
 |---|---|
-| `step_probe.py` | Runs `training/scripts/train.py` in its own process and times what `TABSIL_RANK_TIMING=1` leaves out: the optimizer step, the gradient clipping, the per-group norms, each GPU's data wait and every pause of Python's garbage collector. With `TABSIL_EFF_GC=freeze:<step>` it calls `gc.freeze()` after that many steps, which shows the step time without the collector's full passes |
+| `step_probe.py` | Runs `training/scripts/train.py` in its own process and times what `TABSIL_RANK_TIMING=1` leaves out: the optimizer step, the gradient clipping, the per-group norms, each GPU's data wait and every pause of Python's garbage collector. It also counts the frozen objects after every `gc.freeze()`, which the training loop calls at each log step (`TrainConfig.gc_freeze`). With `TABSIL_GC_FREEZE=0` the loop does not freeze, and `TABSIL_EFF_GC=freeze:<step>` then makes the probe call `gc.freeze()` once after that many steps: the measurement that led to the loop's own freeze |
 | `timing.yaml` | The AI Runtime job: `train.py` under `step_probe.py`, stage 1 at v1's size for 300 steps on 8 H100 by default. Size, micro batch, stage and GPU count are overrides (listed in the file) |
 | `step_breakdown.py` | Reads one run from MLflow (`sec_per_step`, the rank timing records and the probe's records) and prints the step time by part, the GPU-seconds per table and the H100-h per 1K steps |
 
 A run made with `training/scripts/train.yaml` and `TABSIL_RANK_TIMING=1` has no probe records. `step_breakdown.py` then reports forward, backward, the waiting for the slowest GPU and the rest as one number.
 
 ```bash
-# stage 1, v1's size, 8 H100, the collector frozen from step 200 on
+# stage 1, v1's size, 8 H100, the training loop as it is
+databricks air run -p e2-demo-field-eng -f training/scripts/v2_eff/timing.yaml \
+  --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+  --override mlflow_run_name=tabsil-v2-eff-s1-m-mb4-probe
+
+# the same without the loop's freeze, and one freeze by the probe after step 200
 databricks air run -p e2-demo-field-eng -f training/scripts/v2_eff/timing.yaml \
   --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
   --override mlflow_run_name=tabsil-v2-eff-s1-m-mb4-probe \
+  --override env_variables.TABSIL_GC_FREEZE=0 \
   --override env_variables.TABSIL_EFF_GC=freeze:200
 
 # the breakdown of that run
