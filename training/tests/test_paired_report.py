@@ -12,8 +12,7 @@ import torch
 import train_helpers as helpers
 from sklearn.metrics import log_loss, roc_auc_score
 
-from tabsil_train.benchmarks import paired
-from tabsil_train.benchmarks.tabular import amlb, arena, tabarena
+from tabsil_train.benchmarks.tabular import amlb, arena, paired, tabarena
 
 
 def _splits(errors: dict, kind: dict, splits: int = 1, imputed=()) -> pd.DataFrame:

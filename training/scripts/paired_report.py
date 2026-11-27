@@ -35,7 +35,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from tabsil_train.benchmarks import paired
+from tabsil_train.benchmarks.tabular import paired
 
 ARENA_FILE = "results_per_split.csv"
 AMLB_FILE = "eval_rows.csv"
