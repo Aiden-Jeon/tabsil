@@ -21,18 +21,19 @@ members' random numbers (feature and class order, identifier column): re-evaluat
 with another seed measures the benchmark noise. Arena result caches are per seed.
 
 `--uncertainty` (AMLB) adds predictive distribution and uncertainty metrics per fold
-(`tabsil_train.benchmarks.uncertainty`): for regression CRPS, central interval (50/80/90/95%)
-coverage, width and interval score, the minimum coverage over width quintiles and the PIT KS
-statistic; for classification ECE, log loss, Brier and split conformal (LAC, APS, alpha = 0.1)
-coverage, set size, SSCS and class-conditional coverage gap. The per-dataset table is
+(`tabsil_train.benchmarks.tabular.uncertainty`): for regression CRPS, central interval
+(50/80/90/95%) coverage, width and interval score, the minimum coverage over width quintiles and the
+PIT KS statistic; for classification ECE, log loss, Brier and split conformal (LAC, APS,
+alpha = 0.1) coverage, set size, SSCS and class-conditional coverage gap. The per-dataset table is
 `eval_uncertainty_per_dataset.csv` and the suite means are `<suite>_mean_<metric>` (regression CRPS,
 widths and interval scores are averaged only as `_scaled`, divided by the training target standard
 deviation).
 
 `--suite tabarena-lite`, `beyondarena` and `beyondarena-lite` are TabArena-Lite and BeyondArena
-(`tabsil_train.benchmarks.arena`, needs the `arena` extra, which needs pandas 2.3 and is installed
-apart from the dev group: `uv sync --package tabsil-train --no-dev --extra arena --group arena-dev`,
-with the same options for `uv run`). The official splits run and Elo, normalized score,
+(`tabsil_train.benchmarks.tabular.arena`, needs the `arena` extra, which needs pandas 2.3 and is
+installed apart from the dev group:
+`uv sync --package tabsil-train --no-dev --extra arena --group arena-dev`, with the same options
+for `uv run`). The official splits run and Elo, normalized score,
 improvability and win rates are computed as on the public leaderboard. Splits of a task without a
 checkpoint, or beyond TabSil's supported size (`tabsil.recipe.SUPPORTED_SIZE`; classes up to what
 the model takes, `max_classes_of`), are imputed (`--max-train-rows`, `--max-features` change the
@@ -48,26 +49,26 @@ the arena feature limit is then the supported size). With a cap, the TabArena / 
 limit is lifted, so splits wider than the supported size run.
 
 `--subsample-train-rows N` uses at most N random training rows per fit as the context
-(`tabsil_train.subsample`; stratified by class for classification with at least one row per
-class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters splits by
-their original training row count.
+(`tabsil_train.benchmarks.tabular.subsample`; stratified by class for classification with at least
+one row per class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters
+splits by their original training row count.
 
-`--suite fev` is time series forecasting on 10 fev-bench tasks (`tabsil_train.benchmarks.fevbench`,
-needs the `fev` extra, installed apart from the dev group like the arena extra: `uv sync --package
-tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.TabSilForecaster` with the
-`--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in an Elo
-pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7 methods. Our
-Seasonal Naive is recomputed on the same windows and must match those. `--datasets` picks tasks,
-`--fev-windows N` only the last N windows of each (a quick check; the task-mean Elo pool then
-drops out). A failed series, window or task stops the run (nothing is imputed). Results go to
-`<out-dir>/fev/`.
+`--suite fev` is time series forecasting on 10 fev-bench tasks
+(`tabsil_train.benchmarks.forecast.fevbench`, needs the `fev` extra, installed apart from the dev
+group like the arena extra: `uv sync --package tabsil-train --no-dev --extra fev --group
+arena-dev`): `tabsil.TabSilForecaster` with the `--regressor-path` model on every rolling window,
+scored with fev's SQL and MASE and put in an Elo pool (Seasonal Naive = 1000) with the per-window
+results fm-agent-bench recorded for 7 methods. Our Seasonal Naive is recomputed on the same windows
+and must match those. `--datasets` picks tasks, `--fev-windows N` only the last N windows of each (a
+quick check; the task-mean Elo pool then drops out). A failed series, window or task stops the run
+(nothing is imputed). Results go to `<out-dir>/fev/`.
 
   $RUN --no-dev --extra fev --group arena-dev python $EVAL --suite fev \
     --regressor-path hf://aiden-jeon/tabsil@v1 --datasets ecdc_ili --fev-windows 2
 
 `--suite causal` is treatment effect estimation on IHDP (100 realizations) and ACIC 2016 (10
-simulations) (`tabsil_train.benchmarks.causal`, needs the `causal` extra for the EconML baselines:
-`uv sync --package tabsil-train --extra causal`): `tabsil.TabSilCATE` with the S-, T-, X-
+simulations) (`tabsil_train.benchmarks.causal.causal`, needs the `causal` extra for the EconML
+baselines: `uv sync --package tabsil-train --extra causal`): `tabsil.TabSilCATE` with the S-, T-, X-
 and DR-learner on the `--regressor-path` model (it must serve classification too, for the
 propensity), and EconML's causal forest and GBM-based meta-learners on the same splits. √PEHE and
 the ATE error within-sample and out-of-sample. `--datasets` picks the benchmarks (ihdp, acic2016),
@@ -88,7 +89,7 @@ and the baselines' value on the same splits, `time_baselines`) and `comparison.c
 each fold's fit and prediction time to `<out-dir>/fits_<suite>.jsonl` and `eval_rows.csv`.
 
 `--suite adbench` is unsupervised outlier detection on 12 ADBench tables x 3 seeds
-(`tabsil_train.benchmarks.adbench`): `tabsil.TabSilUnsupervised` fitted on the
+(`tabsil_train.benchmarks.unsupervised.adbench`): `tabsil.TabSilUnsupervised` fitted on the
 unlabeled (contaminated) training rows scores the test rows, next to the official TabPFN v2
 extension and pyod's methods from the fm-agent-bench run, with IsolationForest = 1000 Elo. One
 multitask model serves both column kinds (`--regressor-path`, or `--classifier-path`).
@@ -101,11 +102,11 @@ diagnostic (context = training rows labeled normal; kept out of the Elo); `--dat
     --datasets yeast --adbench-splits s1
 
 `--suite impute` is missing value imputation on 10 OpenML tables x MCAR rates 10/30/50% x 3 seeds
-(`tabsil_train.benchmarks.impute`): `TabSilUnsupervised.impute` (zero-shot, the `--regressor-path`
-model serving both column kinds; mean and median from one evaluation) against the official TabPFN
-v2 extension (`impute` and `simple_impute`, needs the `impute` extra: `uv sync --all-packages
---extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on the same rows and
-masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
+(`tabsil_train.benchmarks.unsupervised.impute`): `TabSilUnsupervised.impute` (zero-shot, the
+`--regressor-path` model serving both column kinds; mean and median from one evaluation) against the
+official TabPFN v2 extension (`impute` and `simple_impute`, needs the `impute` extra: `uv sync
+--all-packages --extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on the same
+rows and masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
 `--impute-methods`, `--impute-rates`, `--impute-seeds` and `--datasets` pick the grid. A failed
 (table, rate, seed, method) is reported and the run ends with an error (nothing is filled in).
 With `--shards N` the GPU methods run as (table, rate, method) jobs on N GPUs and the CPU
@@ -1406,7 +1407,8 @@ def write_amlb_fits(args: argparse.Namespace, suite: str, task, task_rows: list[
 
 
 def summarize_uncertainty(rows: list[dict]) -> pd.DataFrame:
-    """Per-dataset fold means of the uncertainty metrics (`tabsil_train.benchmarks.uncertainty`)."""
+    """Per-dataset fold means of the uncertainty metrics
+    (`tabsil_train.benchmarks.tabular.uncertainty`)."""
     return unc.dataset_means(rows, exclude=("score", *bm.TIME_KEYS))
 
 

@@ -1,8 +1,8 @@
 # TabSil fev-bench forecasting evaluation (training/scripts/eval.py --suite fev) on Databricks AI
 # Runtime: tabsil.TabSilForecaster on every rolling window of 10 univariate fev-bench
-# tasks (tabsil_train.benchmarks.fevbench), scored with fev's SQL and MASE, with the Elo pools
-# (Seasonal Naive = 1000) against the per-window results copied from fm-agent-bench. The model is
-# TABSIL_REGRESSOR (default: the default Hub repo at the v1 tag). From the repository root:
+# tasks (tabsil_train.benchmarks.forecast.fevbench), scored with fev's SQL and MASE, with the Elo
+# pools (Seasonal Naive = 1000) against the per-window results copied from fm-agent-bench. The model
+# is TABSIL_REGRESSOR (default: the default Hub repo at the v1 tag). From the repository root:
 #   databricks air run -f training/scripts/eval_fev.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
 #     --override "env_variables.TABSIL_EXTRA_ARGS=--datasets ecdc_ili --fev-windows 2"
 experiment_name: tabsil

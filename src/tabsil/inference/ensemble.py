@@ -602,8 +602,9 @@ class EnsembleRegressor(_Base):
 
     def predict_full(self, X: Any) -> tuple[np.ndarray, torch.Tensor, torch.Tensor]:
         """(the `predict` mean, the `predict_distribution` log probabilities and borders) from one
-        forward pass. Distribution-quality evaluation (`tabsil_train.benchmarks.uncertainty`) uses
-        the point prediction and the distribution together."""
+        forward pass. Distribution-quality evaluation
+        (`tabsil_train.benchmarks.tabular.uncertainty`) uses the point prediction and the
+        distribution together."""
         means, probs = [], []
         with contextlib.closing(self._member_probs(X)) as members:
             for i, p in members:

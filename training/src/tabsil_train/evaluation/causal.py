@@ -1,6 +1,6 @@
 """`eval.py --suite causal`: the treatment effect benchmarks with the model, realizations and
-methods of the command line (`tabsil_train.benchmarks.causal` is the benchmark: data, methods,
-report)."""
+methods of the command line (`tabsil_train.benchmarks.causal.causal` is the benchmark: data,
+methods, report)."""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ SUITE = "causal"
 
 
 def run_causal(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> None:
-    """Treatment effects on IHDP and ACIC 2016 (`tabsil_train.benchmarks.causal`). Ends with an
-    error if any (benchmark, realization, method) failed or has no result, after the others ran
+    """Treatment effects on IHDP and ACIC 2016 (`tabsil_train.benchmarks.causal.causal`). Ends with
+    an error if any (benchmark, realization, method) failed or has no result, after the others ran
     and the summary was written."""
     benchmarks = args.datasets.split(",") if args.datasets else list(causal.BENCHMARKS)
     if bad := [b for b in benchmarks if b not in causal.BENCHMARKS]:

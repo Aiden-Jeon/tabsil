@@ -1,5 +1,5 @@
-"""The eval script's `--subsample-train-rows` (`tabsil_train.subsample`; the subsampling itself:
-test_subsample.py)."""
+"""The eval script's `--subsample-train-rows` (`tabsil_train.benchmarks.tabular.subsample`; the
+subsampling itself: test_subsample.py)."""
 
 from __future__ import annotations
 

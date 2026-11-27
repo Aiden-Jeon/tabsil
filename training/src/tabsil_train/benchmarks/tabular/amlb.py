@@ -835,9 +835,9 @@ def evaluate_task(
     uncertainty: bool = False,
 ) -> list[dict]:
     """One score per fold. With `uncertainty=True`, predictive-distribution and uncertainty
-    metrics (`tabsil_train.benchmarks.uncertainty`) are added to the same row. Regression estimators
-    must provide `predict_full` (mean, bin log-probabilities, borders) or `predict_distribution`
-    (log-probabilities, borders).
+    metrics (`tabsil_train.benchmarks.tabular.uncertainty`) are added to the same row. Regression
+    estimators must provide `predict_full` (mean, bin log-probabilities, borders) or
+    `predict_distribution` (log-probabilities, borders).
 
     Each row also has `TIME_KEYS`: the fold's train and test row counts, the rows `fit` actually
     used (`fit_rows`, fewer with `SubsampledEstimator`), the `fit` time and the prediction time in

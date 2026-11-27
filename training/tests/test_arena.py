@@ -1,6 +1,6 @@
-"""Rule tests for the TabArena/BeyondArena harness (`tabsil_train.benchmarks.arena`). No data or
-baseline results are downloaded. System tests wrapping the estimator run only with the `arena` extra
-(tabarena)."""
+"""Rule tests for the TabArena/BeyondArena harness (`tabsil_train.benchmarks.tabular.arena`). No
+data or baseline results are downloaded. System tests wrapping the estimator run only with the
+`arena` extra (tabarena)."""
 
 import argparse
 import types

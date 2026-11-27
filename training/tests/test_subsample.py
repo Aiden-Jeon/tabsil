@@ -1,4 +1,5 @@
-"""Subsampling training rows at inference (`tabsil_train.subsample`, `--subsample-train-rows`)."""
+"""Subsampling training rows at inference (`tabsil_train.benchmarks.tabular.subsample`,
+`--subsample-train-rows`)."""
 
 from __future__ import annotations
 

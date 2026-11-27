@@ -7,7 +7,7 @@ table on the public leaderboard (Hugging Face Space `TabArena/leaderboard`). We 
 the table that includes imputed methods (`imputation_yes`), because datasets a model cannot run
 on are filled the same way, with RandomForest (default).
 
-Evaluate with `tabsil_train.benchmarks.arena.run(SUITE, ...)`.
+Evaluate with `tabsil_train.benchmarks.tabular.arena.run(SUITE, ...)`.
 """
 
 from __future__ import annotations

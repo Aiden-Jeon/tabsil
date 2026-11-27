@@ -1,5 +1,5 @@
 """Tests for predictive-distribution and uncertainty metrics
-(tabsil_train.benchmarks.uncertainty)."""
+(tabsil_train.benchmarks.tabular.uncertainty)."""
 
 import numpy as np
 import pytest

@@ -154,7 +154,7 @@ def column_orders(n_columns: int, n_permutations: int, random_state: int) -> lis
 def nearest_class(values: np.ndarray, classes: np.ndarray) -> np.ndarray:
     """Each value replaced by the nearest of the sorted `classes` (ties: the smaller). The rule of
     `TabSilUnsupervised.impute` for a categorical column predicted by the regressor, and of the
-    imputation benchmark's scoring (`tabsil_train.benchmarks.impute`)."""
+    imputation benchmark's scoring (`tabsil_train.benchmarks.unsupervised.impute`)."""
     values = np.asarray(values, dtype=np.float64)
     idx = np.searchsorted(classes, values).clip(1, max(len(classes) - 1, 1))
     lower, upper = classes[idx - 1], classes[idx.clip(0, len(classes) - 1)]

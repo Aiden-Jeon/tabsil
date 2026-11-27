@@ -1,5 +1,5 @@
-"""Treatment effect benchmark suite (`tabsil_train.benchmarks.causal`) on small synthetic files in
-the benchmarks' formats (no download)."""
+"""Treatment effect benchmark suite (`tabsil_train.benchmarks.causal.causal`) on small synthetic
+files in the benchmarks' formats (no download)."""
 
 import hashlib
 import json
