@@ -35,7 +35,12 @@ turns it off).
 The table size and prior settings (`TrainConfig` comments) can be changed with
 `TABSIL_MIN_ROWS`·`TABSIL_MAX_ROWS`·`TABSIL_MIN_TRAIN_FRACTION`·
 `TABSIL_MAX_TRAIN_FRACTION`, `TABSIL_BINARY_PROB`, `TABSIL_FILTER_UNPREDICTABLE=1`
-(unset values keep the preset).
+(unset values keep the preset). A resumed run keeps the tables it was trained on: these six
+settings and the four that only the preset sets (`max_features`, `log_uniform_rows`, `max_cells`,
+`missing_dataset_prob`) are taken from the original run's params (`DATA_OPTIONS`), whatever the
+`--config-name` of the resume command. A different value given on resume is an error, and so is
+resuming a run that did not record them. A run that takes only the weights (`--init-run-id`)
+uses the preset's or the given values.
 Training recipe options of the v2 experiments (`TrainConfig` comments; off by default, and a
 resumed run keeps the original run's values): `--target-train-rows` (`TABSIL_TARGET_TRAIN_ROWS=1`)
 standardizes the regression target again with the train rows, as inference does.
@@ -205,7 +210,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--rewind-lr-factor", type=float, default=_env("TABSIL_REWIND_LR_FACTOR", float)
     )
-    # TabICLv2 table size and prior settings (TrainConfig comments). Unset values keep the preset
+    # TabICLv2 table size and prior settings (TrainConfig comments). Unset values keep the preset;
+    # a resumed run keeps the original run's (`resume_data_options`)
     for name in ("min-rows", "max-rows"):
         env = "TABSIL_" + name.upper().replace("-", "_")
         parser.add_argument(f"--{name}", type=int, default=_env(env, int))
@@ -384,12 +390,93 @@ def inherit_prior_type(args: argparse.Namespace, params: dict[str, str]) -> None
         )
 
 
+# Table size and prior settings a resumed run keeps: the TrainConfig fields the prior reads to draw
+# a table (`tabsil_train.priors.graph_scm.make_prior`: its `SIZE_FIELDS`, `PRIOR_FIELDS` and
+# `missing_dataset_prob`), except `target_train_rows`, which is one of RECIPE_OPTIONS. The first
+# six have an argument, the last four are set by the preset only. Every run of this script has
+# recorded them, so unlike RECIPE_OPTIONS there is no value to assume for a run without the param
+DATA_OPTIONS = (
+    "min_rows",
+    "max_rows",
+    "min_train_fraction",
+    "max_train_fraction",
+    "binary_prob",
+    "filter_unpredictable",
+    "max_features",
+    "log_uniform_rows",
+    "max_cells",
+    "missing_dataset_prob",
+)
+
+
+def _run_param(name: str, default, text: str):
+    """The resumed run's MLflow param `text` as the type of the TrainConfig field `name` (params
+    are strings; `default` is the field's default). Read as `tabsil_train.hub` reads the model
+    structure: a bool is True or False, and a param that does not read as its type stops the
+    script (it does not count as off)."""
+    try:
+        if isinstance(default, bool):
+            if text not in ("True", "False"):
+                raise ValueError(text)
+            return text == "True"
+        return type(default)(text)
+    except ValueError:
+        kind = type(default).__name__
+        raise SystemExit(
+            f"the resumed run's {name} param does not read as {kind}: {text!r}"
+        ) from None
+
+
+def resume_data_options(args: argparse.Namespace, params: dict[str, str]) -> dict:
+    """On resume, the table size and prior settings to train with (`DATA_OPTIONS`): the original
+    run's, read from its params, so that the run stays on the tables it was trained on whatever
+    preset and arguments the resume command has (`build_config` puts them over the preset). A
+    different value given on resume stops the script, and so does a run that did not record them
+    (nothing says which tables it saw). An on/off setting follows `inherit_recipe_options`: its
+    flag can only turn it on, so turning on what the run had off stops the script. Empty unless
+    resuming: a run that takes only the weights (`--init-run-id`) uses the preset's or the given
+    values."""
+    if not args.resume_run_id:
+        return {}
+    missing = [name for name in DATA_OPTIONS if name not in params]
+    if missing:
+        raise SystemExit(
+            f"the resumed run did not record {', '.join(missing)}, so the tables it was trained on"
+            " are not known and cannot be kept. Check that --resume-run-id is a training run that"
+            " logged its params; to train anew from its weights use --init-run-id"
+        )
+    defaults = TrainConfig()
+    saved = {name: _run_param(name, getattr(defaults, name), params[name]) for name in DATA_OPTIONS}
+    for name, value in saved.items():
+        given = getattr(args, name, None)  # a setting without an argument is never given
+        flag = "--" + name.replace("_", "-")
+        keep = (
+            "A resumed run keeps the table sizes and prior settings it was trained with: leave"
+            f" {flag} and TABSIL_{name.upper()} unset to keep them, or train anew from the run's"
+            " weights with --init-run-id"
+        )
+        if isinstance(value, bool):
+            if given and not value:
+                raise SystemExit(f"{flag} is off in the resumed run. {keep}")
+        elif given is not None and given != value:
+            raise SystemExit(
+                f"{flag} {given} differs from the resumed run's {name} {value}. {keep}"
+            )
+    return saved
+
+
 def build_config(
-    args: argparse.Namespace, source: dict | None = None, speed_options: dict | None = None
+    args: argparse.Namespace,
+    source: dict | None = None,
+    speed_options: dict | None = None,
+    data_options: dict | None = None,
 ) -> TrainConfig:
     """The training config. `source` is the model structure of the run being resumed or whose
     weights are taken (`tabsil_train.hub.run_architecture`); it must match the preset's structure.
-    `speed_options` are that run's training speed options (`source_speed_options`)."""
+    `speed_options` are that run's training speed options (`source_speed_options`), and
+    `data_options` the table size and prior settings of a resumed run (`resume_data_options`),
+    which replace the preset's."""
+    data_options = data_options or {}
     try:
         if args.config_name in CURRICULUM_NAMES:
             # The curriculum sets the warmup from the step count, so --steps goes to the recipe
@@ -403,7 +490,7 @@ def build_config(
     base = _replace(base, _structure_values(args))
     _check_structure(base)
     if source is None:
-        return _overrides(base, args)
+        return _replace(base, {**_override_values(args), **data_options})
     differ = {k: (getattr(base, k), v) for k, v in source.items() if getattr(base, k) != v}
     if differ:
         raise SystemExit(
@@ -418,14 +505,10 @@ def build_config(
             f" {args.config_name}: {base.phases}"
         )
     # Apply the original run's structure and options and the arguments at once (so the config
-    # check never sees an intermediate state)
-    changes = {**source, **(speed_options or {}), **_override_values(args)}
+    # check never sees an intermediate state). The resumed run's table settings come last: a
+    # given value equals them (`resume_data_options`), and an on/off one may be off in the run
+    changes = {**source, **(speed_options or {}), **_override_values(args), **data_options}
     return _replace(base, changes)
-
-
-def _overrides(config: TrainConfig, args: argparse.Namespace) -> TrainConfig:
-    """Overwrite the config with the values given as arguments or environment variables."""
-    return _replace(config, _override_values(args))
 
 
 def _structure_values(args: argparse.Namespace) -> dict:
@@ -550,7 +633,7 @@ def main(argv: list[str] | None = None) -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    source, speed_options = None, None
+    source, speed_options, data_options = None, None, None
     if args.init_run_id or args.resume_run_id:
         run = mlflow.MlflowClient().get_run(args.init_run_id or args.resume_run_id)
         params = source_params(run.data.params, run.data.tags)
@@ -568,7 +651,8 @@ def main(argv: list[str] | None = None) -> None:
         inherit_prior_type(args, params)
         inherit_reference_val(args, params)
         inherit_recipe_options(args, params)
-    config = build_config(args, source, speed_options)
+        data_options = resume_data_options(args, params)
+    config = build_config(args, source, speed_options, data_options)
     if args.resume_run_id:
         config = resume_phase_lr(config, args, params)  # checked before the checkpoint download
 

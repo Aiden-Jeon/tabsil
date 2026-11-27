@@ -12,6 +12,8 @@
 #                 or from Hub weights: --override env_variables.TABSIL_INIT_HUB=aiden-jeon/tabsil@stage1-150k
 #   chunks:       --override env_variables.TABSIL_STOP_STEP=<end of this chunk> --override timeout_minutes=<estimate>
 #   resume:       --override env_variables.TABSIL_RESUME_RUN_ID=<run_id>
+#                 (the run keeps the table sizes and prior settings it was trained with, whatever
+#                 TABSIL_CONFIG_NAME is given; a different TABSIL_MIN_ROWS, TABSIL_BINARY_PROB etc. stops it)
 #   prior:        --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_hicard_missing (default graph_scm;
 #                 also graph_scm_realism, graph_scm_base_realism)
 #   model size:   --override env_variables.TABSIL_EMSIZE=192 (cell width; TABSIL_N_CLS sets the CLS count,
