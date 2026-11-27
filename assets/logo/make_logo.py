@@ -15,7 +15,7 @@ Usage (needs ``rsvg-convert`` on PATH, e.g. ``brew install librsvg``):
 
     curl -L -o /tmp/DMSans.ttf \
       "https://github.com/google/fonts/raw/main/ofl/dmsans/DMSans%5Bopsz,wght%5D.ttf"
-    uv run assets/logo/make_assets.py --font /tmp/DMSans.ttf
+    uv run assets/logo/make_logo.py --font /tmp/DMSans.ttf
 """
 
 import argparse
