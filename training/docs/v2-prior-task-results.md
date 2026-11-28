@@ -1,23 +1,33 @@
 # v2 plan for priors and tasks: results
 
-**Status:** tier 1 (no training) is measured and reading point R1 is read, on 2026-11-28. Both tasks that have a bar go on to tier 2. Tiers 2 and 3 are not run.
+**Status:** tiers 1 and 2 are measured and reading points R1 and R2 are read, on 2026-11-28. Forecasting stops at R2. Outlier detection is at its bar only with a score added after the pilot. Tier 3 is not started: what follows is the user's decision ("For the user to decide").
 
 The plan is [v2-prior-task-plan.md](v2-prior-task-plan.md) and the derivations it tests are in [v2-task-formulations.md](v2-task-formulations.md). The code of every measurement is in [`training/scripts/v2_prior_diag`](../scripts/v2_prior_diag/README.md). "v1.1" is the released weights with tabsil 0.1.1's inference settings (`aiden-jeon/tabsil@v1.1`). "#14's run" and "N10" are the two seeds of the v2 candidate, stage-2 runs on `graph_scm_hicard_missing` (MLflow `277916ec05a3457aa6d07f2bc08a60c4` and `520d88d73cdc4e5ea90cfd27425be00d`, `model/final.pt`).
 
 ## Summary
 
-| Task | Bar | v1.1 today | Best without training | Left to the bar | R1 |
+| Task | Bar | v1.1 today | Best without training (tier 1) | Best after the fine-tuning (tier 2) | Outcome |
 |---|---|---|---|---|---|
-| Forecasting, fev-bench SQL Elo | 1707 | 1535 | 1535: today's recipe. No arm is better | 172 | in the probe (the rule's limit is 180) |
-| Outlier detection, ADBench mean AUROC | 0.77 | 0.663 | **0.756**: the density under 32 random contexts of 64 rows | 0.014 | in the probe (the rule's limit is 0.13) |
-| Imputation | none | D4 measured | — | — | to the user (section 12 of the plan) |
-| Treatment effects | none | D5 measured | — | — | to the user (section 12 of the plan) |
+| Forecasting, fev-bench SQL Elo | 1707 | 1535 | 1535: today's recipe. No arm is better | **1582**: the pilot's weights, today's recipe. SQL 5.0% lower | below the bar: stops at R2 |
+| Outlier detection, ADBench mean AUROC | 0.77 | 0.663 | **0.756**: the density under 32 random contexts of 64 rows | **0.759** with trained reference rows; **0.774** as the mean rank of the two scores | at the bar with a score chosen after the pilot: to the user |
+| Imputation | none | D4 measured | — | — | to the user |
+| Treatment effects | none | D5 measured | — | — | to the user |
 
-- **Outlier detection gains 0.092 AUROC from inference alone.** Scoring each row under many small random contexts and averaging the log densities raises ADBench from 0.663 to 0.756, above IsolationForest (0.722) and the TabPFN v2 extension (0.704), and it removes D3's failure on a dense group at 2% (0.425 to 0.987). It stops 0.014 short of the bar.
-- **No forecasting arm is better than today's recipe.** The two parts of the recipe that cap a forecast at the context's range are confirmed on D1, but removing them costs 2.2% to 2.6% of fev-bench's SQL. A straight-line trend fitted outside the model reaches the least-squares fit on D1's linear trends (MASE 0.37 instead of 11.75) and costs 3.5% on fev-bench: one task improves by 31% and another gets 41% worse.
+Tier 1, without training:
+
+- **Outlier detection gains 0.092 AUROC from inference alone.** Scoring each row under many small random contexts and averaging the log densities raises ADBench from 0.663 to 0.756, above IsolationForest (0.722) and the TabPFN v2 extension (0.704), and it removes D3's failure on a dense group at 2% (0.425 to 0.987).
+- **No forecasting arm is better than today's recipe.** The parts of the recipe that hold a forecast inside the context's range are confirmed on D1, but removing them costs 2.2% to 2.6% of fev-bench's SQL. A straight-line trend fitted outside the model reaches the least-squares fit on D1's linear trends (MASE 0.37 instead of 11.75) and costs 3.5% on fev-bench: one task improves by 31% and another gets 41% worse.
 - **The v2 candidate's weights are v1.1 on every task suite**, as predicted, with one exception that D4 found: they use a missing cell as information. Where a mask tells about the cell to impute they are 14% better than v1.1, and where it only looks as if it did they are 9% worse.
 - **Three predictions of the derivations failed** and are corrected in [v2-task-formulations.md](v2-task-formulations.md): reference rows do not fail on a small dense group, the rare-class output is the class's share of the context only for two classes, and the context-row target scale may raise the trend capture by itself (section "Derivations against the measurements").
-- **Cost:** 11.6 H100-h in 35 jobs, against an estimate of about 20.
+
+Tier 2, a fine-tuning of the candidate on task-shaped tables alone:
+
+- **2.3 H100-h on one GPU are enough to teach both tasks.** After 2,000 steps at batch 32 the model continues a trend (D1's linear trend: MASE 12.5 to 0.66, where the least-squares fit has 0.37 and seasonal naive 3.67) and ranks a dense group in the context above the inliers at every contamination up to 20% (D3: 1.00, where the starting weights fall from 0.88 to 0.24). On the benchmarks that is 5.0% of fev-bench's SQL (Elo 1538 to 1582) and 0.088 AUROC on ADBench with reference rows (0.664 to 0.752).
+- **Eight times the tables add little, and for forecasting nothing.** The probe (8 H100, batch 256) has 0.759 on ADBench and a forecast that overshoots: on fev-bench it is behind the pilot (SQL 3.8% lower than the start, Elo 1519).
+- **Neither bar is reached by a planned score.** Forecasting is 125 Elo short at best. Outlier detection is 0.011 short with the trained reference rows, and 0.004 above with the mean rank of the trained reference rows and the small-context density, a score that was added after the pilot's results were seen.
+- **What the fine-tuning does to ordinary tables was not measured.** The fine-tuned weights saw task-shaped tables only and are not candidates for release; the TabArena guard belongs to tier 3.
+
+**Cost:** 39.1 H100-h (tier 1 11.6 in 35 jobs, tier 2 27.6 in 18 jobs), against estimates of about 20 and 22. The cap is 500.
 
 ## Reading point R1
 
@@ -31,6 +41,20 @@ Two things the rule does not ask, stated because they bear on what the probe can
 
 - For forecasting, tier 1 lowers the expectation. What fails on D1 is the trend, and neither of the two inference changes that repair D1 helps fev-bench: with a line one task of ten improves by more than 2% (rohlik_orders_1D, by 31%) and six get worse by 2% to 41%. The probe trains the model on the same thing, a continuation beyond the context. The bar is the rating of TimesFM-2.5, which has a lower SQL than TabSil on 7 of the 10 tasks.
 - For outlier detection, the probe trains the reference-row form, whose value without training is 0.665. The best score without training, 0.756, is another form (the density) and is not what the probe trains.
+
+## Reading point R2
+
+The rule (plan, section 5): a task whose probe is at or above the bar is in the branch of tier 3; a task below stops; if no task is left, the plan ends without tier 3.
+
+- **Forecasting: stops.** The best is the pilot's weights with today's recipe, SQL Elo 1582, 125 below the bar; the probe's weights have 1519. The gain that is there is 4% to 5% of the SQL, on four of the ten tasks.
+- **Outlier detection: not settled by the rule.** With the form the probe trains, reference rows, the probe's weights have 0.759, and with the best wrapper of tier 1 0.757: both below 0.77. The mean rank of the two has 0.774. It was not among the scores the plan named for this reading, it was added after the pilot showed the two scores strong on different tables, and its margin over the bar (0.004) is smaller than its standard error against either score alone (0.011 and 0.015).
+- **Tier 3 is not started.** Forecasting has stopped; whether outlier detection is "at the bar" depends on a score chosen after the fact; and the GPU setup of tier 3 is the user's decision in any case (plan, section 12).
+
+What tier 2 says about tier 3, beyond the rule:
+
+- The plan's branch (10,000 steps of stage 2 with 10% task-shaped tables, 223 H100-h) was sized before it was known how quickly these tables teach. The pilot got its results in 2,000 steps at batch 32: 32,000 tables per task. The branch would show the model 128,000 per task, the probe showed 256,000 and was not better.
+- For outlier detection, the branch's possible gain over the inference change of tier 1 is small: 0.756 (no training) against 0.759 to 0.774 (trained), except under heavy contamination with a dense group, where reference rows hold at 20% (D3: 1.00) and the small-context density does not (0.78).
+- A fine-tuning of the candidate on a mix of ordinary and task-shaped tables, a few thousand steps, would test the same question as the branch (the task gains in one model, under the TabArena guard) at a tenth to a fifth of its cost, with the guard read against the weights it starts from. It is not in the plan and was not run.
 
 ## Tier 1
 
@@ -234,6 +258,141 @@ Two control seeds (C) and the two seeds trained with the context-row target scal
 - The direction is against the prediction: both scaled seeds are above both control seeds in the `plain` arm, on the linear trend and on the mean over all trend cells. The sorted-split tables of tier 2 carry the context-row scale, so the probe cannot tell the scale from the sorting. If the probe's trend capture rises, a run with the scale alone is the control it lacks.
 - These stage-1 weights of 30,000 steps capture a trend better than v1.1 (−0.71 in the `plain` arm), and two seeds of one recipe differ by 0.5: D1's trend capture is a noisy reading of a training.
 
+## Tier 2
+
+The probe is a short fine-tuning of the v2 candidate (#14's run) on task-shaped tables alone. Its weights are not for release: with every table task-shaped it is the best case for a prior that mixes such tables in at a small share.
+
+### The tables
+
+`graph_scm_task_probe` (`priors/transforms/tasks.py`) is `graph_scm_hicard_missing`, the prior of the weights it starts from, with two options at 1.
+
+**Sorted split** (every regression table). The rows are ordered by one column before the cut, ascending or descending, so the eval rows lie beyond the train rows in that column, and the target is standardized with the train rows as inference does (clipped at 20). Two things were added to the plan's smallest form after a sample of the tables showed what it gives:
+
+- With a random ordering column the eval targets rarely leave the train targets' range: in 39 sampled tables the median share of eval targets beyond it was 0, and the eval targets' mean lay 0.23 train standard deviations from the train mean. Such a table asks for no continuation. So half of the tables are ordered by the column with the largest rank correlation to the target (median over tables 0.50); there the eval mean lies 0.65 standard deviations off, 1.6 in a quarter of the tables.
+- In half of the tables the ordering column is replaced by the row index, which is what a forecaster's running index is.
+- A third of the prior's regression tables have no column with enough distinct values to order by and stay as they are.
+
+**Outlier table** (every classification table). The train rows are data rows labeled 0 and reference rows labeled 1 (20% to 50% of them; uniform in the data rows' padded bounding box, or the data rows' columns drawn independently, half each). A share of the data rows are hidden anomalies: none with probability 0.1, else U(0, 0.4). The eval rows are held-out data rows with their true label, half of them anomalies. The anomalies of a table are of one kind: the rows of whole classes of the SCM table, rows with a few columns moved, a tight group off the bulk, uniform rows, or rows whose columns are taken from different rows.
+
+- The contaminated context and the balanced queries follow TACTIC (arXiv 2603.14171, Section 3: "the number of anomalies is sampled uniformly from [0.05,0.3] times the number of nominal points", or none; "equal numbers of nominal and anomalous samples") and ICLAD (arXiv 2603.19497, Section 4.1: "The anomaly ratio is sampled uniformly from [0,0.4]"). Whole classes as anomalies are TACTIC's first prior and ICLAD's structural anomalies. Both were read for this in the papers' text. Neither has reference rows: both end in an output of their own.
+- Drawing a table takes 0.09 s against 0.07 s for the base prior (median of 24 tables of each task at the pilot's sizes).
+
+### 2.1 Pilot
+
+One H100, 2,000 steps at batch 32 with stage 2's settings (lr 1e-4, 1% warmup, micro batch 1), tables of 400 to 2,048 rows, from #14's weights and borders. 2.26 H100-h (estimate 3).
+
+- **The table code does not stall:** waiting for tables took 0.2% to 2.0% of a 50-step window, and a step took 3.8 s.
+- The loss on the outlier tables fell from 1.50 in the first 50 steps to 0.21. The loss on the sorted tables stayed at 0.10 to 0.13 from the first window to the last.
+
+**D1**, #14's run against the pilot's weights (mean of 4 series seeds; MASE):
+
+| Arm | Weights | Linear 15: trend capture | Linear 15 | Exponential 15 | Piecewise 15 | Linear 5 | No trend | Mean of the 9 trend cells |
+|---|---|---|---|---|---|---|---|---|
+| default | #14's run | −1.50 | 12.76 | 5.00 | 4.93 | 3.75 | 0.511 | 3.84 |
+| default | pilot | 0.42 | 2.97 | 3.55 | 3.77 | 0.90 | 0.513 | 1.77 |
+| `no-target-power` | #14's run | −1.44 | 12.46 | 4.97 | 4.68 | 3.71 | 0.510 | 3.77 |
+| `no-target-power` | pilot | 0.93 | **0.66** | **2.21** | **1.53** | 0.71 | 0.513 | **1.07** |
+| `plain8` | #14's run | −0.97 | 10.25 | 4.31 | 3.96 | 2.99 | 0.514 | 3.19 |
+| `plain8` | pilot | 1.05 | 0.71 | 2.00 | 2.58 | 0.95 | 0.516 | 1.16 |
+| seasonal naive | — | — | 3.67 | 4.36 | 4.59 | 1.62 | 0.858 | 2.25 |
+| least squares on index and seasonal terms | — | — | 0.37 | 7.43 | 11.53 | 0.49 | 0.513 | 3.34 |
+
+- **The model now continues a trend.** The trend capture on the linear trend goes from −1.4 to 0.9 without the cap, on every one of the four series seeds (−1.68 to −1.24 before, 0.82 to 1.05 after; the seeds' spread is 0.4). The MASE falls from 12.5 to 0.66. At strength 15 it is below seasonal naive on all three trend kinds, and on the exponential and the piecewise trend below the least-squares fit too, which has only a line for the trend.
+- With the default recipe the cap still holds the forecast at the context's range (largest forecast minus largest context value 0.03), and the gain is smaller: 12.76 to 2.97.
+- The series without a trend is unchanged (0.51).
+- With `standard` members only the forecast overshoots a change of slope: on the piecewise trend the largest forecast is 45 above the context's largest value where the truth is 14, and the MASE is 2.58 against 1.53 with the default members.
+
+**D3**, reference rows as the score (AUROC, mean of 3 seeds):
+
+| Outliers | Share in the context | `ref-uniform`: #14's run | `ref-uniform`: pilot | `ref-marginals`: #14's run | `ref-marginals`: pilot | density: pilot |
+|---|---|---|---|---|---|---|
+| dense group | 2% | 0.875 | 1.000 | 0.404 | 0.997 | 0.460 |
+| | 5% | 0.698 | 1.000 | 0.381 | 0.998 | 0.423 |
+| | 10% | 0.479 | 1.000 | 0.264 | 0.998 | 0.432 |
+| | 20% | 0.242 | 0.999 | 0.364 | 0.999 | 0.450 |
+| curve | 2% | 0.985 | 1.000 | 0.571 | 0.978 | 0.791 |
+| | 5% | 0.954 | 0.999 | 0.372 | 0.985 | 0.351 |
+| | 10% | 0.881 | 0.996 | 0.314 | 0.963 | 0.116 |
+| | 20% | 0.742 | 0.876 | 0.158 | 0.796 | 0.085 |
+
+- **A dense group in the context no longer hides.** With reference rows the group is ranked above the inliers at every contamination up to 20%, where the starting weights fall from 0.88 to 0.24. The three seeds at 2% are 1.000 each (0.865, 0.785 and 0.974 before).
+- The density score of the same weights still fails on the group (0.42 to 0.46) and is a little higher on the curve: the fine-tuning does not ask for it.
+
+**By the plan's rule both tasks are in the probe:** each diagnostic moved by several times its seeds' spread.
+
+The pilot's weights on the two benchmarks, which the plan did not ask for at this point (1.1 H100-h, as an early reading for the probe):
+
+| Benchmark | Wrapper | #14's run | Pilot |
+|---|---|---|---|
+| ADBench, mean AUROC | `ref-uniform` | 0.664 | **0.752** (+0.088 ± 0.036 over tables, 10 of 12 better) |
+| | `ref-marginals` | 0.526 | 0.687 |
+| fev-bench, SQL Elo | default recipe | 1538 | **1582** (+193/−100) |
+| | `plain8` | — | 1562 (+187/−113) |
+| fev-bench, task-mean SQL against #14's run with the default recipe | default recipe | 1 | **0.950** |
+| | `plain8` | — | 0.965 |
+| fev-bench, MASE Elo | default recipe | 1473 | 1557 |
+
+- On fev-bench the default recipe is again the better one: the tasks that gain are the same under both (rohlik_orders_1D 0.72 and 0.67, us_consumption_1M 0.87 and 0.86, ercot_1D 0.95 and 0.94), and without the target transform ecdc_ili loses 20% as it did before the fine-tuning.
+- On ADBench two tables lose with the trained reference rows: annthyroid 0.87 to 0.78 and mammography 0.82 to 0.68.
+
+### 2.2 Probe
+
+One node of 8 H100, 2,000 steps at batch 256, otherwise as the pilot (seed 12): 256,000 tables per task, eight times the pilot's. 21.4 H100-h (estimate 16; the plan's check was 21).
+
+- A step took 4.43 s, against the pilot's 3.8 s for the same 32 tables per GPU: every step waits for the slowest of the 8 GPUs.
+- The loss on the outlier tables ended at 0.20 (pilot 0.21), and the loss on the sorted tables at 0.11, as in the pilot.
+
+### 2.3 The probe's weights
+
+**D1** (MASE; mean of 4 series seeds):
+
+| Arm | Weights | Linear 15: trend capture | Linear 15 | Exponential 15 | Piecewise 15 | Linear 5 | No trend | Mean of the 9 trend cells | Piecewise 15: largest forecast minus largest context value (truth 14.1) |
+|---|---|---|---|---|---|---|---|---|---|
+| default | #14's run | −1.50 | 12.76 | 5.00 | 4.93 | 3.75 | 0.511 | 3.84 | 0.1 |
+| default | pilot | 0.42 | 2.97 | 3.55 | 3.77 | 0.90 | 0.513 | 1.77 | 0.1 |
+| default | probe | 0.42 | 2.96 | 3.48 | 3.72 | 0.92 | 0.513 | 1.74 | 0.1 |
+| `no-target-power` | #14's run | −1.44 | 12.46 | 4.97 | 4.68 | 3.71 | 0.510 | 3.77 | 4.4 |
+| `no-target-power` | pilot | 0.93 | 0.66 | 2.21 | 1.53 | 0.71 | 0.513 | 1.07 | 12.8 |
+| `no-target-power` | probe | 1.10 | 0.79 | 1.86 | 1.82 | 1.22 | 0.512 | 1.11 | 32.8 |
+| `plain8` | #14's run | −0.97 | 10.25 | 4.31 | 3.96 | 2.99 | 0.514 | 3.19 | 5.8 |
+| `plain8` | pilot | 1.05 | 0.71 | 2.00 | 2.58 | 0.95 | 0.516 | 1.16 | 45.0 |
+| `plain8` | probe | 1.26 | 1.43 | 4.00 | 5.87 | 1.56 | 0.517 | 1.88 | 62.2 |
+
+- **Eight times the tables do not improve D1, and they make the forecast overshoot.** With the default members and no target transform the probe is where the pilot is (mean of the trend cells 1.11 against 1.07). Its trend capture is above 1, and with `standard` members only it is 1.26 on the linear trend and 1.8 on the piecewise one, where the MASE (5.87) is back above seasonal naive (4.59).
+- With the default recipe the cap hides the difference: pilot and probe agree to 0.07.
+
+**D3:** as the pilot. Reference rows rank the dense group above the inliers at every contamination (uniform 1.000, 1.000, 1.000, 0.998 at 2%, 5%, 10% and 20%; shuffled columns 0.997 to 0.999), and the curve at 1.000, 0.998, 0.995 and 0.857.
+
+**fev-bench** (the ratio is the geometric mean over tasks of the task-mean SQL over that of #14's run with the default recipe, SQL Elo 1538):
+
+| Weights | Arm | SQL Elo | MASE Elo | SQL ratio | Tasks better, of 10 | Changes above 3% |
+|---|---|---|---|---|---|---|
+| pilot | default | **1582** (+193/−100) | 1557 | **0.950** | 5 | rohlik_orders_1D 0.72, us_consumption_1M 0.87, ercot_1D 0.94, redset_1H 0.96 |
+| pilot | `plain8` | 1562 (+187/−113) | 1496 | 0.965 | 4 | rohlik_orders_1D 0.67, us_consumption_1M 0.86, ercot_1D 0.94, epf_be 1.05, ecdc_ili 1.20 |
+| probe | default | 1519 (+198/−106) | 1532 | 0.962 | 6 | rohlik_orders_1D 0.75, us_consumption_1M 0.93, ercot_1D 0.94, redset_1H 0.96, solar_with_weather_1H 0.97, ecdc_ili 1.09 |
+| probe | `no-target-power` | 1460 (+163/−100) | 1519 | 0.997 | 4 | rohlik_orders_1D 0.77, us_consumption_1M 0.94, ercot_1D 0.94, epf_be 1.09, ecdc_ili 1.26 |
+| probe | `plain8` | 1507 (+151/−82) | 1525 | 0.979 | 5 | rohlik_orders_1D 0.71, us_consumption_1M 0.85, ercot_1D 0.93, hospital 1.03, epf_be 1.06, ecdc_ili 1.34 |
+
+- **The fine-tuning is worth 4% to 5% of fev-bench's SQL with the default recipe**, eight to ten times the noise between two trainings (0.5%, item 1.1). The tasks that gain are the same in every run: rohlik_orders_1D by a quarter, us_consumption_1M, ercot_1D and redset_1H.
+- **The probe is not ahead of the pilot.** Its SQL ratio is 0.962 against 0.950, and ecdc_ili, which the pilot left where it was, is 9% worse.
+- The Elo follows the count of methods passed per task, not the size of the gains: against the seven other methods on ten tasks TabSil has the lower SQL in 41 of 70 comparisons with #14's weights, 44 with the pilot's and 39 with the probe's.
+- The default recipe stays the best arm for the fine-tuned weights. Without the target transform ecdc_ili loses 26% to 34%.
+- **The bar of 1707 is not reached:** the best is 1582.
+
+**ADBench** (mean AUROC over the 36 cells; the difference to #14's run is the mean over tables with its standard error):
+
+| Score | #14's run | Pilot | Probe | Probe minus #14's run | Tables better, of 12 |
+|---|---|---|---|---|---|
+| `ref-uniform`, the form the probe trains | 0.664 | 0.752 | **0.759** | +0.096 ± 0.036 | 11 |
+| `ref-marginals` | 0.526 | 0.687 | 0.733 | +0.207 ± 0.053 | 12 |
+| `ctx64`, the best score of tier 1 | 0.756 | — | 0.757 | +0.001 ± 0.005 | 6 |
+| mean rank of `ctx64` and `ref-uniform` | 0.733 | — | **0.774** | +0.042 ± 0.014 | 10 |
+
+- **The trained reference rows reach 0.759**, from 0.664, and are 0.011 below the bar. Eight times the pilot's tables add 0.007 to the uniform reference and 0.046 to the shuffled-column one.
+- The density under small contexts does not change with the fine-tuning, as expected: 0.757.
+- The two scores are strong on different tables (reference rows on shuttle 0.99, Wilt 0.82, fault 0.67 and landsat 0.60; the density on cover 0.97 and annthyroid 0.87), and the mean of their ranks gives **0.774**: above the bar by 0.004, with 0.781, 0.773 and 0.769 on the three splits. It is ahead of the density alone by 0.017 ± 0.011 over tables and of the reference rows alone by 0.015 ± 0.015.
+- **This arm was added after the pilot's results had shown the two scores to differ by table**, so it was chosen on the tables it is scored on. With the starting weights the same mean of ranks is below the density alone (0.733 against 0.756): the gain comes with the trained reference rows.
+
 ## Derivations against the measurements
 
 | Prediction (formulations) | Measured | Verdict |
@@ -250,6 +409,8 @@ Two control seeds (C) and the two seeds trained with the context-row target scal
 | The effect error grows as overlap shrinks (section 6) | +26% (S), +32% (T) | holds |
 | A class with 1 to 3 context rows gets its share of the context, below the posterior (section 2) | one context row among 200 or more: 1.02 to 1.06 of the share with 2 classes, 0.55 to 0.60 with 3, 1.5 to 2.1 with 10 | holds for 2 classes, **fails** for 10 |
 | The context-row target scale alone does not change the trend capture (plan, 1.7) | scaled seeds 0.41 and 0.55, controls −0.21 and 0.26 | not resolved; the direction is against it |
+| Forecasting needs a prior whose queries lie beyond the context, with the context-row scale; no change of loss or structure (section 3) | after 2,000 steps on sorted tables the trend capture on D1 is 0.93 and the MASE 0.66 (12.5 before) | holds |
+| Reference rows with hidden outliers in the training tables make the output the outlier probability; the decoder can express it (section 4, "in principle, not demonstrated") | D3's group 1.00 at every contamination to 20%; ADBench 0.664 to 0.759 | holds on D3; on ADBench the gain is the overlap of the prior's anomaly kinds with the tables', as the section says |
 
 What the three failures change:
 
@@ -270,7 +431,17 @@ What the three failures change:
 | 1.7 D1 on four sets of phase 1B's weights | 4 | 0.11 | 0.4 |
 | **Tier 1** | **35** | **11.57** | **about 20** |
 
-Counted from the job records (`duration_seconds` of every job, one H100 each). 15 more jobs failed within a second of being submitted, because the workspace allows 8 `GPU_1xH100` nodes at a time; they used no GPU time and were submitted again one by one.
+| 2.1 pilot | 1 | 2.26 | 3 |
+| 2.1 the pilot's weights on D1, D3, ADBench with reference rows and fev-bench with two arms | 5 | 1.07 | — (D1 and D3 were planned; the benchmarks were added) |
+| 2.2 probe (8 H100) | 1 | 21.40 | 16; the plan's check was 21 |
+| 2.3 the probe's weights on D1, D3, fev-bench with three arms, ADBench with three scores | 7 | 2.12 | 2.5 |
+| controls: #14's run on the arms that tier 1 had only for v1.1 | 4 | 0.71 | — |
+| **Tier 2** | **18** | **27.55** | **about 22** |
+| **Total** | **53** | **39.12** | **about 42** |
+
+Counted from the job records (`duration_seconds` of every job, times its GPUs). 15 more jobs failed within a second of being submitted, because the workspace allows 8 `GPU_1xH100` nodes at a time; they used no GPU time and were submitted again one by one.
+
+The probe cost 34% more than its estimate. Its first 200 steps projected 21.3 H100-h against the plan's check of 21, and the run was left to finish: the pilot had by then raised what the probe could be expected to show, and a job in progress can only be cancelled by the user. The user was told when the projection was made.
 
 ## Differences from the plan
 
@@ -279,6 +450,9 @@ Counted from the job records (`duration_seconds` of every job, one H100 each). 1
 - **1.3:** context sizes of 16, 32 and 128 rows were added after the first results. The best size, 64, is one of the plan's two. Each small-context run also records the median and the mean-density readings of the same evaluations, and D3 has the whole context read the same way as a control.
 - **1.4:** Gaussian tables with known values replace the prior tables, since on a prior table the value a fit converges to is not known. The third mechanism is measured in two forms.
 - **1.5:** the tables come from a random-network generator in the script, where the effect is known, not from the training prior. All three sets of weights were run.
+- **2.x, the sorted split:** half of the tables are ordered by the column the target follows most, and in half the ordering column is the row index. Both were added to the plan's smallest form before the pilot, after a sample of the tables showed that a random ordering column rarely puts an eval target beyond the train targets.
+- **2.1:** the pilot's weights were also run on fev-bench and on ADBench with reference rows (0.96 H100-h), as an early reading for the probe.
+- **2.3:** the mean rank of two outlier scores was added as an arm after the pilot's results; "Reading point R2" says what that means for its number. The arms of tier 1 were run on #14's weights as the fine-tuning's control, since tier 1 had them for v1.1 only.
 
 ## Runs
 
@@ -302,14 +476,24 @@ MLflow experiment `tabsil`; every job ran on one H100. The v1.1 references are t
 | 1.6 | `tabsil-pt1-v11-d2-rare` | `5282cbcfc3814c14bd8205277506c4e2` |
 | 1.7 | `tabsil-pt1-1b-c-s0-d1`, `-c-s1-d1`, `-yctx-s0-d1`, `-yctx-s1-d1` | `7849691f36364b409eb60172fb0681f5`, `f3de079cb0664b7a8d0c86f6480fcc8f`, `19a14157344045a5baf35fd1980bc7b3`, `304df0fb49d841d6b29d1141c78326f0` |
 
-The code of the runs is this branch at `df0da5b`, and at `dd718b9` for the 16- and 32-row contexts on ADBench and the 16-, 32- and 128-row contexts on D3. The runs of 1.1 on the four suites used the evaluation code of `0fd0cf6`.
+| 2.1 | `tabsil-pt2-pilot` (training) | `485af41601ff457088ddd86fb4156574` |
+| 2.1 | `tabsil-pt2-pilot-d1`, `-d3`, `-adbench-ref`, `-fev-default`, `-fev-plain8` | `2e47e2b9a92b4d9ca57bfc168e144f53`, `347ebf763fdd4f179511efd71ad7e435`, `363fdffcbde848d2b0b66a324670f996`, `35c34c3b793946359fc1d80b8ec8cac2`, `29566bb8a11044198d9f6534ecb5cc48` |
+| 2.2 | `tabsil-pt2-probe` (training) | `615704d802054102a3e2351d79cfad69` |
+| 2.3 | `tabsil-pt2-probe-d1`, `-d3`, `-adbench-ref`, `-adbench-ctx64` | `f820ae141839441f808704cf80fe6fa3`, `84a42ca73d314aa3bed6fb437c35ec01`, `f440f4f06c464f9da5cfa35369736103`, `a050b61d4b9b43d8a4a5ae963c5f3290` |
+| 2.3 | `tabsil-pt2-probe-fev-default`, `-fev-no-target-power`, `-fev-plain8` | `152a3f8b735f4204827a0fb5a133c913`, `743fc16736044a3994f066336cd73ded`, `578d02694c874b26b451e1492ac7f876` |
+| controls | `tabsil-pt2-prior14-d1-arms`, `-d3-ref`, `-adbench-ref`, `-adbench-ctx64-ref` | `7bbb939b78a8452eae867ea90bdae7a9`, `26f1e9b60f4648eeb169663052ddf75d`, `20076a89b35043d89580ba00e94ac098`, `4a2e14fe5ad84df0a2734e93b9054c7d` |
+
+The code of the tier-1 runs is the tier-1 branch at `df0da5b`, and at `dd718b9` for the 16- and 32-row contexts on ADBench and the 16-, 32- and 128-row contexts on D3. The runs of 1.1 on the four suites used the evaluation code of `0fd0cf6`. The pilot, the probe and their evaluations ran the tier-2 branch at `819d66c`; the two ADBench runs with the mean rank ran `b85bf10`.
 
 ## For the user to decide
 
-Nothing here is adopted or released by the plan.
+Nothing here is adopted or released by the plan. No run is waiting.
 
-1. **The small-context outlier score.** It is an inference change with the v1.1 weights: ADBench 0.663 to 0.756, D3's group 0.43 to 0.99, in less time than today's score. It is behind today's score on 4 of the 12 tables, by 0.001 to 0.07. Releasing it as `TabSilUnsupervised`'s outlier score, as an option, or not at all is the user's decision.
-2. **Whether the probe should keep outlier detection.** The rule sends it on. What the probe would add is the last 0.014 to the bar, by a form (reference rows) that starts at 0.665.
+1. **What follows tier 2.** The options, with what is known of each:
+   - **Stop here.** Forecasting has stopped by the rule, and outlier detection is at its bar only with a score chosen after the pilot. Cost: none. What stays is item 2 below.
+   - **The plan's branch (tier 3), 223 to 232 H100-h.** One model with 10% task-shaped tables, read against the TabArena guard. Expected on ADBench: at most the probe's 0.759 with reference rows and 0.774 as the mean rank (measured for task-shaped tables alone; at a share of 10% unknown), which is 0.003 to 0.018 above the inference change of tier 1. Expected on fev-bench: at most the pilot's 5% of SQL (measured), 125 Elo below the bar. TabArena: unknown.
+   - **A short fine-tuning of the candidate on a mix of ordinary and task-shaped tables, about 25 to 50 H100-h with its evaluations.** Not in the plan. It asks the branch's question, the task gains in one model under the guard, at the scale the pilot showed to be enough. Expected: the pilot's task numbers if a mix keeps them, and a guard reading paired against the starting weights; both unknown until run.
+2. **The small-context outlier score.** It is an inference change with the v1.1 weights: ADBench 0.663 to 0.756, D3's group 0.43 to 0.99, in less time than today's score. It is behind today's score on 4 of the 12 tables, by 0.001 to 0.07. Releasing it as `TabSilUnsupervised`'s outlier score, as an option, or not at all is the user's decision, and it does not depend on item 1.
 3. **What follows D4.** The candidate's prior teaches the model to read a missing cell as information. That is worth 14% where the mask is informative and costs 9% where it is not, and a table does not say which it is. The choice between the two priors for imputation is a choice of what to assume about real masks.
 4. **What follows D5.** The S-learner's error grows by a quarter between a randomized experiment and a clip of 0.02 and stays below the T-learner's. The plan trains nothing for effects.
-5. **A trend rule for forecasting.** One line over the whole context helps one task of ten and costs 3.5% overall. A rule that decides per series, or fits the recent part of the context only, is not in the plan and was not run.
+5. **The forecasting recipe after a fine-tuning.** With fine-tuned weights the default recipe is still the best on fev-bench, and on D1 the members without the target transform are far better (MASE 0.66 against 2.97). A recipe that keeps the transform's gain (ecdc_ili loses 20% to 34% without it) and drops its cap was not tried.

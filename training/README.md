@@ -4,7 +4,7 @@ Training, the synthetic-data prior, and the benchmark evaluation of [TabSil](../
 
 | Path | Contents |
 |---|---|
-| `src/tabsil_train/priors/` | the TabICLv2 graph SCM prior (`tabicl` package), table size rules, transforms; `graph_scm_hicard_missing` adds high-cardinality categorical columns and structured missing values, and `graph_scm_realism` adds Kumo-Tabular's other realism parts on top; `graph_scm_base_realism` has only Kumo-Tabular's every-stage parts (`--prior-type`) |
+| `src/tabsil_train/priors/` | the TabICLv2 graph SCM prior (`tabicl` package), table size rules, transforms; `graph_scm_hicard_missing` adds high-cardinality categorical columns and structured missing values, and `graph_scm_realism` adds Kumo-Tabular's other realism parts on top; `graph_scm_base_realism` has only Kumo-Tabular's every-stage parts; `graph_scm_task_probe` makes every table task-shaped (rows ordered by one column before the cut; data rows with hidden anomalies against reference rows) for the short fine-tuning of `docs/v2-prior-task-results.md`, not for a model to release (`--prior-type`) |
 | `src/tabsil_train/training/` | training config (`TrainConfig`), the training loop, Muon (and Muon + AdamW), the reference validation set, losses, stability, diagnostics |
 | `src/tabsil_train/benchmarks/` | the benchmarks, one folder per task: `tabular/` (AMLB / CTR23, TabArena, BeyondArena, uncertainty metrics), `forecast/` (fev-bench), `unsupervised/` (ADBench, imputation), `causal/` (IHDP, ACIC 2016) |
 | `src/tabsil_train/recipe.py` | the TabICLv2 three-stage curriculum (`curriculum(stage)`) |
