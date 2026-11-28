@@ -39,6 +39,7 @@ env_variables:
   FEV_WINDOWS: ""
   ADBENCH_ARMS: iforest
   ADBENCH_DATASETS: ""
+  ADBENCH_COMBINE: ""
   D4_PARTS: gaussian,suite
   D4_TABLES: ""
   D4_BASELINES: "0"

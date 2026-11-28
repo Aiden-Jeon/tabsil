@@ -7,6 +7,10 @@ rows. `iforest` is the suite's IsolationForest, as a check that the splits are t
 `ADBENCH_DATASETS` the tables (default: all 12). One row per (table, split, arm) goes to
 `adbench_arms.csv` as it is computed; the mean AUROC per arm over the 36 cells is the number the
 suite reports as its mean.
+
+`ADBENCH_COMBINE` (arm names joined by `+`, for example `ctx64+ref-uniform`) adds an arm that is
+the mean of those arms' ranks of the test rows (`rank_mean`): two scores of different kinds, a
+density and a class probability, have no common scale, and their ranks do.
 """
 
 from __future__ import annotations
@@ -25,8 +29,17 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from tabsil_train.benchmarks.unsupervised import adbench
 
 
+def rank_mean(scores: list[np.ndarray]) -> np.ndarray:
+    """The mean over `scores` of each row's rank within its score (ties share their mean rank),
+    divided by the row count: higher = more anomalous, as the scores."""
+    from scipy.stats import rankdata
+
+    return np.mean([rankdata(s) / len(s) for s in scores], axis=0)
+
+
 def main() -> None:
     names = [a for a in os.environ.get("ADBENCH_ARMS", "iforest").split(",") if a]
+    combine = [a for a in os.environ.get("ADBENCH_COMBINE", "").split("+") if a]
     datasets = [d for d in os.environ.get("ADBENCH_DATASETS", "").split(",") if d]
     datasets = datasets or list(adbench.DATASETS)
     model, borders = load_model()
@@ -43,9 +56,17 @@ def main() -> None:
         X, y = adbench.load(dataset)
         for split, seed in adbench.SPLITS.items():
             X_train, X_test, _, y_test = adbench.adbench_split(X, y, seed)
-            for name in names:
+            cell: dict[str, np.ndarray] = {}
+            for name in [*names, "+".join(combine)] if combine else names:
                 t0 = time.time()
-                scores = scorers[name](X_train, X_test, seed)
+                if combine and name == "+".join(combine):
+                    missing = sorted(set(combine) - set(cell))
+                    if missing:
+                        sys.exit(f"ADBENCH_COMBINE names arms that were not computed: {missing}")
+                    scores = {name: rank_mean([cell[a] for a in combine])}
+                else:
+                    scores = scorers[name](X_train, X_test, seed)
+                    cell |= scores
                 seconds = round(time.time() - t0, 1)
                 for arm, s in scores.items():
                     s = np.asarray(s, dtype=float)

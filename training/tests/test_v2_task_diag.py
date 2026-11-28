@@ -430,6 +430,21 @@ def test_adbench_arms_runner(diag, monkeypatch, capsys):
     assert list(rows.split) == ["s1", "s1", "s2", "s2", "s3", "s3"]
     assert rows[rows.arm == "iforest"].auroc.min() > 0.95
     assert "mean over 3 cells" in capsys.readouterr().out
+    # the mean rank of two arms as a third
+    monkeypatch.setenv("ADBENCH_COMBINE", "iforest+ref-marginals")
+    monkeypatch.setenv("ADBENCH_DATASETS", "cardio")
+    runner.main()
+    rows = pd.read_csv(diag.out / "adbench_arms.csv")
+    assert list(rows.arm[:3]) == ["iforest", "ref-marginals", "iforest+ref-marginals"]
+    assert rows[rows.arm == "iforest+ref-marginals"].auroc.between(0.5, 1.0).all()
+    np.testing.assert_allclose(
+        runner.rank_mean([np.array([1.0, 3.0, 2.0]), np.array([0.2, 0.1, 0.1])]),
+        [(1 + 3) / 6, (3 + 1.5) / 6, (2 + 1.5) / 6],
+    )
+    monkeypatch.setenv("ADBENCH_COMBINE", "iforest+ctx64")
+    with pytest.raises(SystemExit, match="not computed"):
+        runner.main()
+    monkeypatch.delenv("ADBENCH_COMBINE")
     monkeypatch.setenv("ADBENCH_ARMS", "lof")
     with pytest.raises(SystemExit, match="unknown ADBENCH_ARMS"):
         runner.main()

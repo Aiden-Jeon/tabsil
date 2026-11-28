@@ -19,7 +19,7 @@ DEFAULT = ("d1_forecast", "d2_calibration", "d3_contamination")
 DIAGNOSTICS = (*DEFAULT, "d2_rare_class", "d4_missing", "d5_overlap", "fev_arms", "adbench_arms")
 SETTINGS = (
     "D1_ARMS", "D3_ARMS", "D3_KINDS", "D4_PARTS", "D4_TABLES", "D4_BASELINES", "FEV_ARM",
-    "FEV_TASKS", "FEV_WINDOWS", "ADBENCH_ARMS", "ADBENCH_DATASETS",
+    "FEV_TASKS", "FEV_WINDOWS", "ADBENCH_ARMS", "ADBENCH_DATASETS", "ADBENCH_COMBINE",
 )  # fmt: skip
 
 

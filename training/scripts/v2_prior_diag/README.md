@@ -32,7 +32,7 @@ The checks of tier 1 of [`training/docs/v2-prior-task-plan.md`](../../docs/v2-pr
 | `d4_missing.py` | How does the imputation error change when cells are not missing completely at random? Five mechanisms at one rate (completely at random, by another column, another column's mask by the cell to impute in the rows that observe it and in every row, self-masking), on Gaussian tables where the value a fit on the complete cases converges to is known, and on the imputation suite's tables against MissForest and the mean | `D4_PARTS`, `D4_TABLES`, `D4_BASELINES` |
 | `d5_overlap.py` | How does the error of the S-learner's and the T-learner's effect estimates grow as the propensity's clip shrinks from 0.5 to 0.02, on tables with a known effect? | — |
 | `fev_arms.py` | The forecasting suite (fev-bench) with one forecast arm | `FEV_ARM`, `FEV_TASKS`, `FEV_WINDOWS` |
-| `adbench_arms.py` | The outlier suite's tables and splits (ADBench) with outlier scores | `ADBENCH_ARMS`, `ADBENCH_DATASETS` |
+| `adbench_arms.py` | The outlier suite's tables and splits (ADBench) with outlier scores, and with the mean rank of several of them | `ADBENCH_ARMS`, `ADBENCH_DATASETS`, `ADBENCH_COMBINE` |
 
 `d2_rare_class.py`, `d5_overlap.py` and the arms of D1 and D3 run with `diag.yaml`. `d4_missing.py`, `fev_arms.py` and `adbench_arms.py` read benchmark data and run with `arms.yaml`, which has their dependencies and a longer time limit:
 
