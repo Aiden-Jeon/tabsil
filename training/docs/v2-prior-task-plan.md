@@ -1,6 +1,6 @@
 # v2 plan: priors and tasks
 
-Status: **plan, approved by the user on 2026-11-28 after the review of section 11. Tier 1 started the same day; tiers 2 and 3 run only by the rules of section 5.** Nothing was trained or evaluated for writing this document. Results go to a document of their own. It follows the stop of the v2 experiment plan ([v2-experiment-plan.md](v2-experiment-plan.md) §7, decisions 12 and 13) and is built to the twelve rules of [v2-retrospective.md](v2-retrospective.md) ("Rules for the next plan"; section 9 lists where each is kept). The derivations it rests on are in [v2-task-formulations.md](v2-task-formulations.md). It was read by an agent that did not write it (section 11).
+Status: **plan, approved by the user on 2026-11-28 after the review of section 11. Tier 1 is measured and reading point R1 is read: both tasks with a bar go on to tier 2 ([v2-prior-task-results.md](v2-prior-task-results.md)). Tiers 2 and 3 run only by the rules of section 5.** Nothing was trained or evaluated for writing this document. It follows the stop of the v2 experiment plan ([v2-experiment-plan.md](v2-experiment-plan.md) §7, decisions 12 and 13) and is built to the twelve rules of [v2-retrospective.md](v2-retrospective.md) ("Rules for the next plan"; section 9 lists where each is kept). The derivations it rests on are in [v2-task-formulations.md](v2-task-formulations.md). It was read by an agent that did not write it (section 11).
 
 The request it answers, as the user made it on 2026-11-28 after reading the retrospective: plan again in line with the retrospective, with more diverse priors and more diverse tasks, and with the tasks derived in formulas first.
 
@@ -284,7 +284,7 @@ No run starts beside the step whose result bears on it (rule 8). The only items 
 
 ## 8. Code needed before the runs
 
-Not part of this pull request, which is documents only. Inference changes go to `main` and are synced into `dev-v2`; prior code goes to `dev-v2`.
+Not part of the pull request of this plan, which is documents only. Prior code goes to `dev-v2`. The inference arms of tier 1 were written as wrappers in `training/scripts/v2_prior_diag/arms.py`, so nothing in `tabsil` changed for measuring them; an arm goes into the package on `main` only if the user releases it (this replaces the first version of this paragraph, which put the inference changes on `main` before the measurements).
 
 | Change | For |
 |---|---|
