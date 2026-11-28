@@ -58,8 +58,10 @@ from tabsil_train.priors.base import IGNORE_INDEX, PriorBatch
 
 # The corpus of item 1.2 (training/scripts/real_corpus.py), logged to MLflow, and its manifest's
 # SHA-256
-CORPUS_URI = "runs:/<corpus run>/corpus"
-MANIFEST_SHA256 = "<manifest sha256>"
+# (MLflow run `tabsil-real-corpus` in the `tabsil` experiment: 79 tables, binary 15, multiclass 12,
+# regression 52; built by training/scripts/real_corpus.py at 1ee94c9)
+CORPUS_URI = "runs:/90572b03b0e341deb11f15c447343676/corpus"
+MANIFEST_SHA256 = "fb5ba33b345c769859ae4bbe39bbe13b0be0172bd658960867d16d1f82d6a1ec"
 MAX_CLASSES = 10  # the corpus keeps tables of 2 to 10 classes (the graph SCM prior's maximum)
 CATEGORIES = "counts"  # many-category columns as at inference (`--categories counts`)
 OPTIONS = {
