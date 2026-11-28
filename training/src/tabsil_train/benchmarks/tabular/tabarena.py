@@ -13,12 +13,12 @@ row once. It is the v2 experiment plan's evaluation set (`training/docs/v2-exper
 §3). Every baseline is scored on the same 153 splits (`Suite.splits`). The public leaderboard has
 no table for these splits; `comparison.csv` shows the all-splits table next to them for reference.
 
-Evaluate with `tabsil_train.benchmarks.arena.run(SUITE, ...)`.
+Evaluate with `tabsil_train.benchmarks.tabular.arena.run(SUITE, ...)`.
 """
 
 from __future__ import annotations
 
-from tabsil_train.benchmarks.arena import Suite
+from tabsil_train.benchmarks.tabular.arena import Suite
 
 _PUBLIC = (
     "data/entrants_models/imputation_yes/splits_lite/tasks_{tasks}/datasets_all/"

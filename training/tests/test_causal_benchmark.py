@@ -1,5 +1,5 @@
-"""Treatment effect benchmark suite (`tabsil_train.benchmarks.causal`) on small synthetic files in
-the benchmarks' formats (no download)."""
+"""Treatment effect benchmark suite (`tabsil_train.benchmarks.causal.causal`) on small synthetic
+files in the benchmarks' formats (no download)."""
 
 import hashlib
 import json
@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import _files, causal
+from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks.causal import causal
 
 N_ACIC = 200
 

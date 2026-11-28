@@ -1,11 +1,17 @@
-"""Evaluation benchmarks.
+"""Evaluation benchmarks, one folder per task of `tabsil.tasks` (classification and regression
+share `tabular`).
 
-- `amlb`: the AMLB and OpenML-CTR23 suites from the TabPFN v2 paper, with the paper's scores
-- `tabarena`, `beyondarena`: TabArena-Lite and BeyondArena (same splits and aggregation as the
-  public leaderboards; shared code lives in `arena`; requires the `tabarena` package from the
-  `arena` extra)
-- `uncertainty`: predictive-distribution and uncertainty metrics (regression CRPS, interval
-  coverage, PIT; classification ECE, conformal coverage)
-- `fevbench`: time series forecasting on 10 fev-bench tasks (`tabsil.TabSilForecaster`;
-  requires the `fev` package from the `fev` extra), with the reference results it is compared to
+- `tabular`: `amlb` (the AMLB and OpenML-CTR23 suites from the TabPFN v2 paper), `tabarena` and
+  `beyondarena` (TabArena-Lite and BeyondArena, with their shared code in `arena`), `uncertainty`
+  (predictive-distribution and uncertainty metrics), `paired` (the paired comparison of two runs)
+  and `subsample` (at most N training rows per fit)
+- `forecast`: `fevbench`, time series forecasting on 10 fev-bench tasks
+- `unsupervised`: `adbench` (ADBench outlier detection) and `impute` (missing value imputation)
+- `causal`: `causal`, treatment effects on IHDP and ACIC 2016
+
+The reference results copied into the repository (fev, ADBench, causal) are files next to the
+module that reads them. This folder holds the helpers that more than one benchmark uses: `_elo`
+(the Elo of a pool of methods; fev and ADBench), `_files` (data files pinned by SHA256 and the
+per-cell `results.csv`; ADBench, impute and causal) and `_retry` (retries of the data downloads of
+AMLB and the arenas; `_files` does not retry).
 """
