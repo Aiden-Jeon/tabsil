@@ -1,6 +1,6 @@
 # v2 plan: priors and tasks
 
-Status: **plan, 2026-11-28. Not approved and not started: no run of it has been launched.** Nothing was trained or evaluated for this document and no GPU job was run. It follows the stop of the v2 experiment plan ([v2-experiment-plan.md](v2-experiment-plan.md) §7, decisions 12 and 13) and is built to the twelve rules of [v2-retrospective.md](v2-retrospective.md) ("Rules for the next plan"; section 9 lists where each is kept). The derivations it rests on are in [v2-task-formulations.md](v2-task-formulations.md). It was read by an agent that did not write it (section 11).
+Status: **plan, approved by the user on 2026-11-28 after the review of section 11. Tier 1 started the same day; tiers 2 and 3 run only by the rules of section 5.** Nothing was trained or evaluated for writing this document. Results go to a document of their own. It follows the stop of the v2 experiment plan ([v2-experiment-plan.md](v2-experiment-plan.md) §7, decisions 12 and 13) and is built to the twelve rules of [v2-retrospective.md](v2-retrospective.md) ("Rules for the next plan"; section 9 lists where each is kept). The derivations it rests on are in [v2-task-formulations.md](v2-task-formulations.md). It was read by an agent that did not write it (section 11).
 
 The request it answers, as the user made it on 2026-11-28 after reading the retrospective: plan again in line with the retrospective, with more diverse priors and more diverse tasks, and with the tasks derived in formulas first.
 
@@ -356,9 +356,9 @@ What was not changed:
 
 ## 12. For the user to decide
 
-None of these is decided here. Where a number is the user's to set, none is filled in.
+Where a number is the user's to set, none is filled in. Item 1 is decided; the others are open.
 
-1. **Whether to run the plan, starting with tier 1.** Three things belong to that question. In hand without any run: +20 to +40 Elo on TabArena-Lite, as the v2 candidate's weights. The gain on the two task bars: unknown; they need +172 SQL Elo and +0.107 AUROC, and the only number for tier 1 is an estimate of about 0.4 for 11.75 on D1's linear trend. The cost of the one-model goal: tier 3, about 232 H100-h, which a checkpoint per task would not need. Tier 1 costs about 20 H100-h, shows whether a task needs training at all, and gives imputation and effects their first measurement. Not running it leaves every gain of this plan unknown and costs nothing.
+1. **Whether to run the plan, starting with tier 1. Decided 2026-11-28: run it.** Three things belonged to that question. In hand without any run: +20 to +40 Elo on TabArena-Lite, as the v2 candidate's weights. The gain on the two task bars: unknown; they need +172 SQL Elo and +0.107 AUROC, and the only number for tier 1 is an estimate of about 0.4 for 11.75 on D1's linear trend. The cost of the one-model goal: tier 3, about 232 H100-h, which a checkpoint per task would not need. Tier 1 costs about 20 H100-h, shows whether a task needs training at all, and gives imputation and effects their first measurement. Not running it leaves every gain of this plan unknown and costs nothing.
 2. **The GPU setup of tier 3**, if the plan gets there: one 8xH100 node at micro batch 1 (223 H100-h, 28 h), which differs from the controls in the GPU count, or 32 H100 as the controls (305 H100-h, 9.5 h; measured, N10). The plan's table has the first, as the user chose one node for L20 and for phase 3 on 2026-11-27.
 3. **The series generator for forecasting.** It is built only if the pilot leaves D1 unmoved with the sorted split, or if the user wants it after a probe that moves D1 and misses the bar. Its cost is the generator's code, a pilot of 3 H100-h and a probe of about 16. Expected gain: unknown.
 4. **Imputation and treatment effects after D4 and D5.** No bar was set for them and this plan trains nothing for them. Their diagnostics come back with the measured gaps and the question whether a gap is worth a prior, and at what bar.
