@@ -226,7 +226,8 @@ def test_reference_and_refined_scorers(diag, monkeypatch):
     assert contexts == [90, 81]
     assert out["refine"].shape == (30,) and np.isfinite(out["refine"]).all()
     assert set(arms.outlier_scorers(model, BORDERS, "cpu")) == {
-        "density", "ctx64", "ctx256", "ctxfull", "ref-uniform", "ref-marginals", "refine",
+        "density", "ctx16", "ctx32", "ctx64", "ctx128", "ctx256", "ctxfull", "ref-uniform",
+        "ref-marginals", "refine",
     }  # fmt: skip
 
 

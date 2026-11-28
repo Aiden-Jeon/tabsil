@@ -64,6 +64,9 @@ TREND = "+trend"
 # A residual whose range is below this share of the target's size is an exact line
 EXACT_LINE = 1e-9
 PAD = 0.1
+# Context sizes of the small-context scores. 64 and 256 are the plan's; 16, 32 and 128 were added
+# after ADBench was better with 64 rows than with 256
+CONTEXT_ROWS = (16, 32, 64, 128, 256)
 
 Scorer = Callable[[np.ndarray, np.ndarray, int], dict[str, np.ndarray]]
 
@@ -279,8 +282,7 @@ def outlier_scorers(model, borders, device: str, n_permutations: int = 10) -> di
     context scores (`density`, `refine`)."""
     return {
         "density": density_scorer(model, borders, device, n_permutations),
-        "ctx64": small_context_scorer(model, borders, device, 64),
-        "ctx256": small_context_scorer(model, borders, device, 256),
+        **{f"ctx{m}": small_context_scorer(model, borders, device, m) for m in CONTEXT_ROWS},
         "ctxfull": small_context_scorer(model, borders, device, None, n_contexts=8),
         "ref-uniform": reference_scorer(model, device, "uniform"),
         "ref-marginals": reference_scorer(model, device, "marginals"),
