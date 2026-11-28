@@ -4,6 +4,8 @@ Status: **plan, approved by the user on 2026-11-28 after the review of section 1
 
 The request it answers, as the user made it on 2026-11-28 after reading the retrospective: plan again in line with the retrospective, with more diverse priors and more diverse tasks, and with the tasks derived in formulas first.
 
+> **Correction, 2026-11-28, after tiers 1 and 2 were run.** The user's goal is the accuracy on TabArena-Lite, and more diverse priors and tasks were asked for as the means to raise it. This plan took the task metrics themselves as the goal. That was a misreading on the planner's side: the goal question put to the user offered only readings in which the tasks' own metrics were the target, so the answer recorded below as decision (a) could not say otherwise. The measurements made under this plan stand as measurements. Its bars and reading points were set against the wrong target, and its TabArena guard was never read, because tier 3 was not reached. What task-shaped tables do to TabArena-Lite is read in the results document of the runs (`v2-prior-task-results.md`).
+
 How to read:
 
 - Every number has its source and its kind. **Measured**: from a run in the records. **Derived**: from the formulations document. **Estimated**: computed from measured numbers by a stated step. **Reported**: another group's number for another model, read in its paper. **Unknown**: no basis.
@@ -12,7 +14,7 @@ How to read:
 
 ## Summary
 
-**The goal, as the user set it on 2026-11-28:** the task metrics, in one model. Forecasting has to reach a fev-bench SQL Elo of 1707 (it is 1535), and outlier detection an ADBench mean AUROC of 0.77 (it is 0.663). TabArena only has to hold: within 0.6% of its control. Imputation and treatment effects are in scope and are ahead of their baselines; they get their first measurements against the cases the derivations name. The cap is 500 H100-h.
+**The goal this plan was built to (the answer recorded in the planning dialog of 2026-11-28; see the correction above):** the task metrics, in one model. Forecasting has to reach a fev-bench SQL Elo of 1707 (it is 1535), and outlier detection an ADBench mean AUROC of 0.77 (it is 0.663). TabArena only has to hold: within 0.6% of its control. Imputation and treatment effects are in scope and are ahead of their baselines; they get their first measurements against the cases the derivations name. The cap is 500 H100-h.
 
 **The outlook.** No shipped gain is expected from this plan with evidence. Whether the bars can be reached is unknown: they are at the size of the largest gains that others report for models trained on one task's tables, and those reports are not controlled tests of a prior alone. The plan is ordered so that this is found out cheaply: about 20 H100-h without training, then about 22 for a pilot and one short probe, and the one expensive run, about 232, only if the probe reaches a bar. That run exists because the goal is one model: with a checkpoint per task the plan would end with the probe and need no guard.
 
