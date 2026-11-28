@@ -1,6 +1,6 @@
 # v2 retrospective
 
-Status: written on 2026-11-28, after the user stopped the v2 plan ([v2-experiment-plan.md](v2-experiment-plan.md) §7, decisions 12 and 13). It reviews that plan (2026-11-26), the two documents it replaced ([v2-task-priors.md](v2-task-priors.md), [v2-scaling.md](v2-scaling.md)), the redesign of 2026-11-27 and the execution, against [v2-experiment-results.md](v2-experiment-results.md). Nothing was trained or evaluated for it, and it proposes no new experiment. The phase-1B verdict was not out when this was written ("Open at the end").
+Status: written on 2026-11-28, after the user stopped the v2 plan ([v2-experiment-plan.md](v2-experiment-plan.md) §7, decisions 12 and 13). It reviews that plan (2026-11-26), the two documents it replaced ([v2-task-priors.md](v2-task-priors.md), [v2-scaling.md](v2-scaling.md)), the redesign of 2026-11-27 and the execution, against [v2-experiment-results.md](v2-experiment-results.md). Nothing was trained or evaluated for it, and it proposes no new experiment. The phase-1B verdict is PR #49, which was open when this was written. The 1B numbers below are that PR's.
 
 The plan, every recommendation and the coordination of the runs were made by AI agents (Claude Code sessions). One session wrote the plan ("the planning session"). A second one dispatched the work to worker chats, supervised them and put the recommendations to the user ("the coordinating session"). This document reviews their judgment. The user's decisions are recorded as facts. It was written from the records by an agent that took no part in the plan.
 
@@ -15,13 +15,13 @@ How to read it:
 
 **What happened.** The plan's recommended tier was about 4,350 H100-h. 1,870 were spent in 34 hours. The user stopped the plan when the measured gain was put in Elo: +20 to +40 on TabArena-Lite.
 
-**What the compute changed in the candidate: nothing.** The v2 candidate at the stop is v1's stage 1 with 10K steps of stage 2 on `graph_scm_hicard_missing`. That is #14's run (`277916ec…`), which finished 13 hours before the plan was written. Its gain was in the plan as 0.991 and +42 Elo (§1.1). Phase 0 put it at 1808 against 1768 for v1.1 eight minutes after the plan's first job, for 1 H100-h (results 0.1). The rest of the 1,870 H100-h added a second seed (N10: 1788), the noise between runs, the cost of a run, and results without a gain (R10, stage 3, and provisionally YCTX and OPTK). PS1 and L20 were stopped without a result.
+**What the compute changed in the candidate: nothing.** The v2 candidate at the stop is v1's stage 1 with 10K steps of stage 2 on `graph_scm_hicard_missing`. That is #14's run (`277916ec…`), which finished 13 hours before the plan was written. Its gain was in the plan as 0.991 and +42 Elo (§1.1). Phase 0 put it at 1808 against 1768 for v1.1 eight minutes after the plan's first job, for 1 H100-h (results 0.1). The rest of the 1,870 H100-h added a second seed (N10: 1788), the noise between runs, the cost of a run, and four results without a gain: R10 and stage 3 are level with their controls, and YCTX and OPTK lie inside the noise between seeds (PR #49). PS1 and L20 were stopped without a result.
 
 **The three largest causes (judgment).**
 
 1. **The plan was built to measure effects of 1% correctly. It did not ask whether a v2 that ends about 1% better should be made.** Its own check had the answer. The only gain with evidence already existed as weights (#14). The from-scratch branch, 60-71% of the recommended tier, had a gain that §5 calls "not known" and a gate that asks for parity with v1 (phase 3: G ≤ 1.00). The one lever its sources tie to a large gain, several times v1's training compute together with the size (§1.3), was in no tier. The plan's answer to "every effect is as large as the noise" was a better way to measure.
 2. **Gain and cost never reached the user as one question, and the option labelled "Recommended" was in effect the decision.** The plan wrote the gain as "about 1%" next to "the distance to TabPFN-3.5" (§5), and the report that asked for approval called it "evidence up to TabPFN-3.5's level". No approval question named a gain until 2026-11-27 23:00. Over all chats of the plan, 17 choice questions carried an option labelled recommended, and the user chose it in 16. Every change of course began with a question from the user. Results that lowered the expected value came with a recommendation to go on, and until 2026-11-27 23:00 none came with the option to stop the plan.
-3. **Expensive runs started before the cheap measurements that priced them or could have cancelled them.** Phase 1A started beside phase 0, against the plan's own order. N10 and R10 ran on 32 H100 before the cost per GPU count was measured. R10 was the first run of its prior at scale and had no smoke run. Phase 1B moved to v1's size without a 1.5 H100-h check, and it resolves 2% where the plan expected 1% or less. About 585 H100-h of N10, R10 and 1B were the price of the setup and not of the answers, and about 160 bought no answer (estimates, "What the compute bought").
+3. **Expensive runs started before the cheap measurements that priced them or could have cancelled them.** Phase 1A started beside phase 0, against the plan's own order. N10 and R10 ran on 32 H100 before the cost per GPU count was measured. R10 was the first run of its prior at scale and had no smoke run. Phase 1B moved to v1's size without a 1.5 H100-h check, and its rule takes an arm on evidence only at 2%, where the plan expected 1% or less. About 585 H100-h of N10, R10 and 1B were the price of the setup and not of the answers, and about 160 bought no answer (estimates, "What the compute bought").
 
 **Plan against outcome.**
 
@@ -125,7 +125,7 @@ In the plan's own unit that is about +40 Elo that existed as weights, under +40 
 | Phases 2 to 5 | 2,115-2,422 | 0 | redesigned to 760-935, then not run |
 | **Total** | **4,350** | **1,870** | |
 
-- The plan's budget table has about 1,955 H100-h for phases 0 to 1B after the stop. It holds 1B at its estimate of 2026-11-27. The job records give 1,870, with two one-GPU evaluations of C's third seed still running.
+- The plan's budget table has about 1,955 H100-h for phases 0 to 1B after the stop, and about 1,940 with PR #49. Both rest on an estimate of what was spent by 2026-11-27 08:00. The job records give 1,870 for the plan's 108 jobs, all of which have ended. For 1B the two agree at 965.
 - Stage 2 costs 29.3 H100-h per 1K steps on 32 H100 (N10), 21.5 on 8 H100 at micro batch 1 and 16.2 at micro batch 2 (L20's 5,200 steps). The plan priced every run at the 32-H100 rate.
 
 What had been spent at the points where the course could change:
@@ -149,13 +149,13 @@ What had been spent at the points where the course could change:
 | Stage-2 prior `graph_scm_hicard_missing` | 0.991, "medium" | Two seeds against `stage2-10k`, pooled: 0.992 (0.980-1.000). Development suite 0.996 (0.988-1.002). Without polish_companies_bankruptcy 0.997. Elo 1768 → 1788, 1808 on Lite and 1782 → 1787, 1804 on 3 splits | results, phase 1A |
 | Kumo's other stage-2 parts (R10) | no number | 1.003 (0.999-1.008) against the two hicard runs. Not adopted | results, phase 1A |
 | Stage-2 length (L20) | under 1%, "medium" | not measured | results, "L20" |
-| Target standardized with the train rows (YCTX) | "medium, not measured here" | provisional: G 0.997 against C's first two seeds. Reference loss at 30K steps −0.2% against C's mean in both tasks; C's three seeds span 0.4% | phase-1B worker, 2026-11-27 22:55; MLflow, read for this review |
-| Kumo's optimizer split (OPTK) | "weak" | provisional: pooled G 1.005 (0.999-1.012). Reference classification loss +0.4%, both seeds above all three C seeds | the same |
+| Target standardized with the train rows (YCTX) | "medium, not measured here" | 0.995 (0.990-1.000) against C's three seeds, pooled. Its two seeds disagree: 0.993 and 1.001 against the control seed of the same number. Not resolved | PR #49 (results, "Phase 1B") |
+| Kumo's optimizer split (OPTK) | "weak" | 1.003 (0.999-1.008) pooled, 1.007 on the development suite. Its reference classification loss is above all three C seeds at every validation step. Not resolved | PR #49 |
 | Every-stage prior parts (PS1) | "expected to be neutral" | not measured | — |
 | Model size | "medium that it matters, direction unknown" | not run. XS costs 0.66-0.83 of M per step, where the plan had 0.29 | results, "GPU cost" |
 | Stage 3 | "small" | 1.000 on TabArena, 0.999 on the development suite, 0.999 on tables above 10K rows | results 0.6, "Stage 3 by table size" |
 | Noise between two stage-2 runs | not known; 1.000 with sd 0.007 from stage 2 against stage 3 | ν 0.003 pooled, 0.009 on the development suite | results, "ν" |
-| Noise between two stage-1 runs | 0.990 at 25K steps, one pair | provisional: 0.999 (0.991-1.007) between C's seeds 0 and 1, with classification 1.005 and regression 0.988 | phase-1B worker, 2026-11-27 22:08 |
+| Noise between two stage-1 runs | "about 1%": 0.990 at 25K steps, one pair | 0.1 to 0.5% pooled between C's three seeds (ν 0.001, 0.004, 0.005), up to 0.7% in classification and 1.2% in regression. Less than the plan assumed | PR #49, "The noise of a stage-1 rerun" |
 | The capped readout of stage 1 | "within about 1%" | 1.003 (1.000-1.006) | results 0.2 |
 
 ### Schedule
@@ -165,7 +165,7 @@ What had been spent at the points where the course could change:
 | Order | phase 0, then 1A and 1B, then 2 to 5, "Each phase is approved on the results of the one before it" | phase 0 and 1A started in the same minute; 1B 12 hours later; phases 2 to 5 not run |
 | Phase 0 | no time | 2026-11-26 13:45-15:01, reported at 15:11 |
 | N10, R10 | 9.6 h each | 9.54 h and 14.07 h. R10 started 70 minutes after N10: the workspace allows 8 nodes, and a request above that fails instead of waiting |
-| 1B | no time | 2026-11-27 02:00-23:20. The quota was full until N10 ended, the first worker chat did not accept the GPU rule that reached it through another session, and PS1's stalls were diagnosed before the launch. Verdict due 2026-11-28 00:30 |
+| 1B | no time | 2026-11-27 02:00-23:20. The quota was full until N10 ended, the first worker chat did not accept the GPU rule that reached it through another session, and PS1's stalls were diagnosed before the launch. The verdict is PR #49 of 2026-11-28 00:29 |
 | L20 | 19 h on 32 H100 | 44-46 h planned on 8 H100; cancelled after 10.6 h |
 | The plan | no dates | stopped 33 hours after its first job |
 
@@ -245,8 +245,9 @@ What had been spent at the points where the course could change:
 - **R10 without a smoke run.** `graph_scm_realism` had never trained at scale (PR #26: "No training run is part of this PR"). R10 ran 4.95 s per step against 3.30 and cost 143 H100-h more. A one-GPU run of 300 steps later showed 16.4% of the time waiting for data, for 0.3 H100-h (results, "Why R10 was slow"). The 1B worker did run smoke jobs first and found the same stalls in PS1 before its runs.
 - **32 H100 without the cost per GPU count.** The plan priced every run at v1's 32-H100 rate. Phase 0.3 noted on 2026-11-26 15:11 that stage 1 on 8 H100 costs 0.64 of v1's record per step and that 32 H100 was not measured. Nothing followed until the user's question 17 hours later. The stage-2 measurement then took 3.6 H100-h.
 - **1B at v1's size without the 1.5 H100-h check.** Results 0.3 proposed an XS timing run at micro batch 8 "before choosing". The coordinating session's report of 15:12 asked the user for XS or M, recommended M and did not mention the check. It said so itself on 2026-11-27 08:06. Measured later, XS costs 0.66 of M.
-- **1B below its own resolution.** §3 says the design resolves about 2%, and §4 says PS1 "is expected to be neutral" and that the scale "cannot attribute a 1% effect". The coordinating session called 1B "in effect a check that keeps a harmful change out of phase 3" (2026-11-27 08:06). The check cost 965 H100-h. Phase 3 was planned at 950 and redesigned to 580-620.
-- **A rule that adopts by default.** §3 adopts an arm whose effect is below the resolution if it "removes a train/inference mismatch or copies a published configuration, and G is at most 1.01", and §4 adds a combination run "if two or more arms are adopted". On 2026-11-27 22:56 the 1B worker launched that run, about 119 H100-h, because both arms fell under this clause with G 0.997 and 1.005. C's third seed was not evaluated yet. Two results without an effect led to a further run. It was cancelled after 5 H100-h.
+- **1B's rule asked for more than the plan expected.** §3 takes an arm on evidence only at G 0.98 or below, which it calls what the scale resolves, "about 2%". §4 says PS1 "is expected to be neutral" and that the scale "cannot attribute a 1% effect". So no outcome the plan expected could be taken on evidence. The coordinating session called 1B "in effect a check that keeps a harmful change out of phase 3" (2026-11-27 08:06). The check cost 965 H100-h. Phase 3 was planned at 950 and redesigned to 580-620.
+- **What 1B measured about its own resolution.** The noise was smaller than the plan assumed: C's three seeds differ by 0.1 to 0.5% pooled, where §1.1 had about 1%, and the CI of an arm against them is about ±0.5% (PR #49). The runs could have shown an effect of 1%. Neither arm has one: YCTX is 0.995 with its two seeds on both sides of their control seeds, and OPTK is 1.003. The rule's bar stayed at 2%.
+- **A rule that adopts by default.** §3 adopts an arm whose effect is below the resolution if it "removes a train/inference mismatch or copies a published configuration, and G is at most 1.01", and §4 adds a combination run "if two or more arms are adopted". On 2026-11-27 22:56 the 1B worker launched that run, about 119 H100-h, because both arms fell under this clause with G 0.997 and 1.005. C's third seed was not evaluated yet. Two results without an effect led to a further run. It was cancelled after 5 H100-h. The verdict with all three seeds is the same: "By the rule, YCTX and OPTK are both adopted as copies of a published configuration, not on evidence" (PR #49). OPTK is adopted that way although its reference loss is above every control seed at every validation step.
 - **L20.** Its expected effect was "0.7% at most", from a number the plan called overstated, against a threshold of 0.56% (0.9944). It was then moved to another GPU count and micro batch than its controls, so a result near the threshold could not have been read. It was stopped at 26% without a result.
 
 **The way of judging behind it.** A parallel start was weighed by the day it saves and not by what the pending result could cancel. A cost was taken as a property of the run and not of its setup. A run was justified by being in the plan, and its expected effect was not set against its resolution when it was launched, although the plan had both numbers.
@@ -265,7 +266,7 @@ The coordinating session listed ten of its own possible mistakes. Each was check
 | 4 | 1B was recommended at v1's size without a check of 1.5 H100-h | **Right** | cause 3 |
 | 5 | N10 and R10 ran on 32 H100; the cost by GPU count was measured only after the user asked | **Right** | cause 3. With the recipe of #14's run on one node, 10K steps cost about 223 H100-h (plan, phase 4, option B) against 305 |
 | 6 | 1A started without waiting for phase 0 | **Right** | cause 3. The other option, phase 0 first, was shown to the user and not recommended |
-| 7 | 1B resolves 2% by design, the expected effects were 1% or less, and about 900 H100-h went into it | **Right: 965** | cause 3 |
+| 7 | 1B resolves 2% by design, the expected effects were 1% or less, and about 900 H100-h went into it | **Right for the rule: 965 H100-h** | cause 3. The rule takes an arm on evidence only at 2%. The runs resolved finer than the plan said, about ±0.5%, because the noise between seeds is 0.1-0.5% and not 1% (PR #49). Neither arm showed an effect of that size |
 | 8 | An arm expected to be neutral (PS1) was run and then stopped | **Right: 73 H100-h, not 64** | job records; plan §4 |
 | 9 | The recommendation was in effect the decision | **Right** | 16 of 17 choice questions, and the free-text decisions on L20 followed the recommendation too (cause 2). Phase 3 on 8 H100 was not an exception: the redesign worker had recommended 16 H100, and the coordinating session's dialog labelled 8 H100 as recommended |
 | 10 | The plan that criticised and replaced two plans asked for a larger budget; no lever is "strong" | **Partly** | The recommended 4,350 is at the top of the earlier plans' 2.7-4.3K and the lean 2,689 at the bottom, so it is no smaller and not clearly larger. No lever in §2 is "strong" |
@@ -286,9 +287,9 @@ The coordinating session listed ten of its own possible mistakes. Each was check
 
 - **Phase 0 replaced assumptions for 22 H100-h.** The capped readout holds (1.003), no FP16 arm is needed, the small model is not cheap, #14's gain and the 0.1.1 inference gain add up, and #14's gain is absent on the held-out suite. The plan had put the timing runs first (§1, row 11), and they were first.
 - **The plan's check of the earlier documents was right where it was tested.** The flat stage-1 Elo is a context-length effect: phase 0.2 confirmed it for 2 H100-h. It also corrected the Kumo prior comparison and three citations.
-- **Branches from one checkpoint are the cheaper design.** ν is 0.003 pooled, so a branch resolves about 0.6% where a screen from scratch resolves 2% (plan, "Later screens").
+- **Stage-2 changes were tested as branches from one checkpoint.** The noise between two such runs is small (ν 0.003 pooled), and R10's result is clear for that reason. The plan's "Later screens" puts a branch at 0.6% against 2% for a screen from scratch. With 1B's noise of 0.1 to 0.5% between stage-1 seeds the two are closer than that (judgment, from PR #49).
 - **The development suite showed how wide the gain is.** 48 datasets outside TabArena, checked by name, source and row count (results 0.5). Without it, +42 Elo on Lite would have stood as the result.
-- **The noise was measured before effects were read**: ν for stage 2, the seed difference on the development suite (0.009), and three C seeds for stage 1.
+- **The noise was measured before effects were read**: ν for stage 2, the seed difference on the development suite (0.009), and three C seeds for stage 1. A stage-1 rerun differs by 0.1 to 0.5% pooled, less than the 1% the plan assumed (PR #49).
 - **Results without a gain were written down as such.** The results say that #14's prior "would not be adopted on this evidence" by the branch rule, that the hicard prior passes only with one dataset, and that R10 adds nothing.
 - **The 1B worker ran smoke jobs first** (12 H100-h). They found PS1's data stalls before nine runs were launched, and the prefetch setting came out of it.
 - **R10's slowness was explained for 3 H100-h**: the generation time of rare tables, the loader's order, and why the logged data wait showed 1/32 of it.
@@ -307,7 +308,7 @@ The coordinating session listed ten of its own possible mistakes. Each was check
 | 22, phase 0 | the five things above. This is what the stop rests on | — |
 | 305, N10 | #14's gain repeats on TabArena, almost all of it on one dataset; ν | about 223 on one node with the recipe of #14's run |
 | 450, R10 | Kumo's other stage-2 parts add nothing at 10K steps | 305 without the stalls; about 223 on one node, if the prefetch setting removes them there too |
-| 845, the 7 runs of 1B | provisional: YCTX and OPTK do not help at 30K steps; the noise between three stage-1 seeds | about 570 on XS at its cheapest setting, with the question whether XS stands for v1's size |
+| 845, the 7 runs of 1B | YCTX (0.995) and OPTK (1.003) are inside the noise at 30K steps. The noise of a stage-1 rerun is 0.1 to 0.5% pooled. OPTK does not let the attention temperatures grow. On the reference loss, 20K steps read as 30K | about 570 on XS at its cheapest setting, with the question whether XS stands for v1's size. About 565 at 20K steps, if the capped evaluation follows the reference loss |
 | 73, PS1 | nothing | 0 |
 | 85, L20 | nothing on its question. The cost of stage 2 on one node over 5,200 steps | 0 |
 | 5, the combination run | nothing | 0 |
@@ -315,7 +316,7 @@ The coordinating session listed ten of its own possible mistakes. Each was check
 | 50, smoke runs, diagnoses and evaluations of 1A and 1B | the causes of the stalls; the evaluations of the runs above | — |
 
 - **About 585 of the 1,600 H100-h of N10, R10 and 1B's seven runs were the price of the setup**: 82 + 227 + 275. About 160 bought no answer: PS1, L20 and the combination run.
-- **What 1B's answers were for is gone.** They were to choose the recipe of phase 3. Whether phase 3 was worth running could be asked on 2026-11-26 from §1.3 and §5.
+- **What 1B's answers were for is gone.** They were to choose the recipe of phase 3. Whether phase 3 was worth running could be asked on 2026-11-26 from §1.3 and §5. What stays is the noise of a stage-1 rerun, which any later screen from scratch needs.
 - **The stop needed 22 H100-h.** The facts behind it are phase 0's. With the plan's order, phase 0 first, the question of 2026-11-27 22:57 could have been asked at 22 H100-h. With a second seed to make sure, N10, at about 330. As it was run, 76 were spent when phase 0 was reported and about 530 when the user next wrote. Whether the user would have answered the same way then is not verified.
 
 ## Rules for the next plan
@@ -337,7 +338,7 @@ Each rule names what it comes from and how it is checked.
 
 ## Open at the end
 
-- **The 1B verdict** comes as a PR of the phase-1B worker and was not open at 2026-11-27 23:58: the evaluation of C's third seed was still running. The provisional numbers above are that worker's with two of C's three seeds, and this review's reading of the reference loss. They are to be replaced by the verdict's.
+- **The 1B verdict** is PR #49, open and not merged when this was written. Its numbers are used above. If it changes before it is merged, the 1B rows here follow it.
 - **The v2 candidate** is the weights of phase 1A. They have not been evaluated with the release protocol of phase 5, and whether they are released is not decided (plan §4, phase 5).
 - **L20's checkpoint of step 5,000** is in its MLflow run (`893293ed…`). No resume is planned.
 - **Not verified:** the bar the user would have set on 2026-11-26. The records show it only as the stop at +20 to +40 Elo. Of the worker chats, the questions to the user and the user's messages were read, and the rest through their PRs and their mails to the coordinating session.
