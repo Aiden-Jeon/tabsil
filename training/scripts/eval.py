@@ -18,7 +18,8 @@ Every fold row (`eval_rows.csv`) also has TabArena's error (`metric_error`: 1 - 
 log loss for multiclass, RMSE for regression) and `problem_type`, which the paired report
 (`training/scripts/paired_report.py`) compares between two runs. `--suite dev` is the development
 suite of the v2 experiment plan: the 57 tasks without the 9 whose data is also in TabArena's 51
-(`tabsil_train.benchmarks.amlb.TABARENA_OVERLAP`), 23 classification and 25 regression tasks.
+(`tabsil_train.benchmarks.tabular.amlb.TABARENA_OVERLAP`), 23 classification and 25 regression
+tasks.
 
 The ensemble member count and preprocessing come from the model (`tabsil.recipe.default_inference`:
 the Hub config.json `inference` entry first, otherwise 8 `standard` members with at most 768
@@ -30,18 +31,18 @@ each task ran with are logged as the MLflow params `inference_classification` an
 `inference_regression` (JSON).
 
 `--uncertainty` (AMLB) adds predictive distribution and uncertainty metrics per fold
-(`tabsil_train.benchmarks.uncertainty`): for regression CRPS, central interval (50/80/90/95%)
-coverage, width and interval score, the minimum coverage over width quintiles and the PIT KS
-statistic; for classification ECE, log loss, Brier and split conformal (LAC, APS, alpha = 0.1)
-coverage, set size, SSCS and class-conditional coverage gap. The per-dataset table is
+(`tabsil_train.benchmarks.tabular.uncertainty`): for regression CRPS, central interval
+(50/80/90/95%) coverage, width and interval score, the minimum coverage over width quintiles and the
+PIT KS statistic; for classification ECE, log loss, Brier and split conformal (LAC, APS,
+alpha = 0.1) coverage, set size, SSCS and class-conditional coverage gap. The per-dataset table is
 `eval_uncertainty_per_dataset.csv` and the suite means are `<suite>_mean_<metric>` (regression CRPS,
 widths and interval scores are averaged only as `_scaled`, divided by the training target standard
 deviation).
 
 `--suite tabarena-lite`, `tabarena-3split`, `beyondarena` and `beyondarena-lite` are TabArena-Lite,
 the same 51 datasets with their first 3 splits (153 splits; every baseline is scored on the same
-splits) and BeyondArena (`tabsil_train.benchmarks.arena`, needs the `arena` extra, which needs
-pandas 2.3 and is installed apart from the dev group:
+splits) and BeyondArena (`tabsil_train.benchmarks.tabular.arena`, needs the `arena` extra, which
+needs pandas 2.3 and is installed apart from the dev group:
 `uv sync --package tabsil-train --no-dev --extra arena --group arena-dev`, with the same options
 for `uv run`). The official splits run and Elo, normalized score,
 improvability and win rates are computed as on the public leaderboard. Splits of a task without a
@@ -59,26 +60,27 @@ the arena feature limit is then the supported size). With a cap, the TabArena / 
 limit is lifted, so splits wider than the supported size run.
 
 `--subsample-train-rows N` uses at most N random training rows per fit as the context
-(`tabsil_train.subsample`; stratified by class for classification with at least one row per
-class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters splits by
-their original training row count.
+(`tabsil_train.benchmarks.tabular.subsample`; stratified by class for classification with at least
+one row per class, drawn with `--seed`, the same rows for every member). `--max-train-rows` filters
+splits by their original training row count.
 
-`--suite fev` is time series forecasting on 10 fev-bench tasks (`tabsil_train.benchmarks.fevbench`,
-needs the `fev` extra, installed apart from the dev group like the arena extra: `uv sync --package
-tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.TabSilForecaster` with the
-`--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in an Elo
-pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7 methods. Our
-Seasonal Naive is recomputed on the same windows and must match those. `--datasets` picks tasks,
-`--fev-windows N` only the last N windows of each (a quick check; the task-mean Elo pool then
-drops out). A failed series, window or task stops the run (nothing is imputed). Results go to
-`<out-dir>/fev/`.
+`--suite fev` is time series forecasting on 10 fev-bench tasks
+(`tabsil_train.benchmarks.forecast.fevbench`, needs the `fev` extra, installed apart from the dev
+group like the arena extra:
+`uv sync --package tabsil-train --no-dev --extra fev --group arena-dev`): `tabsil.TabSilForecaster`
+with the `--regressor-path` model on every rolling window, scored with fev's SQL and MASE and put in
+an Elo pool (Seasonal Naive = 1000) with the per-window results fm-agent-bench recorded for 7
+methods. Our Seasonal Naive is recomputed on the same windows and must match those. `--datasets`
+picks tasks, `--fev-windows N` only the last N windows of each (a quick check; the task-mean Elo
+pool then drops out). A failed series, window or task stops the run (nothing is imputed). Results go
+to `<out-dir>/fev/`.
 
   $RUN --no-dev --extra fev --group arena-dev python $EVAL --suite fev \
     --regressor-path hf://aiden-jeon/tabsil@v1 --datasets ecdc_ili --fev-windows 2
 
 `--suite causal` is treatment effect estimation on IHDP (100 realizations) and ACIC 2016 (10
-simulations) (`tabsil_train.benchmarks.causal`, needs the `causal` extra for the EconML baselines:
-`uv sync --package tabsil-train --extra causal`): `tabsil.TabSilCATE` with the S-, T-, X-
+simulations) (`tabsil_train.benchmarks.causal.causal`, needs the `causal` extra for the EconML
+baselines: `uv sync --package tabsil-train --extra causal`): `tabsil.TabSilCATE` with the S-, T-, X-
 and DR-learner on the `--regressor-path` model (it must serve classification too, for the
 propensity), and EconML's causal forest and GBM-based meta-learners on the same splits. √PEHE and
 the ATE error within-sample and out-of-sample. `--datasets` picks the benchmarks (ihdp, acic2016),
@@ -99,7 +101,7 @@ and the baselines' value on the same splits, `time_baselines`) and `comparison.c
 each fold's fit and prediction time to `<out-dir>/fits_<suite>.jsonl` and `eval_rows.csv`.
 
 `--suite adbench` is unsupervised outlier detection on 12 ADBench tables x 3 seeds
-(`tabsil_train.benchmarks.adbench`): `tabsil.TabSilUnsupervised` fitted on the
+(`tabsil_train.benchmarks.unsupervised.adbench`): `tabsil.TabSilUnsupervised` fitted on the
 unlabeled (contaminated) training rows scores the test rows, next to the official TabPFN v2
 extension and pyod's methods from the fm-agent-bench run, with IsolationForest = 1000 Elo. One
 multitask model serves both column kinds (`--regressor-path`, or `--classifier-path`).
@@ -112,11 +114,11 @@ diagnostic (context = training rows labeled normal; kept out of the Elo); `--dat
     --datasets yeast --adbench-splits s1
 
 `--suite impute` is missing value imputation on 10 OpenML tables x MCAR rates 10/30/50% x 3 seeds
-(`tabsil_train.benchmarks.impute`): `TabSilUnsupervised.impute` (zero-shot, the `--regressor-path`
-model serving both column kinds; mean and median from one evaluation) against the official TabPFN
-v2 extension (`impute` and `simple_impute`, needs the `impute` extra: `uv sync --all-packages
---extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on the same rows and
-masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
+(`tabsil_train.benchmarks.unsupervised.impute`): `TabSilUnsupervised.impute` (zero-shot, the
+`--regressor-path` model serving both column kinds; mean and median from one evaluation) against the
+official TabPFN v2 extension (`impute` and `simple_impute`, needs the `impute` extra:
+`uv sync --all-packages --extra impute`), mean / most frequent, KNN, MICE and MissForest, all run on
+the same rows and masks and scored on the masked cells (numeric: RMSE / std, categorical: accuracy).
 `--impute-methods`, `--impute-rates`, `--impute-seeds` and `--datasets` pick the grid. A failed
 (table, rate, seed, method) is reported and the run ends with an error (nothing is filled in).
 With `--shards N` the GPU methods run as (table, rate, method) jobs on N GPUs and the CPU
@@ -164,8 +166,9 @@ from tabsil.inference.ensemble import (
 )
 from tabsil.inference.preprocessing import CATEGORY_ENCODINGS
 from tabsil.recipe import SUPPORTED_SIZE, default_inference, resolve_member_kinds
-from tabsil_train.benchmarks import amlb as bm
-from tabsil_train.benchmarks import uncertainty as unc
+from tabsil_train.benchmarks.tabular import amlb as bm
+from tabsil_train.benchmarks.tabular import uncertainty as unc
+from tabsil_train.benchmarks.tabular.subsample import SubsampledEstimator
 from tabsil_train.evaluation.adbench import run_adbench
 from tabsil_train.evaluation.causal import run_causal
 from tabsil_train.evaluation.fev import run_fev
@@ -173,7 +176,6 @@ from tabsil_train.evaluation.impute import run_impute
 from tabsil_train.evaluation.shards import clock as _clock
 from tabsil_train.evaluation.shards import strip_flags as _strip_flags
 from tabsil_train.hub import load_model, weights_digest
-from tabsil_train.subsample import SubsampledEstimator
 from tabsil_train.utils import mlflow_eval_run
 
 ARENA_SUITES = ("tabarena-lite", "tabarena-3split", "beyondarena", "beyondarena-lite")
@@ -380,6 +382,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--max-features-per-member must be >= 0 (0: off).")
     if args.subsample_train_rows is not None and args.subsample_train_rows < 1:
         parser.error("--subsample-train-rows must be >= 1.")
+    if args.fev_windows is not None and args.fev_windows < 1:
+        parser.error("--fev-windows must be >= 1.")
     return args
 
 
@@ -598,7 +602,7 @@ class RecordedEstimator:
 
 
 def arena_suite(name: str):
-    from tabsil_train.benchmarks import beyondarena, tabarena
+    from tabsil_train.benchmarks.tabular import beyondarena, tabarena
 
     if name == "tabarena-lite":
         return tabarena.SUITE
@@ -614,7 +618,7 @@ def arena_limits(models: dict, args: argparse.Namespace, caps: dict | None = Non
     the output count; column_row_transformer groups label embeddings up to `MAX_CLASSES`). Tasks
     with a columns-per-member cap (`caps`, per task; `--max-features-per-member` if not given)
     have no feature limit."""
-    from tabsil_train.benchmarks.arena import ModelLimits
+    from tabsil_train.benchmarks.tabular.arena import ModelLimits
 
     limits = {}
     for task, (model, _) in models.items():
@@ -700,7 +704,7 @@ def run_arena(args: argparse.Namespace, out_dir: Path, use_mlflow: bool) -> dict
     """Run TabArena-Lite / BeyondArena and return the scores (the `summary.json` content).
     Estimators come from the same `make_estimator_factory` as the AMLB evaluation (only the
     problem type and categorical columns differ)."""
-    from tabsil_train.benchmarks import arena
+    from tabsil_train.benchmarks.tabular import arena
 
     suite = arena_suite(args.suite)
     paths = {"classification": args.classifier_path, "regression": args.regressor_path}
@@ -1096,6 +1100,19 @@ def host_state_bytes(grid, rows: dict[str, int], estimate) -> dict[str, int]:
     return out
 
 
+def link_checkpoints(worker_dir: Path, checkpoints: Path) -> None:
+    """Point `worker_dir/checkpoints` at the parent's `checkpoints` folder (if there is one), so
+    that a worker reuses what the parent downloaded. A link whose target is gone (the output folder
+    was moved after an earlier run) is replaced."""
+    link = worker_dir / "checkpoints"
+    if not checkpoints.is_dir():
+        return
+    if link.is_symlink() and not link.exists():
+        link.unlink()
+    if not link.exists():
+        link.symlink_to(checkpoints, target_is_directory=True)
+
+
 def run_shards(
     args, suite, limits, datasets, out_dir: Path, cache_id: str = "", host_estimate=None
 ) -> list:
@@ -1112,7 +1129,7 @@ def run_shards(
     import pickle
     import subprocess
 
-    from tabsil_train.benchmarks import arena
+    from tabsil_train.benchmarks.tabular import arena
 
     n_gpus = torch.cuda.device_count()
     if n_gpus and args.shards > n_gpus:
@@ -1155,9 +1172,7 @@ def run_shards(
     def spawn(i: int):
         worker_dir = worker_dirs[i]
         worker_dir.mkdir(parents=True, exist_ok=True)
-        link = worker_dir / "checkpoints"
-        if checkpoints.is_dir() and not link.exists():
-            link.symlink_to(checkpoints, target_is_directory=True)
+        link_checkpoints(worker_dir, checkpoints)
         env = {k: v for k, v in os.environ.items() if k != "MLFLOW_RUN_ID"}
         env.update(CUDA_VISIBLE_DEVICES=devices[i], OMP_NUM_THREADS=str(threads))
         log = open(out_dir / "shards" / f"shard{i}.log", "w")  # noqa: SIM115 (open until the end)
@@ -1469,7 +1484,8 @@ def write_amlb_fits(args: argparse.Namespace, suite: str, task, task_rows: list[
 
 
 def summarize_uncertainty(rows: list[dict]) -> pd.DataFrame:
-    """Per-dataset fold means of the uncertainty metrics (`tabsil_train.benchmarks.uncertainty`)."""
+    """Per-dataset fold means of the uncertainty metrics
+    (`tabsil_train.benchmarks.tabular.uncertainty`)."""
     return unc.dataset_means(rows, exclude=("score", "metric_error", "problem_type", *bm.TIME_KEYS))
 
 

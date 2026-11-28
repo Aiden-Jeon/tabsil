@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import adbench as ab
+from tabsil_train.benchmarks.unsupervised import adbench as ab
 
 
 def _table(n: int, d: int = 4, rate: float = 0.1, seed: int = 0):

@@ -1,12 +1,12 @@
-"""fev-bench forecasting evaluation helpers (`tabsil_train.benchmarks.fevbench`) that need neither
-the fev package nor the data: reference files, frequency seasonality, the Seasonal Naive check,
-Elo and its pools, and the arguments `eval.py --suite fev` hands to the benchmark."""
+"""fev-bench forecasting evaluation helpers (`tabsil_train.benchmarks.forecast.fevbench`) that need
+neither the fev package nor the data: reference files, frequency seasonality, the Seasonal Naive
+check, Elo and its pools, and the arguments `eval.py --suite fev` hands to the benchmark."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from tabsil_train.benchmarks import fevbench as fb
+from tabsil_train.benchmarks.forecast import fevbench as fb
 
 
 def _ours(task: str = "ecdc_ili", scale: float = 0.5) -> pd.DataFrame:
@@ -116,3 +116,10 @@ def test_eval_suite_fev_runs_the_benchmark_with_the_forecaster(tmp_path, monkeyp
     assert "TabSil time 1s, total 2s" in printed
     with pytest.raises(SystemExit, match="regressor-path"):
         script.main(args)
+    # a window count below 1 is refused with the arguments, before the model is loaded and the
+    # run is logged as one over all windows
+    seen.clear()
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        script.main(["--suite", "fev", "--fev-windows", "0", "--regressor-path", model])
+    assert "--fev-windows must be >= 1" in capsys.readouterr().err and not seen

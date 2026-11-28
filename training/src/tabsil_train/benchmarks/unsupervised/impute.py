@@ -650,13 +650,22 @@ def summary_table(rows: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+# the files `report` writes
+REPORT_FILES = ("summary.csv", "per_table_nrmse.csv", "per_table_accuracy.csv")
+
+
 def report(
     rows: pd.DataFrame, out_dir: Path, datasets: list[str], rates: list[float], seeds: list[int],
     methods: list[str] | None = None,
 ) -> dict:  # fmt: skip
     """Write `summary.csv` (per rate), `per_table_nrmse.csv` and `per_table_accuracy.csv` of the
     rows in the (table, rate, seed) grid and the result `methods` (default all in `rows`), and
-    return the main numbers with each method's share of missing units."""
+    return the main numbers with each method's share of missing units.
+
+    The files of an earlier report are removed first: without a row in the grid (every cell of
+    the run failed) nothing is written, and the folder must not keep another run's report."""
+    for name in REPORT_FILES:
+        (out_dir / name).unlink(missing_ok=True)
     rows = in_grid(rows, datasets, rates, seeds, methods)
     out: dict = {"missing_units": coverage(rows, datasets, rates, seeds, methods)}
     if not len(rows):

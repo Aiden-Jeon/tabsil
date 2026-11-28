@@ -1,7 +1,7 @@
 # TabSil missing value imputation (training/scripts/eval.py --suite impute) on Databricks AI
 # Runtime: TabSilUnsupervised.impute (zero-shot, TABSIL_REGRESSOR, default the v1 weights) on 10
-# OpenML tables x MCAR rates 10/30/50% x 3 seeds (tabsil_train.benchmarks.impute), next to the
-# official TabPFN v2 extension (impute, simple_impute), mean / most frequent, KNN, MICE and
+# OpenML tables x MCAR rates 10/30/50% x 3 seeds (tabsil_train.benchmarks.unsupervised.impute), next
+# to the official TabPFN v2 extension (impute, simple_impute), mean / most frequent, KNN, MICE and
 # MissForest on the same rows and masks. With --shards N the GPU methods run as (table, rate,
 # method) jobs on N GPUs and the CPU baselines in one more process. From the repository root:
 #   databricks air run -f training/scripts/eval_impute.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \

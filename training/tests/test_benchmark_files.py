@@ -12,7 +12,8 @@ import torch
 from train_helpers import tiny_checkpoint, tiny_model
 
 from tabsil.recipe import default_inference
-from tabsil_train.benchmarks import _files, adbench
+from tabsil_train.benchmarks import _files
+from tabsil_train.benchmarks.unsupervised import adbench
 from tabsil_train.hub import load_model, weights_digest
 
 GOOD = b"benchmark bytes"

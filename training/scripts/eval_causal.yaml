@@ -1,9 +1,9 @@
 # TabSil treatment effect evaluation (training/scripts/eval.py --suite causal) on Databricks AI
 # Runtime: tabsil.TabSilCATE (S-, T-, X-, DR-learner) on IHDP (100 realizations) and ACIC
-# 2016 (10 simulations) (tabsil_train.benchmarks.causal), √PEHE and the ATE error within-sample and
-# out-of-sample. The model is TABSIL_REGRESSOR (default: the default Hub repo at the v1 tag; it
-# serves classification too, for the propensity). The EconML baselines run on the CPU and are not
-# in this job (TABSIL_METHODS): `uv run --package tabsil-train --extra causal python
+# 2016 (10 simulations) (tabsil_train.benchmarks.causal.causal), √PEHE and the ATE error
+# within-sample and out-of-sample. The model is TABSIL_REGRESSOR (default: the default Hub repo at
+# the v1 tag; it serves classification too, for the propensity). The EconML baselines run on the CPU
+# and are not in this job (TABSIL_METHODS): `uv run --package tabsil-train --extra causal python
 # training/scripts/eval.py --suite causal --causal-methods econml_cf,econml_s,econml_t,econml_x,econml_dr`.
 # From the repository root:
 #   databricks air run -f training/scripts/eval_causal.yaml --watch --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \

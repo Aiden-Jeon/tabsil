@@ -24,7 +24,7 @@ BeyondArena run (columns dataset, fold = split index, metric_error, problem_type
 An imputed split or a missing error is an error, not a value: a comparison with them would
 compare the stand-in method.
 
-    from tabsil_train.benchmarks import paired
+    from tabsil_train.benchmarks.tabular import paired
     a = paired.load_splits("a/results_per_split.csv")
     b = paired.load_splits("b/results_per_split.csv")
     print(paired.format_report(paired.compare({"tabarena-lite": (a, b)})))

@@ -1,8 +1,8 @@
 """Wrap an sklearn-style estimator as a `tabarena` system (`ExternalSystemModel`).
 
-This module imports `tabarena`, so it is loaded only when `tabsil_train.benchmarks.arena` needs it.
-System configs may be saved as yaml, so estimator factories live in this module's registry and
-only their names are passed (`debug_mode=True` runs in the same process, so the registry stays
+This module imports `tabarena`, so it is loaded only when `tabsil_train.benchmarks.tabular.arena`
+needs it. System configs may be saved as yaml, so estimator factories live in this module's registry
+and only their names are passed (`debug_mode=True` runs in the same process, so the registry stays
 visible).
 """
 
