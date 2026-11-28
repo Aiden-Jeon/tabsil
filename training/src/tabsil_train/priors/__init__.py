@@ -11,7 +11,7 @@ Parts that priors share:
 - `pipeline`: the hyperparameters -> generator -> transforms -> `PriorBatch` assembler
 - `table_size`: the table size rule that draws the train rows and feature count of each batch
 - `transforms`: group post-processing (classes, missing values, high-cardinality categorical
-  columns, coarse and noisy values, filters)
+  columns, coarse and noisy values, filters, task-shaped tables)
 
 The graph SCM, in one folder:
 
@@ -22,7 +22,7 @@ The graph SCM, in one folder:
 - `graph_scm.variants`: the prior with some of its options at fixed values, each under its own
   name
 
-Registered priors (`PRIOR_TYPES`; the last three are the variants):
+Registered priors (`PRIOR_TYPES`; all but the first are variants):
 
 - `graph_scm`: graph SCM generator + table size rule + missing values (TabSil's training prior)
 - `graph_scm_hicard_missing`: `graph_scm` with high-cardinality categorical columns and structured
@@ -34,6 +34,10 @@ Registered priors (`PRIOR_TYPES`; the last three are the variants):
   its stage-1 values (Kumaraswamy-warped columns, up to 200 categories, correlated column blocks,
   structured missing values, random missing cells in 1% of the tables, too-easy tables drawn
   again)
+- `graph_scm_task_probe`: `graph_scm_hicard_missing` with every table task-shaped (regression
+  tables whose eval rows lie beyond the train rows in one column, classification tables of data
+  rows with hidden anomalies against reference rows), for a short fine-tuning that asks whether
+  such tables move a task metric
 
 The training loop (`tabsil_train.training.loop`) picks its prior from `PRIOR_TYPES` by name
 (`TrainConfig.prior_type`). What a name is registered to (`prior_module`: the `graph_scm` module,
@@ -73,6 +77,7 @@ PRIOR_TYPES: dict[str, str] = {
     "graph_scm_hicard_missing": "tabsil_train.priors.graph_scm.variants:HICARD_MISSING",
     "graph_scm_realism": "tabsil_train.priors.graph_scm.variants:REALISM",
     "graph_scm_base_realism": "tabsil_train.priors.graph_scm.variants:BASE_REALISM",
+    "graph_scm_task_probe": "tabsil_train.priors.graph_scm.variants:TASK_PROBE",
 }
 # old name -> current name, accepted when reading older training runs whose params still use it
 PRIOR_TYPE_ALIASES: dict[str, str] = {

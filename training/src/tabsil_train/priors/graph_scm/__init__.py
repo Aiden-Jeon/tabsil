@@ -47,6 +47,17 @@ borders are drawn with them (`make_borders(..., **options)`, `TARGET_FIELDS`):
 - `reject_trivial_prob` (`generator.GraphSCM`): with this probability a dataset that an ExtraTrees
   probe predicts almost perfectly is drawn again
 
+Task-shaped tables, off by default (`transforms.tasks`; then no random number is drawn for them).
+They rearrange a finished table, so they run last in step 2:
+
+- `sorted_split_prob` (`transforms.SortedSplit`, regression): the rows are ordered by one column
+  before the cut and the target is standardized with the train rows, so that the eval rows lie
+  beyond the train rows as a forecast horizon does. The regression borders are not drawn with it:
+  a run that uses it starts from weights that bring their borders
+- `outlier_table_prob` (`transforms.OutlierTable`, classification): data rows with hidden
+  anomalies labeled 0 and reference rows labeled 1 in the train rows, data rows with their true
+  label in the eval rows
+
 Regression target scaling, off by default: with `target_train_rows`
 (`transforms.TrainRowTargetScale`, a training config field like `filter_unpredictable`), the
 target is standardized again with the train rows after the SCM's clip and standardization over all
@@ -80,7 +91,9 @@ from tabsil_train.priors.transforms import (
     HighCardinality,
     MeasurementNoise,
     Missing,
+    OutlierTable,
     Relabel,
+    SortedSplit,
     StructuredMissing,
     TrainRowTargetScale,
 )
@@ -148,6 +161,8 @@ class GraphSCMPrior:
         min_missing_rate: float = 0.0,
         correlate_discrete_levels: int = DISCRETE_LEVELS,
         reject_trivial_prob: float = 0.0,
+        sorted_split_prob: float = 0.0,
+        outlier_table_prob: float = 0.0,
     ) -> None:
         self._task = task
         self.min_train_rows = MIN_TRAIN_ROWS[task]
@@ -193,7 +208,15 @@ class GraphSCMPrior:
         last = [CoverClasses()] if classification else []
         if target_train_rows and not classification:
             last.append(TrainRowTargetScale())
-        self._accept = [DropInvalid(), *dependence, *last]
+        # Task-shaped tables rearrange the finished table: after CoverClasses, which would
+        # reorder an outlier table's rows, and after the scaling, which a sorted table redoes
+        task_tables = []
+        if outlier_table_prob and classification:
+            task_tables.append(OutlierTable(outlier_table_prob))
+        if sorted_split_prob and not classification:
+            task_tables.append(SortedSplit(sorted_split_prob))
+        self.task_tables = tuple(task_tables)
+        self._accept = [DropInvalid(), *dependence, *last, *task_tables]
         self._missing = Missing(missing_dataset_prob, max_missing_rate, min_missing_rate)
         # The options: a part is only added when on, so the v1 settings draw the same numbers
         realism = []
@@ -293,6 +316,9 @@ REALISM_FIELDS = (
     "correlate_prob",
     "correlate_discrete_levels",
 )
+# Task-shaped tables, off by default (module docstring). Fixed by a variant, like REALISM_FIELDS.
+# They change y, but the regression borders are not drawn with them
+TASK_FIELDS = ("sorted_split_prob", "outlier_table_prob")
 # The MCAR missing values (step 3; x only). missing_dataset_prob is a training config field; a
 # variant may fix it and the rates instead (then the config value is not used)
 MISSING_FIELDS = ("missing_dataset_prob", "max_missing_rate", "min_missing_rate")
@@ -326,8 +352,10 @@ def check_config(config) -> None:
 def make_prior(config, task: str, seed: int, **options) -> GraphSCMPrior:
     """The `task` prior with the dataset sizes of the training config
     (`tabsil_train.training.config.TrainConfig`). `options` are the `GraphSCMPrior` options a
-    prior assembled on this one fixes (`REALISM_FIELDS`, `MISSING_FIELDS`, `TARGET_FIELDS`)."""
-    unknown = set(options) - set(REALISM_FIELDS) - set(MISSING_FIELDS) - set(TARGET_FIELDS)
+    prior assembled on this one fixes (`REALISM_FIELDS`, `MISSING_FIELDS`, `TARGET_FIELDS`,
+    `TASK_FIELDS`)."""
+    known = {*REALISM_FIELDS, *MISSING_FIELDS, *TARGET_FIELDS, *TASK_FIELDS}
+    unknown = set(options) - known
     if unknown:
         raise TypeError(f"make_prior got unknown options: {sorted(unknown)}")
     return GraphSCMPrior(

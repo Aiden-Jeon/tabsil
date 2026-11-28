@@ -17,7 +17,7 @@
 #                 that differs from the run's. Unset, the run's table sizes, prior settings and micro
 #                 batch are kept
 #   prior:        --override env_variables.TABSIL_PRIOR_TYPE=graph_scm_hicard_missing (default graph_scm;
-#                 also graph_scm_realism, graph_scm_base_realism)
+#                 also graph_scm_realism, graph_scm_base_realism, graph_scm_task_probe)
 #   model size:   --override env_variables.TABSIL_EMSIZE=192 (cell width; TABSIL_N_CLS sets the CLS count,
 #                 row ICL width = their product). Later stages and resumes of that run need the same values
 #   GPU memory:   --override env_variables.TABSIL_MICRO_BATCH=<datasets per GPU>
@@ -27,6 +27,9 @@
 #                 GPU and the others wait for it, which rank 0's data wait does not show
 #   more nodes:   --override compute.num_accelerators=32 --override env_variables.TABSIL_BATCH_SIZE=256
 #                 (the curriculum's batch 256 is for 32 GPUs; resuming keeps the original run's batch)
+#   one GPU:      --override compute.accelerator_type=GPU_1xH100 --override compute.num_accelerators=1
+#                 --override env_variables.TABSIL_NPROC=1 --override env_variables.TABSIL_BATCH_SIZE=32
+#                 --override env_variables.TABSIL_NUM_WORKERS=16 (the one-GPU node has 16 CPUs)
 #   Muon:         --override env_variables.TABSIL_MUON_DISTRIBUTED=all (Newton-Schulz split over the GPUs,
 #                 same results and checkpoint format; `node` splits within a node, `off` turns it off)
 #   diagnostics:  --override env_variables.TABSIL_GRAD_COSINE=1, --override env_variables.TABSIL_RANK_TIMING=1
@@ -89,4 +92,4 @@ command: >-
   torchrun $(if [ "${NUM_NODES:-1}" -gt 1 ]; then
   echo --nnodes=$NUM_NODES --node_rank=$NODE_RANK --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT;
   else echo --standalone; fi)
-  --nproc_per_node=8 $CODE_SOURCE_PATH/training/scripts/train.py
+  --nproc_per_node=${TABSIL_NPROC:-8} $CODE_SOURCE_PATH/training/scripts/train.py

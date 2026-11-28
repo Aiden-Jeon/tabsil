@@ -8,6 +8,8 @@ the v1 training data) with some of its options turned on, at fixed values. Each 
   that TabSil's lacks
 - `BASE_REALISM` (`graph_scm_base_realism`): the realism parts that Kumo-Tabular's prior has in
   every stage
+- `TASK_PROBE` (`graph_scm_task_probe`): `HICARD_MISSING` with every table task-shaped, for a
+  short fine-tuning that asks whether such tables move a task metric
 
     TrainConfig(prior_type="graph_scm_hicard_missing")
 
@@ -163,4 +165,34 @@ BASE_REALISM = Variant(
     }
 )
 
-__all__ = ["BASE_REALISM", "HICARD_MISSING", "REALISM", "Variant"]
+# ---------------------------------------------------------------------------
+# graph_scm_task_probe
+# ---------------------------------------------------------------------------
+# Graph SCM prior in which every table is task-shaped (prior axis,
+# `prior_type="graph_scm_task_probe"`): the probe of `training/docs/v2-prior-task-plan.md` (tier
+# 2), a short fine-tuning of weights trained on `graph_scm_hicard_missing`.
+#
+# It is `graph_scm_hicard_missing` (`HICARD_MISSING`, the prior of the weights the probe starts
+# from) with both task options at 1 (`transforms.tasks`):
+#
+# - `sorted_split_prob` 1: every regression table has its rows ordered by one column before the
+#   cut and its target standardized with the train rows (forecasting)
+# - `outlier_table_prob` 1: every classification table is data rows with hidden anomalies
+#   labeled 0 and reference rows labeled 1, with the true label asked for held-out data rows
+#   (outlier detection)
+#
+# With every table of a task type task-shaped the model sees the most such tables a run of its
+# length can give: the best case for a prior that mixes them in at a small share. It is not a
+# prior to train a model for release on: no ordinary table is left.
+#
+# The regression borders are the base prior's (the options are not `TARGET_OPTIONS`): the probe
+# takes its borders from the weights it starts from.
+TASK_PROBE = Variant(
+    {
+        **HICARD_MISSING.OPTIONS,
+        "sorted_split_prob": 1.0,
+        "outlier_table_prob": 1.0,
+    }
+)
+
+__all__ = ["BASE_REALISM", "HICARD_MISSING", "REALISM", "TASK_PROBE", "Variant"]
