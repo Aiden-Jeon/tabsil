@@ -1,6 +1,7 @@
 """Training loop tests (smoke size, CPU)."""
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 import torch
@@ -468,6 +469,20 @@ def test_train_script_takes_weights_from_a_hub_folder(tmp_path, monkeypatch):
     # another structure is refused before the run starts
     with pytest.raises(SystemExit, match="nhead"):
         hub_init_checkpoint(str(tmp_path / "hub"), replace(config, nhead=4), tmp_path / "x")
+    # a folder logged to MLflow (runs:/): downloaded next to the init file, into its own folder
+    seen = []
+
+    def fake_download(uri, dst):
+        seen.append((uri, Path(dst)))
+        return tmp_path / "hub"
+
+    monkeypatch.setattr("tabsil_train.hub.download_artifact", fake_download)
+    from_run = hub_init_checkpoint("runs:/abc/model", config, tmp_path / "init_rank3.pt")
+    assert seen == [("runs:/abc/model", tmp_path / "init_rank3_source")]
+    assert torch.equal(load_checkpoint(from_run)[1], borders)
+    monkeypatch.setattr("tabsil_train.hub.download_artifact", lambda uri, dst: path)  # a file
+    with pytest.raises(SystemExit, match="not a save_pretrained folder"):
+        hub_init_checkpoint("runs:/abc/init.pt", config, tmp_path / "init_rank0.pt")
     # one weight source at a time; a later stage accepts --init-hub
     args = script.parse_args(["--config-name", "stage2", "--init-hub", "aiden-jeon/tabsil@x"])
     assert args.init_hub == "aiden-jeon/tabsil@x"
