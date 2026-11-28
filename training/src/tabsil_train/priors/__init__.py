@@ -22,7 +22,7 @@ The graph SCM, in one folder:
 - `graph_scm.variants`: the prior with some of its options at fixed values, each under its own
   name
 
-Registered priors (`PRIOR_TYPES`; the last three are the variants):
+Registered priors (`PRIOR_TYPES`; the three after `graph_scm` are its variants):
 
 - `graph_scm`: graph SCM generator + table size rule + missing values (TabSil's training prior)
 - `graph_scm_hicard_missing`: `graph_scm` with high-cardinality categorical columns and structured
@@ -34,19 +34,24 @@ Registered priors (`PRIOR_TYPES`; the last three are the variants):
   its stage-1 values (Kumaraswamy-warped columns, up to 200 categories, correlated column blocks,
   structured missing values, random missing cells in 1% of the tables, too-easy tables drawn
   again)
+- `real_tables`: subsamples of the OpenML tables of a pinned corpus with their own targets, through
+  the preprocessing of one inference member (`real_tables`); it continues a model and takes the
+  regression borders of its start checkpoint
 
 The training loop (`tabsil_train.training.loop`) picks its prior from `PRIOR_TYPES` by name
-(`TrainConfig.prior_type`). What a name is registered to (`prior_module`: the `graph_scm` module,
-or a `Variant` of `graph_scm.variants`) provides:
+(`TrainConfig.prior_type`). What a name is registered to (`prior_module`: the `graph_scm` or
+`real_tables` module, or a `Variant` of `graph_scm.variants`) provides:
 
 - `make_prior(config, task, seed)`: the `task` prior, an object whose `sample_batch(batch_size)`
   gives a `PriorBatch`. The table size settings are read from `config` (`TrainConfig`)
 - `make_borders(config, n_buckets, seed, n_jobs)`: the regression bar distribution borders, drawn
-  with the same table size settings as the training prior
+  with the same table size settings as the training prior (`real_tables` has none: a run on it
+  starts from a checkpoint and keeps its borders)
 - `check_config(config)`: whether the prior can produce the table size settings (both tasks,
   ValueError otherwise)
 - `MAX_CLASSES`: the most classes of a classification dataset (the classifier's output count)
-- `OPTIONS` (variants only): the options it fixes, recorded as the `prior_options` run parameter
+- `OPTIONS` (variants and `real_tables`): the options it fixes (for `real_tables` the corpus and
+  its digest), recorded as the `prior_options` run parameter
 
 Only fully assembled priors are registered by name (one combination = one name). An experiment
 that changes parts or numbers gets its own name (for `graph_scm` options, a new `Variant` in
@@ -73,6 +78,7 @@ PRIOR_TYPES: dict[str, str] = {
     "graph_scm_hicard_missing": "tabsil_train.priors.graph_scm.variants:HICARD_MISSING",
     "graph_scm_realism": "tabsil_train.priors.graph_scm.variants:REALISM",
     "graph_scm_base_realism": "tabsil_train.priors.graph_scm.variants:BASE_REALISM",
+    "real_tables": "tabsil_train.priors.real_tables",
 }
 # old name -> current name, accepted when reading older training runs whose params still use it
 PRIOR_TYPE_ALIASES: dict[str, str] = {
