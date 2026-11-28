@@ -401,6 +401,237 @@ The simulation gives R10's step time from the generation times alone, about 10% 
 
 The diagnostics cost 2.9 H100-h (six 1xH100 jobs). The evaluations cost 2.5 H100-h for N10 (1 H100 each) and 2.2 for R10 (8 H100 for the two arena suites).
 
+## Phase 1B
+
+Stage-1 recipe arms trained from scratch (plan §4, "Phase 1B"), run on 2026-11-27 and 28. Every training run uses the code of dev-v2 `67c0c94` (PR #32) and is named `tabsil-v2-1b-<arm>-s<seed>`. The readout is the capped evaluation of plan §3 on TabArena with 3 splits and on the development suite, with the reference validation loss next to it.
+
+**Result.**
+
+- **Neither arm is resolved.** Against the three control seeds, YCTX has G 0.995 (0.990-1.000) and OPTK 1.003 (0.999-1.008) on the 99 datasets. Two control seeds differ from each other by up to 0.5%.
+- **By the plan's rule both arms fall under its second clause** (not resolved, G at most 1.01, a copy of a published configuration), which adopts them and asks for one run with both. That run was stopped: on 2026-11-28 the user decided that phases 3 to 5 are not run, so no stage 1 is left that would use the recipe.
+- **PS1 was stopped on 2026-11-27** to save cost, and nothing is concluded about it.
+- **OPTK did not let the attention temperatures grow**, so the BF16 failure that Kumo-Tabular reports did not appear with its optimizer either.
+- Phase 1B cost 965 H100-h.
+
+### What differs from the plan
+
+| | Plan | Run |
+|---|---|---|
+| Model size | XS (`--emsize 128`, 56M) | v1's size (221.5M) |
+| GPUs per run | 32 H100 | 8 H100 (one `GPU_8xH100` node) |
+| One run | 56 H100-h | 15.2 hours and 122 H100-h for C (1.81 s per step) |
+| Arms | C, YCTX, OPTK, PS1 | C, YCTX, OPTK. PS1 was stopped |
+| Conditional runs | a third arm seed, a run with all adopted arms | none (below) |
+
+- **Size.** Phase 0.3 measured XS at 0.81 times M's cost per step, not the 0.29 of the FLOPs estimate. At v1's size the arms cost 1.24 times as much as on XS, and the plan's first risk (§7, "the small model may not stand for the large one") does not apply.
+- **GPUs.** 8 H100 with batch 256 and micro batch 4 is the configuration timed in 0.3. It takes fewer H100-h per step than v1's record on 32 H100.
+- **PS1 was stopped on 2026-11-27 08:08 UTC, a decision of the user to save about 200 H100-h.** The plan expected PS1 to be neutral at 30K steps and ran it to catch harm, with v1's stage-1 prior as the fallback, and it is the slowest arm. Nothing is concluded about it. What is left of its runs:
+
+  | Run | MLflow run | Stopped at | Checkpoint | Reference loss at step 10,000 (classification / regression) |
+  |---|---|---|---|---|
+  | `tabsil-v2-1b-ps1-s0` | `8d64487b2d2a42b5805fe640f62d7e82` | step 10,500 | `checkpoints/latest.pt`, step 10,000 | 0.3086 / 0.0674 (C seed 0: 0.3061 / 0.0669) |
+  | `tabsil-v2-1b-ps1-s1` | `343f0ceae9b74c7181f26124aa915eaf` | step 5,000 | none (stopped before the first checkpoint was uploaded) | — |
+
+  A resumed run keeps its seed, steps, prior and options (`TABSIL_RESUME_RUN_ID=8d64487b…`), so seed 0 can be continued from step 10,000 with `TABSIL_PREFETCH_FACTOR=16`.
+- **The run with both arms was stopped after 34 minutes.** `tabsil-v2-1b-yctx-optk-s0` (`18d046138a7e4624b306555f5a0618be`) was started on 2026-11-27 22:56 UTC, on the numbers with two control seeds and before the third was evaluated. The user's decision that phases 3 to 5 are not run came after it, and the run was cancelled at step 700 with no checkpoint.
+
+### The training code: review and GPU smoke (PR #32)
+
+The review checked the code against the plan and against Kumo-Tabular's source (`NVIDIA/structured-data-models`, `train/kumo/tabular/optim.py`, `loader.py`, `prior.py` and the stage-1 commands).
+
+- **The control is v1's recipe.** `tests/data/default_behavior.json` (batches of three priors, the regression borders, the validation batches, and the losses and weights of a 6-step run) was regenerated from an export of 01973a5 and is identical to the committed file. Every new option is off by default.
+- **YCTX** standardizes the regression target again with the train rows (mean, sd with ddof 0) after the prior's clip and draws a table again if that sd is at most 0.1, as Kumo's loader does. The regression borders are drawn with it. One difference: Kumo redraws the single table, and TabSil the group of tables that holds it.
+- **OPTK** puts every `nn.Linear` weight on Muon except those of the target encoders, the output and the attention scales, which go to AdamW with the other parameters (weight decay 0.01 on matrices and scales, 0 on the other 1-d parameters), one lr of 3e-4 for both, Muon momentum 0.95. Kumo's `head` is `Linear(d, 2d)`, GELU, `Linear(2d, out)`, so TabSil's `pre_head` and `heads` are its counterpart. Warmup stays at 1% (Kumo: 2%), so that only the optimizer differs from C.
+- **The reference validation set** is drawn from `graph_scm` with v1's prior settings and fixed seeds, whatever the run's seed and prior. Every run of this phase has the `reference_val_digest` `e7bf78955d9037ab` and `tabicl_version` 2.2.0.
+- **Fixed in the review:** a regression loss that gives every run its targets as inference does (`ref_loss_regression_train_rows`; `ref_loss_regression` gives C targets standardized over all rows, which YCTX never sees), a resumed run keeps its seed and step count, the values a prior module fixes are logged (`prior_options`), `tabicl` is pinned, and the attention temperatures are logged per stage and for the first row ICL layer (`head_scale_*`).
+
+GPU smoke, 300 steps each on one 8xH100 node with the settings of the runs (seconds per step at steps 200 and 300):
+
+| Run | MLflow run | s / step | Note |
+|---|---|---|---|
+| `tabsil-p0-timing-m` (phase 0.3) | `e9d825c1…` | 1.808, 1.820 | |
+| `tabsil-v2-1b-smoke-c` | `31e176052e574bf18f7cb76c45a2e7c4` | 1.798, 1.800 | as the timing run |
+| `tabsil-v2-1b-smoke-yctx` | `f649beb44ece430aac26cd2b6776d902` | 1.782, 1.781 | |
+| `tabsil-v2-1b-smoke-optk` | `b6d2ed58d0df47109292c3b22f0edbc8` | 1.732, 1.741 | DDP and distributed Muon over NCCL |
+| `tabsil-v2-1b-smoke-ps1` | `acd7b4f3b4574ecfae1cf36f3b9e8be1` | 2.021, 2.463 | prefetch 4 |
+| `tabsil-v2-1b-diag-ps1-w22` | `5a99ca4fde36419a99199f96f8fad470` | 2.066, 1.991 | 22 prior workers per GPU instead of 16 |
+| `tabsil-v2-1b-diag-ps1-prefetch16` | `7bf2d2a4ba7f459da158c924d27209f0` | 1.949, 1.982 | prefetch 16 |
+| `tabsil-v2-1b-diag-ps1-prefetch32` | `8871f85444224500950b9b5e1b184a9d` | 1.972, 1.976 | prefetch 32 |
+| `tabsil-v2-1b-diag-c-prefetch16` | `db3de71932aa495e9482cc4b6b7633b9` | 1.793, 1.789 | C is unchanged by the prefetch |
+
+**PS1 was slow for the reason R10 was** (Phase 1A, "Why R10 was slow"), here at stage-1 table sizes on 8 GPUs. With `TABSIL_RANK_TIMING=1` (`tabsil-v2-1b-diag-ps1-timing`, `d165f429ac454eb597f90c14517bdb06`, against `tabsil-v2-1b-diag-c-timing`, `be7970c655dd42baa694123a691b66ac`):
+
+- In 6 of 200 steps one GPU arrived 3 to 30 s late with normal forward and backward times, and the other seven waited for it in the all-reduce. C had no such step. Rank 0's `data_wait_frac` stayed under 1%.
+- The loader hands micro batches over in request order, 32 micro batches ahead, which is about 14 s here. PS1's prior (`corrected_cat_sizes`, `corrected_num_converters`) has micro batches that take longer.
+- More workers did not help. `TABSIL_PREFETCH_FACTOR=16` (a head start of about 58 s, the same tables in the same order) removed the late steps: the correlation across GPUs of backward and forward time is −0.999, as for C.
+- PS1 stayed 9% slower than C (1.97 against 1.80 s per step): forward and backward take 12% and 6% longer at the same table sizes. This was not traced further. The node's CPU use is 48% with PS1 and 36% with C.
+
+The ten smoke and diagnostic runs cost 31 H100-h: a 300-step job takes 21 to 26 minutes on the node with the borders, the compilation and the uploads, of which the steps are 9.
+
+### Runs
+
+Stage 1 from scratch, 30K steps (warmup 300), batch 256, micro batch 4, 16 prior workers per GPU, `TABSIL_COMPILE=1 TABSIL_TF32=1 TABSIL_MUON_DISTRIBUTED=all`, `TABSIL_REFERENCE_VAL_TABLES=512`. YCTX adds `TABSIL_TARGET_TRAIN_ROWS=1`, and OPTK `TABSIL_OPTIMIZER=muon_adamw TABSIL_LR=3e-4 TABSIL_MUON_MOMENTUM=0.95`. Seconds per step is the mean of the 100-step windows after the first, with their 10th and 90th percentile.
+
+| Run | MLflow run | Wall time | s / step | H100-h | Final train loss |
+|---|---|---|---|---|---|
+| `tabsil-v2-1b-c-s0` | `2c0aaf05b27846fa944051ea0be59d53` | 15.29 h | 1.810 (1.78-1.83) | 122 | 0.1836 |
+| `tabsil-v2-1b-c-s1` | `7f1e2cea52724763b0a1e5619fd03464` | 15.29 h | 1.811 (1.79-1.82) | 122 | 0.1840 |
+| `tabsil-v2-1b-c-s2` | `1089b4f1ab6a4a1bbee2e19f409aa00c` | 15.15 h | 1.795 (1.77-1.81) | 121 | 0.1855 |
+| `tabsil-v2-1b-yctx-s0` | `74f6ab8c8f7a4ae89135be011810c109` | 15.39 h | 1.821 (1.80-1.84) | 123 | 0.1848 |
+| `tabsil-v2-1b-yctx-s1` | `bc2c2e476e3142b1a01eade86ef490ad` | 15.08 h | 1.785 (1.76-1.80) | 121 | 0.1866 |
+| `tabsil-v2-1b-optk-s0` | `e3d013f9bbd145b7a9afe64da95010a2` | 14.83 h | 1.753 (1.73-1.77) | 119 | 0.1845 |
+| `tabsil-v2-1b-optk-s1` | `64aae055e7f14ddaa052729d395a58cd` | 14.61 h | 1.730 (1.70-1.75) | 117 | 0.1845 |
+
+- Every run finished its 30,000 steps with no skipped step, and rank 0's data wait is 0.15% in all of them.
+- All seven have the same reference set (`reference_val_digest` `e7bf78955d9037ab`, `tabicl_version` 2.2.0).
+- OPTK is 3 to 4% faster per step than C: its AdamW parameters skip the Newton-Schulz iteration.
+- A YCTX run's train loss is not comparable with C's: its regression targets are in train-row units.
+- Each run keeps `model/final.pt`, `checkpoints/latest.pt` and `checkpoints/step_0025000.pt`.
+
+### Evaluation
+
+`model/final.pt` of each run, with the context capped at 1,024 rows (`--subsample-train-rows 1024`, the same rows for every run), tabsil 0.1.1's inference defaults with 8 members (`--member-kinds numeric-cycle --categories counts`), on `--suite tabarena-3split` (153 splits) and `--suite dev` (48 datasets, 10 folds). The evaluation code is that of `67c0c94`, on one H100 per job.
+
+| Weights | TabArena 3-split run | Elo | Development suite run |
+|---|---|---|---|
+| C seed 0 | `b1af8e691d9e4e20a51a506c28d5ab57` | 1174.1 | `585af8cd3be44920adb80bd649ce68c8` |
+| C seed 1 | `8e1fdf40f8b34060a809c41f77858a32` | 1173.1 | `eb24cec41b634a8592b7a1759a2388e1` |
+| C seed 2 | `9092db730d9341aba87ca0f882442ea3` | 1171.8 | `3f3219e9c8ca4c4182da3982b3ca662f` |
+| YCTX seed 0 | `8a3704ae22d54a5d9bdd0c866514300f` | 1175.5 | `30915965d00a43a3aea268b15cde0442` |
+| YCTX seed 1 | `25f5e23f91cc4f50862fd2907fd89d5f` | 1186.7 | `2a1aea4cc1c44c05bf076cc5426c602e` |
+| OPTK seed 0 | `8eb0f13d81ee44cda9e97657bfe20a8b` | 1171.8 | `2b35cfb0f03d4fd6aa70fd0db848a723` |
+| OPTK seed 1 | `7944403ee74b4d91bb90b9a8efc652a5` | 1178.1 | `a2331e974c8d467f9c2bf08a683da5ce` |
+
+- Every 3-split run has 0% imputed splits, and no fold of a development-suite run failed. The applied inference settings, the cap and the evaluation seed are the same in all 14 runs (`seed_arm_report.py` compares them and printed no warning).
+- OPTK seed 1's first 3-split job failed while it downloaded an OpenML file (`IncompleteRead`), before any split ran. It was submitted again; the run above is the second.
+- The Elo is the capped model in TabArena's pool and decides nothing.
+
+### Verdict by the rule
+
+Plan §3, "Arm trained from scratch": a run's score is its mean log error over the datasets. `training/scripts/seed_arm_report.py` computes the scores, G of the seed means (the arm's error averaged over its seeds over the control's averaged over its three), and G of each arm seed against the control seed of the same number.
+
+Scores (lower is better):
+
+| Datasets | C seed 0, 1, 2 | YCTX seed 0, 1 | OPTK seed 0, 1 |
+|---|---|---|---|
+| TabArena 3-split (51) | −0.7548, −0.7527, −0.7527 | −0.7595, −0.7548 | −0.7498, −0.7571 |
+| Development suite (48) | −0.6044, −0.6090, −0.5984 | −0.6140, −0.6053 | −0.5964, −0.5970 |
+| Pooled (99) | −0.6819, −0.6830, −0.6778 | −0.6890, −0.6823 | −0.6754, −0.6795 |
+
+G of the seed means, arm / control (95% CI), Wilcoxon p, datasets better / worse:
+
+| Arm | Datasets | All | Classification | Regression |
+|---|---|---|---|---|
+| YCTX | TabArena 3-split | 0.996 (0.992-1.000), p 0.017, 32 / 19 | 0.996 (0.990-1.000), 23 / 15 | 0.998 (0.995-1.001), 9 / 4 |
+| YCTX | Development suite | 0.994 (0.984-1.002), p 0.042, 31 / 17 | 0.993 (0.980-1.006), 15 / 8 | 0.995 (0.980-1.005), 16 / 9 |
+| YCTX | Pooled | **0.995 (0.990-1.000)**, p 0.002, 63 / 36 | 0.995 (0.989-1.000), 38 / 23 | 0.996 (0.986-1.003), 25 / 13 |
+| OPTK | TabArena 3-split | 1.000 (0.996-1.004), p 0.99, 28 / 23 | 0.999 (0.994-1.004), 22 / 16 | 1.003 (0.998-1.008), 6 / 7 |
+| OPTK | Development suite | 1.007 (0.998-1.017), p 0.018, 15 / 33 | 1.010 (1.000-1.024), 10 / 13 | 1.004 (0.990-1.017), 5 / 20 |
+| OPTK | Pooled | **1.003 (0.999-1.008)**, p 0.10, 43 / 56 | 1.003 (0.998-1.009), 32 / 29 | 1.004 (0.994-1.013), 11 / 27 |
+
+G of an arm seed against the control seed of the same number (the two start from the same weights and prior stream), pooled:
+
+| Arm | Seed 0 | Seed 1 |
+|---|---|---|
+| YCTX | 0.993 (0.986-0.999), 61 / 38 | 1.001 (0.995-1.007), 53 / 46 |
+| OPTK | 1.007 (0.999-1.014), 40 / 59 | 1.004 (0.995-1.013), 46 / 53 |
+
+The rule, step by step:
+
+| Step of the rule | YCTX | OPTK |
+|---|---|---|
+| Both arm seeds score below all three control seeds? | No. Seed 1 (−0.6823) is above C seed 1 (−0.6830). No third seed | No. Both seeds are above C seeds 0 and 1. No third seed |
+| G above 1.02 with a CI above 1? (dropped) | No | No |
+| Otherwise not resolved: adopted only if it removes a train/inference mismatch or copies a published configuration, and G is at most 1.01 | It does both (the target scaling of inference, Kumo-Tabular's loader), G 0.995: **adopted by this clause** | It copies Kumo-Tabular's optimizer, G 1.003: **adopted by this clause** |
+| Guards: no task worse than the control by more than 0.5% beyond the noise, 0% imputed | Classification 0.995, regression 0.996 | Classification 1.003, regression 1.004 |
+
+- **By the rule, YCTX and OPTK are both adopted as copies of a published configuration, not on evidence.** Neither effect reaches the 2% that this scale resolves.
+- **The rule's next step was one run with both arms. It was not run to the end**, by the user's decision of 2026-11-28 that phases 3 to 5 are not run ("What differs from the plan"). No third arm seed was due.
+
+What the numbers say beyond the rule:
+
+- **YCTX is 0.5% better on average, and its two seeds disagree.** The sign is the same in both suites and both tasks, 63 of 99 datasets improve, and the CI ends at 1.000. But seed 0 is 0.7% better than its control seed and seed 1 is 0.1% worse, and the two YCTX seeds are 0.7% apart in score, more than the three control seeds (0.5%). The gain is the size of a seed.
+- **OPTK is 0.3% worse on average, all of it on the development suite** (1.007, 33 of 48 datasets worse; TabArena 1.000). Regression is worse on 27 of 38 datasets (p 0.02) by 0.4%. Its reference classification loss is above every control seed at every validation step (below). It is 3 to 4% cheaper per step.
+- **OPTK was tested at 30K steps only.** Kumo-Tabular trains stage 1 for 500K to 1M steps at this lr. Whether its optimizer helps a long run is not shown either way.
+
+### The noise of a stage-1 rerun
+
+The three control runs differ only in the seed. G of one against another (95% CI), and the sd over datasets of the log ratio:
+
+| Pair | TabArena 3-split | Development suite | Pooled | Pooled classification / regression | sd of ln ratio, TabArena / dev |
+|---|---|---|---|---|---|
+| Seed 1 against seed 0 | 1.002 (0.996-1.008) | 0.995 (0.978-1.009) | 0.999 (0.991-1.007) | 1.005 / 0.988 | 0.021 / 0.055 |
+| Seed 2 against seed 0 | 1.002 (0.996-1.009) | 1.006 (0.996-1.019) | 1.004 (0.998-1.011) | 1.007 / 1.000 | 0.024 / 0.039 |
+| Seed 2 against seed 1 | 1.000 (0.994-1.006) | 1.011 (0.994-1.030) | 1.005 (0.996-1.014) | 1.001 / 1.012 | 0.022 / 0.060 |
+
+- **Two stage-1 runs of the same recipe differ by 0.1 to 0.5% pooled** (ν = \|ln G\| of 0.001, 0.004 and 0.005), by up to 0.7% in classification and 1.2% in regression. No pair's pooled CI excludes 1.
+- **TabArena with 3 splits is the quieter suite**: 0.0 to 0.2% between seeds with a per-dataset sd of 0.02. The development suite gives 0.5 to 1.1% with an sd of 0.04 to 0.06. It was also the noisier one between two stage-2 runs (Phase 1A, ν: 0.9% against 0.3%).
+- **The plan expected more noise.** Its §1.1 found 1.0% between two stage-1 runs of one seed at 25K steps (two schedule lengths, 51 single splits, the full context), and row 7 of its §1 assumed a per-dataset sd of 0.04 to 0.10. With the context capped at 1,024 rows, 3 splits and 30K-step runs, the sd on TabArena is 0.02.
+- **Both arm effects lie inside this range**: YCTX at −0.5% and OPTK at +0.3% against 0.1 to 0.5% between control seeds.
+
+### Reference validation loss
+
+512 tables per task from `graph_scm` with v1's prior settings, the same in every run. Classification loss, and the regression loss with each target standardized with its train rows (`ref_loss_regression_train_rows`, the form inference gives):
+
+| Run | Classification: 5K | 10K | 20K | 30K | Regression: 5K | 10K | 20K | 30K |
+|---|---|---|---|---|---|---|---|---|
+| C seed 0 | 0.3159 | 0.3061 | 0.2953 | 0.2920 | 0.0693 | 0.0670 | 0.0641 | 0.0632 |
+| C seed 1 | 0.3171 | 0.3078 | 0.2971 | 0.2931 | 0.0696 | 0.0670 | 0.0641 | 0.0632 |
+| C seed 2 | 0.3165 | 0.3077 | 0.2970 | 0.2933 | 0.0698 | 0.0673 | 0.0643 | 0.0635 |
+| YCTX seed 0 | 0.3164 | 0.3069 | 0.2951 | 0.2919 | 0.0696 | 0.0670 | 0.0641 | 0.0631 |
+| YCTX seed 1 | 0.3171 | 0.3064 | 0.2969 | 0.2926 | 0.0696 | 0.0669 | 0.0641 | 0.0633 |
+| OPTK seed 0 | 0.3205 | 0.3091 | 0.2976 | 0.2938 | 0.0700 | 0.0675 | 0.0643 | 0.0636 |
+| OPTK seed 1 | 0.3205 | 0.3089 | 0.2983 | 0.2944 | 0.0697 | 0.0671 | 0.0643 | 0.0634 |
+
+The arm's seed mean against the control's, and the range of the three control seeds, as a share of the control mean:
+
+| Loss | Step | C seeds, largest − smallest | YCTX − C | OPTK − C |
+|---|---|---|---|---|
+| Classification | 5K | 0.38% | +0.09% | +1.27% |
+| Classification | 10K | 0.56% | −0.18% | +0.58% |
+| Classification | 20K | 0.62% | −0.15% | +0.51% |
+| Classification | 30K | 0.43% | −0.19% | +0.44% |
+| Regression, train-row targets | 5K | 0.74% | +0.06% | +0.39% |
+| Regression, train-row targets | 10K | 0.46% | −0.26% | +0.31% |
+| Regression, train-row targets | 20K | 0.27% | −0.15% | +0.20% |
+| Regression, train-row targets | 30K | 0.37% | −0.17% | +0.26% |
+
+- **At 30K steps the three recipes are within 0.5% of each other on the prior**, as on the real datasets, and with the same signs: YCTX slightly below C, OPTK slightly above.
+- **OPTK's classification loss is above all three control seeds at every validation step** (5K to 30K), by 1.3% at 5K and 0.4 to 0.5% from 15K on. The two OPTK seeds are within 0.0007 of each other at every step. YCTX stays within 0.0003 of the control range.
+- **20K steps read the same as 30K on this loss.** The differences have the same sign and about the same size at 20K as at 30K (YCTX −0.15% and −0.19%, OPTK +0.51% and +0.44% in classification), and the control seeds are as close (0.62% and 0.43%). This holds for the reference loss only: the runs kept no checkpoint at 20K, so the capped evaluation at 20K is not known. `checkpoints/step_0025000.pt` of each run could give it at 25K.
+- **Which regression loss is read matters for YCTX.** With the targets as each run trained on them (`ref_loss_regression`), YCTX is 0.20% above C at 30K. With train-row targets for both it is 0.17% below. C's own loss is 0.3% higher on train-row targets (0.0633 against 0.0631): standardizing over all rows tells C that much about the eval rows. The train-row form is the one that compares the two.
+
+### Attention temperatures under OPTK
+
+OPTK moves the attention scales (`head_scale`, a_h) from Muon to AdamW. Phase 0.4 asked to watch them, because Kumo-Tabular reports about 30-fold growth in the first in-context layer when it trains regression in BF16. Mean a_h of the first row ICL layer / its largest a_h / the largest a_h in any row ICL layer:
+
+| Run | Step 100 | 5K | 10K | 20K | 30K |
+|---|---|---|---|---|---|
+| C seed 0 | 0.503 / 0.909 / 0.997 | 0.437 / 0.851 / 0.987 | 0.404 / 0.805 / 0.988 | 0.379 / 0.759 / 0.960 | 0.376 / 0.752 / 0.952 |
+| C seed 1 | 0.422 / 0.911 / 0.999 | 0.366 / 0.858 / 1.038 | 0.339 / 0.817 / 1.020 | 0.318 / 0.770 / 0.968 | 0.316 / 0.763 / 0.954 |
+| C seed 2 | 0.505 / 0.955 / 0.999 | 0.458 / 0.903 / 0.996 | 0.436 / 0.866 / 0.991 | 0.415 / 0.826 / 0.951 | 0.412 / 0.819 / 0.940 |
+| YCTX seed 0 | 0.503 / 0.909 / 0.997 | 0.442 / 0.855 / 0.955 | 0.409 / 0.806 / 0.927 | 0.381 / 0.754 / 0.896 | 0.378 / 0.746 / 0.890 |
+| YCTX seed 1 | 0.422 / 0.911 / 0.999 | 0.367 / 0.861 / 1.010 | 0.341 / 0.820 / 0.987 | 0.318 / 0.771 / 0.941 | 0.316 / 0.764 / 0.928 |
+| OPTK seed 0 | 0.505 / 0.910 / 0.999 | 0.340 / 0.615 / 1.233 | 0.238 / 0.553 / 1.296 | 0.185 / 0.524 / 1.321 | 0.181 / 0.525 / 1.321 |
+| OPTK seed 1 | 0.424 / 0.911 / 1.002 | 0.271 / 0.581 / 1.179 | 0.189 / 0.453 / 1.196 | 0.151 / 0.451 / 1.237 | 0.148 / 0.457 / 1.234 |
+
+- **Nothing grew.** Under AdamW the first row ICL layer's temperatures fall faster than under Muon: the mean is 0.15 to 0.18 after 30K steps against 0.32 to 0.41 for C. v1 reached 0.19 after 150K steps of Muon (phase 0.4).
+- The largest single head in any row ICL layer rises to 1.23 to 1.32 with OPTK, from 1.00 at the start, and stays below 1.04 with C. That is a factor of 1.3, not 30.
+- So training both tasks in BF16 is safe with either optimizer at this length, and no FP16 arm is needed.
+
+### Cost
+
+| Item | H100-h |
+|---|---|
+| The seven training runs | 845 |
+| PS1 seeds 0 and 1, stopped at steps 10,500 and 5,000 | 73 |
+| The run with both arms, stopped at step 700 | 5 |
+| Ten smoke and diagnostic runs of 300 steps | 31 |
+| 17 evaluation jobs on one H100 (two per run, a trial on a smoke checkpoint, one failed job) | 12 |
+| Total | 965 |
+
+The plan had 500 to 670 for 9 to 12 XS runs on 32 H100, and the estimate before the runs was 1,090 for 9 runs at v1's size.
+
 ## GPU cost
 
 Measured on 2026-11-27 with short timing jobs, to redesign phases 2 to 5 of the plan (plan §4, "Cost basis for phases 2 to 5"). No model was trained for a result. Every job is 300 steps of stage 1 or 110 steps of stage 2 on 8 H100, or a one-GPU job of 40 to 2,000 steps, and only its timing is read. Together they used 28.9 H100-h ("Cost of the measurements").

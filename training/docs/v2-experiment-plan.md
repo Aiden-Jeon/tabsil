@@ -1,6 +1,6 @@
 # v2 experiment plan
 
-Status: plan, stopped by the user's decisions of 2026-11-28: L20 was stopped without a verdict, and phases 3 to 5 are not run (§7). Results are in [v2-experiment-results.md](v2-experiment-results.md) (phase 0 done 2026-11-26; N10 and R10 of phase 1A done 2026-11-27, L20 stopped at step 5,200 of 20,000; GPU cost measured 2026-11-27). Nothing was trained or evaluated for this document itself. It re-checks [v2-task-priors.md](v2-task-priors.md) and [v2-scaling.md](v2-scaling.md) against MLflow, the code and the primary sources (2026-11-26), and replaces their experiment plans. Every run below needs approval before it starts.
+Status: plan, stopped by the user's decisions of 2026-11-28: L20 was stopped without a verdict, and phases 3 to 5 are not run (§7). Results are in [v2-experiment-results.md](v2-experiment-results.md) (phase 0 done 2026-11-26; N10 and R10 of phase 1A done 2026-11-27, L20 stopped at step 5,200 of 20,000; phase 1B done 2026-11-28, without PS1; GPU cost measured 2026-11-27). Nothing was trained or evaluated for this document itself. It re-checks [v2-task-priors.md](v2-task-priors.md) and [v2-scaling.md](v2-scaling.md) against MLflow, the code and the primary sources (2026-11-26), and replaces their experiment plans. Every run below needs approval before it starts.
 
 ## Summary
 
@@ -245,6 +245,7 @@ From scratch, stage 1 only, 30K steps, batch 256, `--emsize 128` (XS, 56M). Each
 - PS1 is expected to be neutral at 30K steps (§1, row 6). It is run to catch harm. The stage-2 parts of the prior are tested in 1A, where they act.
 - If two or more arms are adopted, one run with all of them checks that they combine (56-168 H100-h).
 - Kumo ran its ablation in the same way: 100K-step runs of its small model, three seeds, every outer split.
+- **As run (2026-11-27 and 28):** at v1's size instead of XS, on one 8xH100 node per run instead of 32 H100, at 122 H100-h a run instead of 56. Phase 0.3 had measured XS at 0.81 times M's cost per step, so XS saved little and M removes the first risk of §7. PS1 was stopped by the user after 10,500 and 5,000 steps, and the run with both adopted arms was not run to the end (phases 3 to 5 are not run). Neither YCTX (G 0.995) nor OPTK (1.003) is resolved. Cost: 965 H100-h. Results: [v2-experiment-results.md](v2-experiment-results.md), "Phase 1B".
 
 ### Cost basis for phases 2 to 5 (2026-11-27)
 
@@ -379,7 +380,7 @@ Phase 1B resolves about 2% with 7 runs of 30K steps at v1's size (9 before PS1 w
 | Design | H100-h | Resolves | Holds if |
 |---|---|---|---|
 | As 1B: M, 30K steps, 3 control and 2 (+1) arm seeds, one node per run | 620-745, of which 372 are the control that all arms share | about 2% | — |
-| The same at 20K steps | 415-495 | about 2% | 1B's own logs show it: the arm − control difference of the reference loss at 20K has the sign and about the size of the one at 30K, and the C seeds are as close at 20K. Read when 1B ends; no run |
+| The same at 20K steps | 415-495 | about 2% | 1B's own logs show it: the arm − control difference of the reference loss at 20K has the sign and about the size of the one at 30K, and the C seeds are as close at 20K. Read when 1B ends; no run. Read on 2026-11-28: it holds on the reference loss (YCTX −0.15% at 20K and −0.19% at 30K, OPTK +0.51% and +0.44% in classification; C seeds 0.62% and 0.43% apart). The capped evaluation at 20K is not known, since no checkpoint was kept there (results, "Phase 1B") |
 | The same on XS at micro batch 8 | 405-490 | about 2%, for XS | XS stands for M (§7, first risk). 1B was moved to M to avoid that |
 | 2 control and 2 arm seeds first, the third of each only if both arm seeds beat both controls | 495, up to 745 | about 2% | — (the rule's p of 0.05 needs all six) |
 | Stage-2 branches from one checkpoint on one node: control, its repeat and the arm | 545 for 10K steps each; 182 with a control and a repeat that exist | about 0.6% (ν 0.003, phase 1A) | the change can be switched on in stage 2. ν was measured at micro batch 1 on 32 H100 and is measured again by the repeat |
@@ -410,7 +411,7 @@ Budget after the redesign of 2026-11-27, in H100-h. The tiers above are the plan
 |---|---|---|---|---|
 | 0 | 30 | about 30, done | — | — |
 | 1A | 1,228 | N10 305 and R10 450, done. L20 about 360, running on 8 H100 at micro batch 2 (614 on 32 H100 as planned) | — | 840: N10 305, R10 450 and L20 85, stopped at step 5,200 |
-| 1B | 500-670 | about 940: 7 runs at v1's size at about 124 each and the two PS1 runs that were stopped. Running | — | — |
+| 1B | 500-670 | about 940: 7 runs at v1's size at about 124 each and the two PS1 runs that were stopped. Running | — | 922, done: 845 for the 7 runs, 73 for the two PS1 runs and 5 for a run with both arms that was stopped at step 700. 965 with its smoke runs, diagnostics and evaluations |
 | GPU cost measurements | — | 35, done: 29 for the redesign and 6 for the collector change | — | — |
 | Phases 0 to 1B | 1,928 | about 2,230: about 1,250 spent by 2026-11-27 08:00 UTC, with the evaluations, smoke runs and diagnostics that the rows above leave out, about 620 left of 1B and about 360 for L20 | — | about 1,955: L20 at 85 instead of about 360, the rest as in the third column |
 | 2 | 570 | — | 0. Skipped, decided 2026-11-27 | 0 |
@@ -423,7 +424,7 @@ Budget after the redesign of 2026-11-27, in H100-h. The tiers above are the plan
 - With phases 2 to 5 as planned, the total would be about 4,380-4,680.
 - The collector change is merged (PR #40) and measured as merged: 581 H100-h for phase 3 and 178 per 10K steps for phase 4 (results, "The collector change as merged"). Before the merge this plan had 592 and 169 from one `gc.freeze()` by the probe. The 169 also held the prefetch setting and lighter steps.
 - The recommended set before the decisions had phase 3 on 16 H100 (about 745): 930-1,110 for phases 2 to 5.
-- **(2026-11-28) Not spent:** about 240 H100-h of L20 (its steps 5,200 to 20,000 at the 16.2 H100-h per 1K steps it measured; the 360 was the estimate from the timing run), and the 760-935 of phases 3 to 5 as redesigned with the collector change. The 1,955 holds phase 1B as it was committed on 2026-11-27; what 1B spent in the end is in its section of the results.
+- **(2026-11-28) Not spent:** about 240 H100-h of L20 (its steps 5,200 to 20,000 at the 16.2 H100-h per 1K steps it measured; the 360 was the estimate from the timing run), and the 760-935 of phases 3 to 5 as redesigned with the collector change. The 1,955 holds phase 1B as it was committed on 2026-11-27 (about 940). Its runs came to 922 in the end, which leaves the total at about 1,940.
 - What the redesign gives up: a measured size curve (phase 2), whatever stage 3 adds on long tables, which was 0.1% for v1 and within the noise (phase 5), and wall time against runs on 32 H100: 47 h in phase 3 and 13 h per 10K steps in phase 4.
 
 - The earlier plans added up to 2.7-4.3K H100-h: phases 1 and 2 of [v2-task-priors.md](v2-task-priors.md) at 0.95-1.52K, the final run at 1.55K, and steps A and B of [v2-scaling.md](v2-scaling.md) at 0.17-1.19K.
