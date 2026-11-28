@@ -110,21 +110,16 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import mlflow  # noqa: E402
-import torch  # noqa: E402
 
 from tabsil_train import recipe  # noqa: E402
-from tabsil_train.hub import run_architecture  # noqa: E402
+from tabsil_train.hub import hub_init_checkpoint, run_architecture  # noqa: E402
 from tabsil_train.priors import DEFAULT_PRIOR_TYPE, canonical_prior_type  # noqa: E402
 from tabsil_train.training.config import (  # noqa: E402
     SPEED_OPTIONS,
     TrainConfig,
     normalize_phases,
 )
-from tabsil_train.training.loop import (  # noqa: E402
-    check_checkpoint,
-    check_source_checkpoint,
-    train,
-)
+from tabsil_train.training.loop import check_source_checkpoint, train  # noqa: E402
 from tabsil_train.utils import log_run_source  # noqa: E402
 
 # Generic sizes (smoke, medium) come from TrainConfig (a TabSil config with reduced size or steps).
@@ -709,24 +704,6 @@ def _check_source(path: str, config: TrainConfig, *, resume: bool) -> float:
         raise SystemExit(str(e)) from None
 
 
-def hub_init_checkpoint(spec: str, config: TrainConfig, path: Path) -> Path:
-    """The weights and regression borders of a Hub repo (`repo@revision`) or a local
-    `save_pretrained` folder, written to `path` as a `save_checkpoint` file for `init_from`, after
-    checking that the model matches the config (before the MLflow run is opened)."""
-    from tabsil.hub import from_pretrained
-    from tabsil.models import save_checkpoint
-
-    model, borders = from_pretrained(spec)
-    if borders is None:
-        raise SystemExit(f"--init-hub {spec} has no regression borders")
-    save_checkpoint(path, model, borders)
-    try:
-        check_checkpoint(torch.load(path, map_location="cpu", weights_only=True), config, spec)
-    except ValueError as e:
-        raise SystemExit(str(e)) from None
-    return path
-
-
 def _optional_float(value: str) -> float | None:
     return None if value.lower() in ("off", "none") else float(value)
 
@@ -798,18 +775,19 @@ def main(argv: list[str] | None = None) -> None:
             dst_path=str(out_dir / f"resume_rank{rank}"),
         )
         saved_lr = _check_source(resume_path, config, resume=True)
-        if config.phases:
-            # base lr = phase lr x the checkpoint's collapse factor (training loop; lr set above)
-            pass
-        elif args.lr is None:
-            # Without an explicit lr, keep the checkpoint's lr rather than the config default
-            config = replace(config, lr=saved_lr)
-        elif args.lr > saved_lr and config.rewind_lr_factor < 1 and rank == 0:
-            print(
-                f"warning: resuming with lr {args.lr:.2e}, higher than the checkpoint's base lr"
-                f" {saved_lr:.2e}. If the collapse rule lowered that lr, the reduction is lost",
-                flush=True,
-            )
+        # With phases the checkpoint's lr is not used here: the base lr is the phase lr x the
+        # checkpoint's collapse factor (training loop; lr set above)
+        if not config.phases:
+            if args.lr is None:
+                # Without an explicit lr, keep the checkpoint's lr rather than the config default
+                config = replace(config, lr=saved_lr)
+            elif args.lr > saved_lr and config.rewind_lr_factor < 1 and is_main:
+                print(
+                    f"warning: resuming with lr {args.lr:.2e}, higher than the checkpoint's base"
+                    f" lr {saved_lr:.2e}. If the collapse rule lowered that lr, the reduction is"
+                    " lost",
+                    flush=True,
+                )
 
     if is_main:
         print("config_name:", args.config_name)

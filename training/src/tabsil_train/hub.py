@@ -1,10 +1,12 @@
 """Checkpoints for the training, evaluation and upload scripts. `load_model` reads a Hub repo, a
 local `save_pretrained` folder, a checkpoint file or an MLflow run artifact (`runs:/...`) the same
-way; `run_architecture` gives the model structure a training run logged as params.
+way; `run_architecture` gives the model structure a training run logged as params;
+`hub_init_checkpoint` writes Hub weights as the checkpoint file a training run starts from.
 
     model, borders = load_model("runs:/<run_id>/checkpoints/latest.pt", "classification", out_dir)
     model, borders = load_model("hf://aiden-jeon/tabsil@stage2-10k", "regression", out_dir)
     structure = run_architecture(run.data.params)  # replace(config, **structure)
+    path = hub_init_checkpoint("owner/name@revision", config, out_dir / "init.pt")  # init_from
 
 Hub repos are written as `hf://owner/name`, so a mistyped local path is not sent to the Hub and
 a local folder named like the repo is not read in its place. Intermediate checkpoints live on
@@ -29,6 +31,7 @@ from tabsil.models import (
     config_fields,
     info_fields,
     model_from_state,
+    save_checkpoint,
     state_config,
 )
 from tabsil_train.training.config import TrainConfig
@@ -155,3 +158,24 @@ def weights_digest(model: nn.Module, borders: torch.Tensor | None = None) -> str
         digest.update(f"{name}|{t.dtype}|{tuple(t.shape)}|".encode())
         digest.update(t.reshape(-1).view(torch.uint8).numpy().tobytes())
     return digest.hexdigest()
+
+
+def hub_init_checkpoint(spec: str, config: TrainConfig, path: Path) -> Path:
+    """The weights and regression borders of a Hub repo (`repo@revision`) or a local
+    `save_pretrained` folder, written to `path` as a `save_checkpoint` file for `init_from` and
+    then checked against the config, so that a model that does not match stops the script before
+    the MLflow run is opened (the file stays at `path`)."""
+    # The checkpoint check belongs to the training loop. It is imported here, where a training run
+    # starts from Hub weights, and not at the top: evaluation and the Hub upload import this module
+    # to load models and must not load the training loop
+    from tabsil_train.training.loop import check_checkpoint
+
+    model, borders = hub.from_pretrained(spec)
+    if borders is None:
+        raise SystemExit(f"--init-hub {spec} has no regression borders")
+    save_checkpoint(path, model, borders)
+    try:
+        check_checkpoint(torch.load(path, map_location="cpu", weights_only=True), config, spec)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    return path

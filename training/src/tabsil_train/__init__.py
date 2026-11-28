@@ -8,7 +8,8 @@
 - `recipe`: TabSil's training curriculum (the structure and inference defaults are in
   `tabsil.recipe`)
 - `hub`: `load_model` for the scripts (Hub repos, `save_pretrained` folders, checkpoint files,
-  MLflow `runs:/` artifacts) and the model structure in run params
+  MLflow `runs:/` artifacts), the model structure in run params, and Hub weights as the
+  checkpoint a training run starts from
 - `utils`: MLflow run logging, the learning rate schedule, torchrun setup
 
 The scripts are in `training/scripts` (`train.py`, `eval.py`) and `training/hub` (Hub upload).
