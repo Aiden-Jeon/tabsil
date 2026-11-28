@@ -38,6 +38,8 @@ Registered priors (`PRIOR_TYPES`; all but the first are variants):
   tables whose eval rows lie beyond the train rows in one column, classification tables of data
   rows with hidden anomalies against reference rows), for a short fine-tuning that asks whether
   such tables move a task metric
+- `graph_scm_hicard_task_mix`: `graph_scm_hicard_missing` with a quarter of the tables of each
+  task task-shaped, to read what such tables do to the accuracy on ordinary tables
 
 The training loop (`tabsil_train.training.loop`) picks its prior from `PRIOR_TYPES` by name
 (`TrainConfig.prior_type`). What a name is registered to (`prior_module`: the `graph_scm` module,
@@ -78,6 +80,7 @@ PRIOR_TYPES: dict[str, str] = {
     "graph_scm_realism": "tabsil_train.priors.graph_scm.variants:REALISM",
     "graph_scm_base_realism": "tabsil_train.priors.graph_scm.variants:BASE_REALISM",
     "graph_scm_task_probe": "tabsil_train.priors.graph_scm.variants:TASK_PROBE",
+    "graph_scm_hicard_task_mix": "tabsil_train.priors.graph_scm.variants:HICARD_TASK_MIX",
 }
 # old name -> current name, accepted when reading older training runs whose params still use it
 PRIOR_TYPE_ALIASES: dict[str, str] = {

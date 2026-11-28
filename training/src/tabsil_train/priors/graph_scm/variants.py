@@ -10,6 +10,8 @@ the v1 training data) with some of its options turned on, at fixed values. Each 
   every stage
 - `TASK_PROBE` (`graph_scm_task_probe`): `HICARD_MISSING` with every table task-shaped, for a
   short fine-tuning that asks whether such tables move a task metric
+- `HICARD_TASK_MIX` (`graph_scm_hicard_task_mix`): `HICARD_MISSING` with a quarter of the tables
+  task-shaped, to read what such tables do to the accuracy on ordinary tables
 
     TrainConfig(prior_type="graph_scm_hicard_missing")
 
@@ -195,4 +197,26 @@ TASK_PROBE = Variant(
     }
 )
 
-__all__ = ["BASE_REALISM", "HICARD_MISSING", "REALISM", "TASK_PROBE", "Variant"]
+# ---------------------------------------------------------------------------
+# graph_scm_hicard_task_mix
+# ---------------------------------------------------------------------------
+# Graph SCM prior with a quarter of its tables task-shaped (prior axis,
+# `prior_type="graph_scm_hicard_task_mix"`): `graph_scm_hicard_missing` (`HICARD_MISSING`) with
+# `sorted_split_prob` 0.25 and `outlier_table_prob` 0.25 (`transforms.tasks`). The other three
+# quarters of the tables are the base prior's.
+#
+# It asks whether task-shaped tables, as additional training signal, change the accuracy on
+# ordinary tables (TabArena-Lite): the run on it is read against a run of the same length on
+# `graph_scm_hicard_missing` (no task tables) and one on `graph_scm_task_probe` (only task
+# tables). 0.25 is the middle point of that comparison, not a tuned value.
+#
+# The regression borders are the base prior's, as for `TASK_PROBE`.
+HICARD_TASK_MIX = Variant(
+    {
+        **HICARD_MISSING.OPTIONS,
+        "sorted_split_prob": 0.25,
+        "outlier_table_prob": 0.25,
+    }
+)
+
+__all__ = ["BASE_REALISM", "HICARD_MISSING", "HICARD_TASK_MIX", "REALISM", "TASK_PROBE", "Variant"]

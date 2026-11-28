@@ -2,10 +2,13 @@
 column before the cut (`SortedSplit`), and a classification table turned into data rows with
 hidden anomalies against reference rows (`OutlierTable`), alone and inside the graph SCM prior."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 import torch
 
+from tabsil_train import recipe
 from tabsil_train.priors import graph_scm as P
 from tabsil_train.priors import prior_module
 from tabsil_train.priors.pipeline import Group, Rng
@@ -274,6 +277,14 @@ def test_registered_task_priors():
     base = prior_module("graph_scm_hicard_missing").OPTIONS
     assert {k: probe.OPTIONS[k] for k in base} == base
     assert probe.TARGET_OPTIONS == {}  # the borders are the base prior's
+    mix = prior_module("graph_scm_hicard_task_mix")
+    assert mix.OPTIONS["sorted_split_prob"] == 0.25 and mix.OPTIONS["outlier_table_prob"] == 0.25
+    assert {k: mix.OPTIONS[k] for k in base} == base and mix.TARGET_OPTIONS == {}
+    # a share of the tables is task-shaped, the rest are ordinary
+    prior = mix.make_prior(replace(recipe.curriculum(2), **SIZES), "classification", 5)
+    labels = [set(prior.sample_batch(1).y.unique().tolist()) for _ in range(40)]
+    outlier = sum(v == {0.0, 1.0} for v in labels)
+    assert 3 <= outlier <= 30 and any(len(v) > 2 for v in labels)
 
 
 def test_training_runs_on_the_probe_prior(tmp_path):
