@@ -1,6 +1,6 @@
 # v2 task formulations
 
-Status: written on 2026-11-28 for the re-plan that follows the stop of the v2 plan ([v2-retrospective.md](v2-retrospective.md), [v2-prior-task-plan.md](v2-prior-task-plan.md)). Nothing was trained or evaluated for it, and no GPU job was run. **Tiers 1 and 2 of the plan have since measured its predictions: three of them failed, and "Measured in tier 1" at the end says which sentences of this document they correct.** It derives, task by task, what the current model estimates when a task is put to it as a table, and what would have to change for the task to be done well. The designs it starts from are in [v2-task-priors.md](v2-task-priors.md). Numbers of the v1.1 weights come from that document and from [docs/task-results.md](../../docs/task-results.md). The closed forms were reproduced numerically with NumPy (no model weights). Each derivation was then read once by an agent that had not written it; the review found errors, and what was changed is listed in "Checks and corrections".
+Status: written on 2026-11-28 for the re-plan that follows the stop of the v2 plan ([v2-retrospective.md](v2-retrospective.md), [v2-prior-task-plan.md](v2-prior-task-plan.md)). Nothing was trained or evaluated for it, and no GPU job was run. **Tiers 1 and 2 of the plan have since measured its predictions: three of them failed, and "Measured in tier 1" at the end says which sentences of this document they correct.** **The user's goal is the accuracy on ordinary tables, with the tasks as training signal toward it: section 10 derives what mixing task-shaped tables into training does to classification and regression.** It derives, task by task, what the current model estimates when a task is put to it as a table, and what would have to change for the task to be done well. The designs it starts from are in [v2-task-priors.md](v2-task-priors.md). Numbers of the v1.1 weights come from that document and from [docs/task-results.md](../../docs/task-results.md). The closed forms were reproduced numerically with NumPy (no model weights). Each derivation was then read once by an agent that had not written it; the review found errors, and what was changed is listed in "Checks and corrections".
 
 How to read:
 
@@ -615,6 +615,72 @@ By the kind of change:
 - No task here needs a new loss with the outputs as they are, except clustering.
 
 `target_train_rows` is a condition of every prior whose split is not random (sections 3 and 5). That is a reason from the derivation. Its measured effect on ordinary tables is not resolved (section 2).
+
+## 10. Task-shaped tables as training signal for classification and regression
+
+Added on 2026-11-28, after tiers 1 and 2 of the plan. The user's goal is the accuracy on ordinary classification and regression tables (TabArena-Lite), and the tasks of sections 3 to 6 were asked for as training signal toward it, not as ends. Sections 3 to 6 derive what each task needs in order to be done well. This section derives the other question: if tables of a task's shape are mixed into training, how does the classification and regression predictor change, and when can it get better on ordinary tables?
+
+**1. Setup.** The training prior is a mixture
+
+$$
+\pi = (1 - w) \pi_0 + \sum_k w_k \pi_k, \quad w = \sum_k w_k
+$$
+
+where $\pi_0$ draws ordinary tables (a context $D$, a query $x_\star$ and its target $y$) and $\pi_k$ draws tables of task shape $k$ for the same output: sorted-split tables are regression tables, outlier tables are classification tables. $p_j$ is a density under $\pi_j$, and $w_0 = 1 - w$.
+
+**2. What training converges to.** Proposition 1 applies to $\pi$ as to any prior. The output converges to
+
+$$
+q^\star(y \mid x_\star, D) = \sum_j P(j \mid D, x_\star) p_j(y \mid x_\star, D), \quad P(j \mid D, x_\star) \propto w_j p_j(D, x_\star)
+$$
+
+The model averages the components' answers by how much the table in front of it looks like each component's tables. The quantile output converges to the quantiles of this mixture.
+
+**3. On ordinary synthetic tables, mixing cannot help.** On tables drawn from $\pi_0$ the best predictor is $p_0$, and what $q^\star$ loses against it is an expected divergence:
+
+$$
+\mathbb E_0[-\log q^\star] - \mathbb E_0[-\log p_0] = \mathbb E_0 \mathrm{KL}(p_0 \Vert q^\star) \ge 0
+$$
+
+Since $q^\star \ge P(0 \mid D, x_\star) p_0$, the loss is at most $\mathbb E_0[-\log P(0 \mid D, x_\star)]$. With the likelihood ratios $L_k = p_k(D, x_\star) / p_0(D, x_\star)$,
+
+$$
+P(0 \mid D, x_\star) = \frac{1 - w}{1 - w + \sum_k w_k L_k}, \quad \mathbb E_0 L_k \le 1
+$$
+
+and Jensen's inequality gives
+
+$$
+0 \le \mathbb E_0 \mathrm{KL}(p_0 \Vert q^\star) \le -\log(1 - w)
+$$
+
+which is 0.29 nats at $w = 0.25$. Both ends are reached: 0 when a task table can never be taken for an ordinary one ($L_k = 0$ on ordinary tables), and the upper end when the two kinds of table look alike and their answers are opposite (checked on 20,000 random discrete cases and on the two extremes).
+
+- **With unlimited capacity and data, task tables cannot lower the loss on ordinary synthetic tables.** The best case is no change, and it is reached when the task tables are recognizable from the context and the query.
+- The two shapes built for tier 2 are recognizable by construction. In a sorted-split table every query lies beyond the context in one column; with exchangeable rows a query does so in some column with probability at most $2d / (n + 1)$ for $n$ context rows and $d$ features (4% at $n = 1{,}000$ and $d = 20$; checked). An outlier table has two classes, one of them uniform rows or rows with independent columns.
+
+**4. On real tables there are two ways to a gain, and one cost.** A real table is not a draw of $\pi_0$. The model trained on the mixture differs from the one trained on $\pi_0$ only where $P(k \mid D, x_\star) \gt 0$.
+
+- **Coverage.** A real table resembles the task tables in a respect that $\pi_0$ does not cover, and $p_k$'s answer is nearer the truth than $p_0$'s. For the sorted split these are the queries outside the context's range in a feature: under a random split, as TabArena's, at most $2d / (n + 1)$ of them, and whether the trained continuation is better there than today's answer is unknown. For outlier tables these are binary tables in which one class looks like reference rows; none is known in TabArena.
+- **Supervision per table.** A task that asks for several targets in one forward pass (several columns, masked cells; section 7) gives more training signal per unit of compute. It needs an output that is used in training only, which is a change of structure, and no controlled result supports it (section 7).
+- **The cost at equal steps.** Ordinary tables are $1 - w$ of the training. If $R_0(T)$ is the error on ordinary tables after $T$ steps on ordinary tables alone, the cost is about $R_0((1 - w) T) - R_0(T)$. The only estimate of that slope is G 0.993 for the second half of stage 2 (5,000 to 10,000 steps within one schedule, which v2-experiment-results says overstates it). A share of 0.25 to 0.5 then costs a few tenths of a percent, the size a branch resolves (0.6%).
+- **Not derived:** that training on other tasks improves the shared representation at finite capacity. This is the usual argument for multi-task training. No result isolates it for tabular in-context models (section 7 has the nearest, the masked-cell loss), and its sign is unknown.
+
+**5. Measured: task tables alone.** The pilot and the probe of tier 2 are the case $w = 1$: fine-tunings of the candidate on task tables only (v2-prior-task-results, "TabArena-Lite of the fine-tuned weights").
+
+| Weights | TabArena-Lite Elo | G against the start, all 51 datasets | Classification (38) | Regression (13) |
+|---|---|---|---|---|
+| start (#14's run) | 1808 | 1 | 1 | 1 |
+| pilot, 2,000 steps at batch 32 | 1252 | 1.220 (1.149 to 1.299) | 1.295 | 1.024 |
+| probe, 2,000 steps at batch 256 | 1234 | 1.228 (1.157 to 1.306) | 1.309 | 1.020 |
+
+With $w = 1$ there is no $\pi_0$ in the mixture, so on an ordinary table the output is $p_k$'s: the classification output had been retrained to tell data rows from reference rows, and its error on ordinary tables is 30% higher. Regression, whose task tables are still regression tables, loses 2%. This shows that the task tables ask for other answers than ordinary tables do. It does not show what a mixture does: by step 3 a mixture keeps the ordinary answer as far as the task tables are recognizable.
+
+**6. What follows for a run.** The test is a mixture against a control with the same steps on ordinary tables alone, both read on TabArena-Lite by the paired ratio.
+
+- **Expected effect of mixing in the two existing table shapes: near zero, sign unknown.** No gain in the limit (step 3), a cost of a few tenths of a percent at equal steps, and a coverage channel that touches at most a few percent of the queries (step 4).
+- **Resolution:** one pair of runs on TabArena-Lite resolves about 20 Elo (the candidate's two seeds are 1808 and 1788). TabArena with 3 splits and the development suite resolve 0.6%.
+- **Where the derivation leaves room** is the second way of step 4, more targets per table, which needs the training-only output of section 7.
 
 ## Checks and corrections
 

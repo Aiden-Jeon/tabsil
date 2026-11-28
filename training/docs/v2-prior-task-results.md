@@ -1,6 +1,8 @@
 # v2 plan for priors and tasks: results
 
-**Status:** tiers 1 and 2 are measured and reading points R1 and R2 are read, on 2026-11-28. Forecasting stops at R2. Outlier detection is at its bar only with a score added after the pilot. Tier 3 is not started: what follows is the user's decision ("For the user to decide").
+**Status:** tiers 1 and 2 are measured and reading points R1 and R2 are read, on 2026-11-28. Tier 3 is not started and no run is waiting.
+
+> **Correction, 2026-11-28.** The user's goal is the accuracy on TabArena-Lite, and more diverse priors and tasks were asked for as the means to raise it. The plan took the task metrics (fev-bench, ADBench) as the goal, which was a misreading on the planner's side ([v2-prior-task-plan.md](v2-prior-task-plan.md), correction at its top). The numbers below stand as measurements, and the bars and reading points R1 and R2 are those of the plan as it was written. **What the user asked is answered in "TabArena-Lite of the fine-tuned weights": training on task-shaped tables alone makes TabArena-Lite much worse (Elo 1808 to 1252), and the test of mixing them into ordinary training has not been run.**
 
 The plan is [v2-prior-task-plan.md](v2-prior-task-plan.md) and the derivations it tests are in [v2-task-formulations.md](v2-task-formulations.md). The code of every measurement is in [`training/scripts/v2_prior_diag`](../scripts/v2_prior_diag/README.md). "v1.1" is the released weights with tabsil 0.1.1's inference settings (`aiden-jeon/tabsil@v1.1`). "#14's run" and "N10" are the two seeds of the v2 candidate, stage-2 runs on `graph_scm_hicard_missing` (MLflow `277916ec05a3457aa6d07f2bc08a60c4` and `520d88d73cdc4e5ea90cfd27425be00d`, `model/final.pt`).
 
@@ -25,9 +27,9 @@ Tier 2, a fine-tuning of the candidate on task-shaped tables alone:
 - **2.3 H100-h on one GPU are enough to teach both tasks.** After 2,000 steps at batch 32 the model continues a trend (D1's linear trend: MASE 12.5 to 0.66, where the least-squares fit has 0.37 and seasonal naive 3.67) and ranks a dense group in the context above the inliers at every contamination up to 20% (D3: 1.00, where the starting weights fall from 0.88 to 0.24). On the benchmarks that is 5.0% of fev-bench's SQL (Elo 1538 to 1582) and 0.088 AUROC on ADBench with reference rows (0.664 to 0.752).
 - **Eight times the tables add little, and for forecasting nothing.** The probe (8 H100, batch 256) has 0.759 on ADBench and a forecast that overshoots: on fev-bench it is behind the pilot (SQL 3.8% lower than the start, Elo 1519).
 - **Neither bar is reached by a planned score.** Forecasting is 125 Elo short at best. Outlier detection is 0.011 short with the trained reference rows, and 0.004 above with the mean rank of the trained reference rows and the small-context density, a score that was added after the pilot's results were seen.
-- **What the fine-tuning does to ordinary tables was not measured.** The fine-tuned weights saw task-shaped tables only and are not candidates for release; the TabArena guard belongs to tier 3.
+- **On ordinary tables the fine-tuned weights are much worse.** TabArena-Lite falls from Elo 1808 to 1252 (pilot) and 1234 (probe), with classification errors 30% higher. They saw task-shaped tables only and are not candidates for anything; what a mix of ordinary and task-shaped tables does to TabArena-Lite, which is the user's question, has not been run ("TabArena-Lite of the fine-tuned weights").
 
-**Cost:** 39.1 H100-h (tier 1 11.6 in 35 jobs, tier 2 27.6 in 18 jobs), against estimates of about 20 and 22. The cap is 500.
+**Cost:** 40.0 H100-h (tier 1 11.6 in 35 jobs, tier 2 27.6 in 18 jobs, three TabArena-Lite runs 0.9), against estimates of about 20 and 22. The cap is 500.
 
 ## Reading point R1
 
@@ -393,6 +395,21 @@ One node of 8 H100, 2,000 steps at batch 256, otherwise as the pilot (seed 12): 
 - The two scores are strong on different tables (reference rows on shuttle 0.99, Wilt 0.82, fault 0.67 and landsat 0.60; the density on cover 0.97 and annthyroid 0.87), and the mean of their ranks gives **0.774**: above the bar by 0.004, with 0.781, 0.773 and 0.769 on the three splits. It is ahead of the density alone by 0.017 ± 0.011 over tables and of the reference rows alone by 0.015 ± 0.015.
 - **This arm was added after the pilot's results had shown the two scores to differ by table**, so it was chosen on the tables it is scored on. With the starting weights the same mean of ranks is below the density alone (0.733 against 0.756): the gain comes with the trained reference rows.
 
+## TabArena-Lite of the fine-tuned weights
+
+Measured on 2026-11-28 after the user's correction of the goal: the two fine-tunings of tier 2 on the benchmark the task tables were meant to serve. TabArena-Lite (51 datasets, one split each) with the settings of the candidate's reference run (`--member-kinds numeric-cycle --categories counts`, seed 0), one H100 each, 0.31 H100-h per run. G is the paired error ratio against #14's run (above 1 is worse), from `training/scripts/paired_report.py`.
+
+| Weights | Elo | Classification Elo | Regression Elo | G, all 51 (95% CI) | G, classification (38) | G, regression (13) | Better / worse |
+|---|---|---|---|---|---|---|---|
+| #14's run, the start (run again with this code) | 1807.6 | 1793.0 | 2113.8 | 1 | 1 | 1 | — |
+| pilot: task tables only, 2,000 steps at batch 32 | **1252.4** | 1147.0 | 1823.2 | 1.220 (1.149 to 1.299) | 1.295 (1.209 to 1.392) | 1.024 (1.012 to 1.041) | 6 / 45 |
+| probe: task tables only, 2,000 steps at batch 256 | **1234.1** | 1118.8 | 1844.5 | 1.228 (1.157 to 1.306) | 1.309 (1.220 to 1.409) | 1.020 (1.007 to 1.035) | 5 / 46 |
+
+- The start reproduces its record to the digit (1807.6), so the three runs are comparable.
+- **Training on task-shaped tables alone breaks TabArena-Lite**: 555 and 574 Elo lower, errors 22% to 23% higher, 45 and 46 of 51 datasets worse. Classification carries it (errors 30% higher, every multiclass dataset worse): its output was retrained to tell data rows from reference rows. Regression, whose task tables are still regression tables, loses 2%.
+- **This does not answer what mixing does.** These weights saw no ordinary table for 2,000 steps. [v2-task-formulations.md](v2-task-formulations.md), section 10, derives the mixture: in the limit of capacity and data it cannot lower the loss on ordinary synthetic tables, it keeps the ordinary answer as far as the task tables are recognizable (the two built here are), and on real tables it can gain only where a table resembles the task tables or where a task gives more targets per table.
+- **The test that is missing:** the same fine-tuning on a mix of ordinary and task-shaped tables against a control of the same steps on ordinary tables alone, both read here. `graph_scm_hicard_task_mix` (a quarter of the tables of each task task-shaped) is registered for it and no run has used it. Expected effect, from the derivation: near zero, sign unknown, against a resolution of about 20 Elo for one pair of runs on TabArena-Lite.
+
 ## Derivations against the measurements
 
 | Prediction (formulations) | Measured | Verdict |
@@ -437,7 +454,8 @@ What the three failures change:
 | 2.3 the probe's weights on D1, D3, fev-bench with three arms, ADBench with three scores | 7 | 2.12 | 2.5 |
 | controls: #14's run on the arms that tier 1 had only for v1.1 | 4 | 0.71 | — |
 | **Tier 2** | **18** | **27.55** | **about 22** |
-| **Total** | **53** | **39.12** | **about 42** |
+| TabArena-Lite of the start, the pilot and the probe (after the correction of the goal) | 3 | 0.92 | — |
+| **Total** | **56** | **40.04** | **about 42** |
 
 Counted from the job records (`duration_seconds` of every job, times its GPUs). 15 more jobs failed within a second of being submitted, because the workspace allows 8 `GPU_1xH100` nodes at a time; they used no GPU time and were submitted again one by one.
 
@@ -481,19 +499,19 @@ MLflow experiment `tabsil`; every job ran on one H100. The v1.1 references are t
 | 2.2 | `tabsil-pt2-probe` (training) | `615704d802054102a3e2351d79cfad69` |
 | 2.3 | `tabsil-pt2-probe-d1`, `-d3`, `-adbench-ref`, `-adbench-ctx64` | `f820ae141839441f808704cf80fe6fa3`, `84a42ca73d314aa3bed6fb437c35ec01`, `f440f4f06c464f9da5cfa35369736103`, `a050b61d4b9b43d8a4a5ae963c5f3290` |
 | 2.3 | `tabsil-pt2-probe-fev-default`, `-fev-no-target-power`, `-fev-plain8` | `152a3f8b735f4204827a0fb5a133c913`, `743fc16736044a3994f066336cd73ded`, `578d02694c874b26b451e1492ac7f876` |
+| TabArena-Lite | `tabsil-pt2-prior14-lite`, `tabsil-pt2-pilot-lite`, `tabsil-pt2-probe-lite` | `572c86865a2d45049af4cd9e861a57d8`, `e4176a0d9e8e41f99d888d2f90428ed0`, `68bc32b020ee415dacb4b61ba96afc6b` |
 | controls | `tabsil-pt2-prior14-d1-arms`, `-d3-ref`, `-adbench-ref`, `-adbench-ctx64-ref` | `7bbb939b78a8452eae867ea90bdae7a9`, `26f1e9b60f4648eeb169663052ddf75d`, `20076a89b35043d89580ba00e94ac098`, `4a2e14fe5ad84df0a2734e93b9054c7d` |
 
 The code of the tier-1 runs is the tier-1 branch at `df0da5b`, and at `dd718b9` for the 16- and 32-row contexts on ADBench and the 16-, 32- and 128-row contexts on D3. The runs of 1.1 on the four suites used the evaluation code of `0fd0cf6`. The pilot, the probe and their evaluations ran the tier-2 branch at `819d66c`; the two ADBench runs with the mean rank ran `b85bf10`.
 
 ## For the user to decide
 
-Nothing here is adopted or released by the plan. No run is waiting.
+Nothing here is adopted or released, and no run is waiting. The first item is the one that bears on the user's goal.
 
-1. **What follows tier 2.** The options, with what is known of each:
-   - **Stop here.** Forecasting has stopped by the rule, and outlier detection is at its bar only with a score chosen after the pilot. Cost: none. What stays is item 2 below.
-   - **The plan's branch (tier 3), 223 to 232 H100-h.** One model with 10% task-shaped tables, read against the TabArena guard. Expected on ADBench: at most the probe's 0.759 with reference rows and 0.774 as the mean rank (measured for task-shaped tables alone; at a share of 10% unknown), which is 0.003 to 0.018 above the inference change of tier 1. Expected on fev-bench: at most the pilot's 5% of SQL (measured), 125 Elo below the bar. TabArena: unknown.
-   - **A short fine-tuning of the candidate on a mix of ordinary and task-shaped tables, about 25 to 50 H100-h with its evaluations.** Not in the plan. It asks the branch's question, the task gains in one model under the guard, at the scale the pilot showed to be enough. Expected: the pilot's task numbers if a mix keeps them, and a guard reading paired against the starting weights; both unknown until run.
-2. **The small-context outlier score.** It is an inference change with the v1.1 weights: ADBench 0.663 to 0.756, D3's group 0.43 to 0.99, in less time than today's score. It is behind today's score on 4 of the 12 tables, by 0.001 to 0.07. Releasing it as `TabSilUnsupervised`'s outlier score, as an option, or not at all is the user's decision, and it does not depend on item 1.
-3. **What follows D4.** The candidate's prior teaches the model to read a missing cell as information. That is worth 14% where the mask is informative and costs 9% where it is not, and a table does not say which it is. The choice between the two priors for imputation is a choice of what to assume about real masks.
-4. **What follows D5.** The S-learner's error grows by a quarter between a randomized experiment and a clip of 0.02 and stays below the T-learner's. The plan trains nothing for effects.
-5. **The forecasting recipe after a fine-tuning.** With fine-tuned weights the default recipe is still the best on fev-bench, and on D1 the members without the target transform are far better (MASE 0.66 against 2.97). A recipe that keeps the transform's gain (ecdc_ili loses 20% to 34% without it) and drops its cap was not tried.
+1. **Whether to run the test of the user's question: task-shaped tables mixed into ordinary training, read on TabArena-Lite.**
+   - The run: three fine-tunings of the candidate with the same steps and seed, on ordinary tables alone (the control), on `graph_scm_hicard_task_mix` (a quarter task-shaped) and on task tables alone, each followed by TabArena-Lite. About 14 H100-h in all: three runs of 3 to 5 H100-h on one 8xH100 node each, less than an hour each, and their evaluations. All three would use the pilot's tables of 400 to 2,048 rows; the control shows what a fine-tuning on such short tables does by itself.
+   - Expected effect on TabArena-Lite: near zero, sign unknown (formulations, section 10). One pair of runs resolves about 20 Elo; a difference below that needs TabArena with 3 splits and the development suite, 2.5 H100-h per arm more.
+   - Not running it leaves the question answered by the derivation alone.
+2. **Whether to look for task shapes that the derivation leaves room for.** Those are tasks that give several targets per table (several columns, masked cells), which need an output used in training only. That is a change of structure, undecided since the masked-cell proposal, and without a controlled result in the literature.
+3. **The small-context outlier score.** An inference change with the v1.1 weights: ADBench 0.663 to 0.756, D3's group 0.43 to 0.99, in less time than today's score; behind today's score on 4 of the 12 tables, by 0.001 to 0.07. It does not touch TabArena-Lite. Releasing it is the user's decision.
+4. **What follows D4 and D5,** as measurements of the candidate's weights: they read a missing cell as information (14% better where the mask is informative, 9% worse where it is not), and the S-learner's error grows by a quarter as overlap shrinks.
