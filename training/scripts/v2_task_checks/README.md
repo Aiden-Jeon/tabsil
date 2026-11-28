@@ -93,7 +93,7 @@ Every script exits 0. Runtimes below are wall-clock on a laptop, including `uv` 
 | s11d_shared_representation.py (11.4) | oracle U, theta = 0: r/(n - r - 1) | 0.1154 (0.1154), 0.0534 (0.0536), 0.0155 (0.0153) | pass | |
 | s11d_shared_representation.py (11.4) | oracle U, any theta: (1 + sin^2 ‖beta‖^2) r/(n - r - 1) + sin^2 ‖beta‖^2 (the bias term alone is not the whole excess; see notes) | e.g. n = 200, theta = pi/8: 0.3931 against 0.3929 | pass | |
 | s11d_shared_representation.py (11.4) | aux estimator risk (500 reps; theta = 0, pi/8, pi/4, pi/2) | n = 30, K = 10: 1.12, 1.40, 2.09, 3.06 (OLS 2.08); n = 60, K = 10: 0.17, 0.54, 1.44, 2.73 (OLS 0.51); n = 200, K = 10: 0.039, 0.413, 1.314, 2.588 (OLS 0.112); K = 50 at n = 200: 0.023, 0.399, 1.306, 2.591 | reported | |
-| s11e_compute_equivalence.py (11.5) | G = (1 + kappa)^(ln G0 / ln R) for three anchors; reproduces each anchor at 1 + kappa = R | anchors reproduced; table in the output (e.g. kappa = 1: G 0.9930, 0.9773, 0.9872; kappa = 3.6, Kumo S->M: 0.9508) | pass | 0.3 s |
+| s11e_compute_equivalence.py (11.5) | G = (1 + kappa)^(ln G0 / ln R) for three anchors; reproduces each anchor at 1 + kappa = R. Its Elo column is the rule of 40 per 1%; the section's live Elo per doubling (+46, +72) comes from `gap_report.py`'s `whatif_share.csv` | anchors reproduced; table in the output (e.g. kappa = 1: G 0.9930, 0.9773, 0.9872; kappa = 3.6, Kumo S->M: 0.9508) | pass | 0.3 s |
 | s11f_pairwise_auc.py (11.6) | well-specified: CE and pairwise AUC equal, and equal the Bayes AUC | 0.8447, 0.8447, 0.8447 | pass | 2 s |
 | s11f_pairwise_auc.py (11.6) | misspecified: AUC difference (pairwise minus CE) and sign (finding, not asserted) | CE 0.7618, pairwise 0.7615, Bayes 0.9229; difference -0.0003 (CE higher; within noise) | reported | |
 | s11g_truncated_mean.py (11.6) | mean of the 999-quantile output against the true mean, and the trapezoid reading | normal: step bias +0.0031 (= Phi^-1(0.999)/1000), trapezoid 0; t3 +0.0059; t5 +0.0046; lognormal sd-unit bias: sigma 0.5 +0.0026 (trapezoid -0.0011), sigma 1 +0.0015 (-0.0035), sigma 2 -0.0050 (-0.0095); MSE share (b^2/(1 + b^2)) at most 4e-5 | reported | 1 s |
@@ -146,7 +146,7 @@ scripts' numbers, each corrected in place with the date (its "Checks as scripts"
   units). The step reading puts each 0.001 bucket at its upper quantile and the top tail at q_999.
   Bias b is the output mean minus the true mean; the MSE share is b^2/(1 + b^2) for an otherwise exact
   prediction.
-- s11e and s11b are arithmetic; Elo is 4000 (1 - G) (40 Elo per 1% of error).
+- s11e and s11b are arithmetic; their Elo is 4000 (1 - G) (40 Elo per 1% of error), not live Elo.
 
 ## Not checked
 

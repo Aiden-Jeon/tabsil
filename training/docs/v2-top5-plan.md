@@ -1,6 +1,6 @@
 # v2 plan: TabArena-Lite top 5
 
-Status: **plan, not approved.** Written on 2026-11-28 on the branch `Aiden-Jeon/v2-top5-plan`. Nothing was trained or evaluated for it and no GPU job was run: the per-dataset gap reads MLflow artifacts and the public leaderboard on a CPU, and the derivations are checked with NumPy. It is built to the twelve rules of [v2-retrospective.md](v2-retrospective.md) (§11 lists where each is met). Its evidence from the v2 runs is [v2-findings.md](https://github.com/Aiden-Jeon/tabsil/blob/3c97ccc5f408e350e542c4803bc71e7b7935c765/training/docs/v2-findings.md) (PR #53, open) with the results documents it cites. The derivations for the tasks are §11 of [v2-task-formulations.md](v2-task-formulations.md). An agent that did not write the plan read it before any run (§14). **No run of this plan starts before the user approves it and sets the budget, the stop threshold and whether the compute lever is in scope (§15).**
+Status: **plan, not approved.** Written on 2026-11-28 on the branch `Aiden-Jeon/v2-top5-plan`. Nothing was trained or evaluated for it and no GPU job was run: the per-dataset gap reads MLflow artifacts and the public leaderboard on a CPU, and the derivations are checked with NumPy. It is built to the twelve rules of [v2-retrospective.md](v2-retrospective.md) (§11 lists where each is met). Its evidence from the v2 runs is [v2-findings.md](https://github.com/Aiden-Jeon/tabsil/blob/3c97ccc5f408e350e542c4803bc71e7b7935c765/training/docs/v2-findings.md) (PR #53, open) with the results documents it cites. The derivations for the tasks are §11 of [v2-task-formulations.md](v2-task-formulations.md). An agent that did not write the plan read it before any run, and what changed because of it is in §14. **No run of this plan starts before the user approves it and sets the budget, the stop threshold and whether the compute lever is in scope (§15).**
 
 The request, 2026-11-28 (translated): "Plan again in line with the retrospective. More diverse priors, more diverse tasks. For the task part, derive in formulas how it would be done, as with the regression analysis. Your goal is to make the Tablite Elo top 5." The user approved this reading before the plan was written: the twelve rules, and only the facts of the findings as evidence; priors and tasks as means to raise TabArena-Lite, every run read on TabArena-Lite against a same-steps control; derivations in the style of formulations §2 step 7 and §10 for every task; rank 5 or better on the public TabArena-Lite board, models only.
 
@@ -15,21 +15,24 @@ How to read:
 
 **The outlook.**
 
-- **The bar.** Rank 5 on the live board is Kumo-Tabular-Medium at 1921 (§1). #14's weights, inserted into the live pool, are 1816.9 at rank 11. The distance is **+107 live Elo** (1924.3 in the same fit), and +144 from v1.1.
+- **The bar.** Rank 5 on the live board is Kumo-Tabular-Medium at 1921 (§1). #14's weights, inserted into the live pool, are 1816.9 at rank 11. The distance is **+107 live Elo** (Kumo-Tabular-Medium is 1924.3 in the same fit), +132 with the plan's margin of 25 (§1.4), and +144 from v1.1.
 - **What the distance is in error.** Elo on this board counts wins per dataset, and TabSil sits in a crowd: on 35% of the (dataset, top-15 entrant) pairs the two errors are within 1% of each other, on 52% within 2% (`whatif_crowd.csv`). So the distance is small in size and large in breadth. Cutting every one of #14's 51 errors by 0.73% reaches rank 5. A change that lowers the error on four named datasets does almost nothing: of #14's +37.6 over v1.1, those four give 4.5 (§4.2).
-- **What priors and tasks can give, by their evidence.** One prior change has a measured gain, and it is in hand (#14). Closing the whole gap to Kumo-Tabular-Medium on the datasets of one property, such as missing values or 21 to 100 features, gives at most +27 to +58; half of it gives +14 to +33 (§4.3). Kumo-Tabular's other prior parts moved none of these properties by 0.5% (R10, §4.4). The task-shaped tables built so far change nothing on TabArena in the limit, and the tasks that add targets per table are bounded by what more training gives (formulations §11). **On this evidence, priors and tasks alone do not reach the bar.**
-- **What reaches it, by analogy.** A change as broad as one of Kumo-Tabular's compute steps: Kumo's S → M change applied to #14's errors gives +96 (rank 6), its M → L change +115 (rank 5) (§4.3). For TabSil that is Kumo-Tabular-Medium's tables per task at TabSil's size: 4.4 to 4.7 times #14's compute, about 3,640 to 3,830 H100-h and 19 to 20 days on one node (tier 3), +94 to +147 by the same analogy. Whether TabSil follows Kumo's slope is not measured. Item 2.1 measures it for 223 H100-h from weights that exist.
+- **Measured, in hand:** #14's weights, +37.6 over v1.1 (the second seed of the same prior, N10, +20.6). Nothing else measured adds to them.
+- **Priors and tasks, by their evidence.** No candidate has a calibrated expected gain. As scenarios: closing the gap to Kumo-Tabular-Medium on the datasets of one weak property (missing values, 21 to 100 features, a rare class, no categorical column) gives +27 to +58, and matching the best top-5 model there +59 to +98 (§4.3). Kumo-Tabular's other prior parts moved none of these properties by 0.5% (R10, §4.4). The task-shaped tables built so far change nothing on TabArena in the limit, and the tasks that add targets per table act only through the training term (formulations §11). **On this evidence, priors and tasks alone do not reach the bar.** The one cheap prior screen with a reported positive effect for another model, continued training on real tables, enters behind a CPU check of the corpus and its leakage (items 1.2, 2.2).
+- **Compute, as a scenario.** A share of Kumo-Tabular's S → M or M → L step, applied to #14's errors in proportion to the compute (§4.3): +31 to +43 for item 2.1 (stage 2 from the 250K-step stage 1 that exists), and +75 to +117 (rank 5 or 6) for tier 3 (500K stage-1 and 40K stage-2 steps, no stage 3). This assumes TabSil moves as Kumo moved, and Kumo changed its parameters with its compute. **Zero is plausible, and the evidence gives no expected value and no probability of rank 5.** Item 2.1 reads TabSil's own slope first, for 225 H100-h.
+- **The cheapest route to tier 3's compute** continues the 250K-step stage 1 to 500K steps: about 1,650 to 1,900 H100-h and 8.5 to 9.5 days on one node, against 2,630 to 2,950 and 13.5 to 14.5 days for a new 500K-step stage 1 (§7). Whether a continued schedule equals one schedule is not known for TabSil.
 - **For the user to decide (§15):** whether the compute lever is in scope; the budget cap; the stop threshold. None is filled in.
 
-| Tier | What is done | Adds, in live Elo over the tier below; evidence | H100-h | Runs if |
-|---|---|---|---|---|
-| 0 | Nothing. #14's weights | in hand: 1816.9, rank 11; +37 over v1.1 (the second seed of the same prior, N10, +21). Measured on split 0 and inserted into the live pool | 0 | — |
-| 1 | No training: the gradient-noise statistics of #14's weights; the 250K-step stage 1 made loadable and read with the capped context | +0: measurements. They decide items 2.1 and 2.3 | about 4 | the user approves the plan |
-| 2 | Stage 2 from the 250K-step stage 1 (2.1); by the user's choice, one prior-and-task branch (2.2); gated, a masked-cell branch (2.3) | 2.1: +0 to about +43 (estimated by analogy: a share of Kumo's compute step in proportion to the compute, §4.3). 2.2: +0 to about +30 (estimated). 2.3: unknown | 223 for 2.1; +223 each for 2.2 and 2.3 | 1.2 shows the 250K stage 1 ahead (2.1); the user asks for 2.2; 1.1 opens 2.3 |
-| 3 | The compute lever: Kumo-Tabular-Medium's tables per task at TabSil's size, 500K / 40K / 12K steps against v1's 150K / 10K / 2K, one node per stage | +94 to +147 over #14 (estimated by analogy: one S → M step of Kumo, +94 to +97, rank 6; 1.3 of its M → L step, +141 to +147, rank 4), so about the bar. Without stage 3, up to 23 less (reported by Kumo) | 3,640 to 3,830; 2,630 without stage 3 | the user puts it in scope, and 2.1 reads a slope at reading point R2 |
+| Tier | What is done | Adds over the tier below, in live Elo | Kind of evidence | H100-h | Runs if |
+|---|---|---|---|---|---|
+| 0 | Nothing. #14's weights | 1816.9, rank 11: +37.6 over v1.1 | measured | 0 | — |
+| 1 | No training: the 250K-step stage 1 converted and read with the capped context (1.1); the real-table corpus and its leakage check, on a CPU (1.2); the board re-read (1.3) | +0: measurements. They decide items 2.1 and 2.2 | — | about 3 | the user approves the plan |
+| 2 | Stage 2 from the 250K-step stage 1 (2.1); a short continuation of #14 on real tables, with its same-steps control (2.2) | 2.1: +31 to +43 if TabSil follows Kumo's slope, 0 if not. 2.2: unknown | 2.1: scenario by analogy. 2.2: reported for another model | 2.1: 225; 2.2: about 10 | 1.1 reads the 250K stage 1 ahead (2.1); 1.2 finds a corpus without overlap (2.2) |
+| 3 | Compute: stage 1 to 500K steps, continued from the 250K one (3A) or anew (3B), then 40K steps of stage 2; no stage 3 | +44 to +74 over 2.1 (scenario; +75 to +117 over #14, rank 5 or 6) | scenario by analogy | 3A: 1,650 to 1,900; 3B: 2,630 to 2,950 | the user puts it in scope, and 2.1 reads a slope at R2 |
 
-- **Reaching the bar on the evidence needs tier 3**, and tier 3 lands about at the bar: rank 4 to 6 by analogy, inside the board's CIs of about ±100 to ±200 (§1.4). The plan's margin is 25 Elo above Kumo-Tabular-Medium (§1.4).
-- **The priors and tasks the request asked for are planned in full** (§5, §6): every candidate with its property, evidence, expected Elo and cost. The ones whose expected effect is below what a run resolves are listed and not run (rule 5); item 2.2 bundles the best of them for the user to run by choice.
+- **Every gain above tier 0 is a scenario or unknown.** The scenarios come from another model's per-dataset changes (`whatif_share.csv`). They are what TabSil would gain if it moved as Kumo-Tabular moved, not what it is expected to gain.
+- **The largest plan, every item run:** about 1,900 to 2,150 H100-h with 3A and 2,870 to 3,190 with 3B (§9). Stage 3, which runs only if it could decide the rank, would add 1,030 to 1,210 (§7).
+- **The priors and tasks the request asked for are planned in full** (§5, §6): every candidate with its property, evidence, expected effect and cost. Those without a calibrated expected effect above what a run resolves are listed and not run (rule 5). The user may still ask for any of them (§15).
 
 ## 1. The bar
 
@@ -91,7 +94,7 @@ Rule 2: the first tier trains nothing, so what is in hand comes first.
 |---|---|---|---|---|
 | v1.1 | the released v1 (stage 1 150K, stage 2 10K, stage 3 2K steps on `graph_scm`) with tabsil 0.1.1's inference | 1779.7 (14) | 1767.6 | Hub tag `v1.1` |
 | `stage1-150k`, `stage2-10k` | v1's earlier stages | — | 1443.7, 1762.4 | Hub tags |
-| The end of the 250K-step stage 1 | stage 1 only, on `graph_scm`, v1's recipe for 250K steps. 1.7% better than the 150K run on the 19 tables of at most 2,500 training rows (G 0.983, p 0.11), level on longer classification tables (v2-experiment-plan §1.2) | — | — | MLflow `32b8195f4f794208a3425878e5c3fcf3` in `tabpfn-v3-reproduction`, written by minipfn. `train.py --init-hub` takes a Hub repo or a `save_pretrained` folder; minipfn runs no longer load in `train.py`, so the checkpoint has to be converted as `stage1-150k` was (item 1.2) |
+| The end of the 250K-step stage 1 | stage 1 only, on `graph_scm`, v1's recipe for 250K steps. 1.7% better than the 150K run on the 19 tables of at most 2,500 training rows (G 0.983, p 0.11), level on longer classification tables (v2-experiment-plan §1.2) | — | — | MLflow `32b8195f4f794208a3425878e5c3fcf3` in `tabpfn-v3-reproduction`, written by minipfn. `train.py --init-hub` takes a Hub repo or a `save_pretrained` folder; minipfn runs no longer load in `train.py`, so the checkpoint has to be converted as `stage1-150k` was (item 1.1) |
 | **#14's run** | `stage1-150k` plus 10K steps of stage 2 on `graph_scm_hicard_missing`, seed 0, 32 H100, micro batch 1 | **1817.4 (11)** | **1807.6** | MLflow `277916ec05a3457aa6d07f2bc08a60c4`, `model/final.pt`; not released |
 | N10 | the same, seed 1 | 1800.3 (14) | 1788.3 | MLflow `520d88d73cdc4e5ea90cfd27425be00d` |
 | R10 | the same on `graph_scm_realism`, seed 0 | 1758.8 (15) | 1747.4 | MLflow `b9396104c0664d4e859318f0518a6052` |
@@ -144,23 +147,24 @@ Rule 4: a premise of the request that the evidence speaks against goes back to t
 **The evidence says:**
 
 1. **The one measured prior gain is in hand, and in Elo it is mostly not the prior's target.** Stage 2 on `graph_scm_hicard_missing`: pooled G 0.992 over two seeds (v2-findings §2), +37.6 live Elo for #14 over v1.1. The four datasets the prior was made for give 4.5 of the 37.6; the rest is small changes on the other 47 datasets (median ratio 0.9997), the size of the difference between two seeds (§4.2).
-2. **A prior part aimed at one property cannot carry the distance.** Closing the whole gap to Kumo-Tabular-Medium on the datasets of one weak property gives +27 (minority class below 10%) to +58 (above 10K rows); half the gap gives +14 to +33 (§4.3). Kumo-Tabular's other prior parts, measured as R10, moved no property by more than 0.5% (§4.4). Reported elsewhere: Kumo's prior ablation "marginally improves" at 100K steps (arXiv 2611.23001 §7); Mitra adds +63 in its own pool for one tree-ensemble prior and nothing for four more (arXiv 2510.21204, Table 6); Mitra-v2's mixture weights changed little (arXiv 2609.04540 §2.2).
-3. **Tasks act on TabArena only through two channels, and both are small or bounded** (formulations §11). The task tables built so far are recognizable and TabArena's splits are random, so in the limit they change nothing there; alone they cost 555 and 574 repo Elo (v2-findings §7). The tasks that add targets per table act through the training term, and cannot give more than the extra training they stand for: about 28 to 91 Elo per doubling of effective data (formulations §11.5), with the doubling not measured for any task.
-4. **The lever with a reported association of the needed size is training compute, and it is broad.** Kumo-Tabular's S → M step (4.6 times the compute, 2.3 times the parameters, twice the stage-1 tables) improves 42 of 51 datasets; applied to #14's errors it gives +96 (rank 6). Its M → L step improves 45 of 51 and gives +115 (rank 5) (§4.3). Kumo-S at v1's compute is level with v1 (G 0.996, v2-findings §6). This is an association for another model, with the size changed along with the compute. TabSil's own records of more training are small and on one axis each: 100K more stage-1 steps gave 1.7% on 19 small tables (p 0.11), the second half of stage 2 gave 0.993 within one schedule, stage 3 gave 1.000.
+2. **A prior part aimed at one property is unlikely to carry the distance.** As scenarios, not bounds: closing the gap to Kumo-Tabular-Medium on the datasets of one weak property gives +27 (a minority class below 10%) to +58 (above 10K rows), and matching the best top-5 model there +59 to +98 (§4.3). A part that acts on several properties, or beats Kumo-Tabular-Medium on its datasets, could do more; none such is measured or reported. Kumo-Tabular's other prior parts, measured as R10, moved no property by more than 0.5% (§4.4). Reported elsewhere: Kumo's prior ablation "marginally improves" at 100K steps (arXiv 2611.23001 §7); Mitra adds +63 in its own pool for one tree-ensemble prior and nothing for four more (arXiv 2510.21204, Table 6); Mitra-v2's mixture weights changed little (arXiv 2609.04540 §2.2).
+3. **Tasks act on TabArena only through two channels** (formulations §11). The task tables built so far are recognizable and TabArena's splits are random, so in the limit they change nothing there; alone they cost 555 and 574 repo Elo (v2-findings §7). The tasks that add targets per table act through the training term. Under §11.5's assumption that equal prior loss means equal real error, they give what the extra training they stand for gives: by the compute analogy, +46 to +72 live Elo per doubling of effective data (`whatif_share.csv`). The doubling is not measured for any task, and the assumption is not tested.
+4. **The lever with a reported association of the needed size is training compute, and it is broad.** Kumo-Tabular's S → M step (4.6 times the compute, 2.3 times the parameters, twice the stage-1 tables) improves 42 of 51 datasets; applied to #14's errors it gives +96 (rank 6). Its M → L step improves 45 of 51 and gives +115 (rank 5) (§4.3). Kumo-S at v1's compute is level with v1 (G 0.996, v2-findings §6). This is an association for another model, with the parameters changed along with the compute, and TabSil's size stays fixed here. TabSil's own records of more training are small and on one axis each: 100K more stage-1 steps gave 1.7% on 19 small tables (p 0.11), the second half of stage 2 gave 0.993 within one schedule, stage 3 gave 1.000.
 5. **The leader's jump is not explained.** Causilo 1.5 is 256 Elo above Causilo 1.0 on the full board two months later (its blog's table), and the blog states no change of architecture, data, prior, objective or compute (nums.world/blog/causilo-1-5, opened). Applied to #14, Causilo's per-dataset change gives +239 (rank 2). Gains of that size exist that compute does not explain; what made this one is not published.
 
-**Options**, each with its expected gain over #14's weights in live Elo:
+**Options**, each with its gain over #14's weights in live Elo and the kind of that number:
 
-| Option | What | Expected gain | Kind of evidence | H100-h | Calendar |
+| Option | What | Gain | Kind | H100-h | Calendar |
 |---|---|---|---|---|---|
 | A. Stop | #14's weights stay the candidate; its release and submission are separate decisions | 0; rank 11 | measured | 0 | — |
-| B. Priors and tasks | tiers 1 and 2 without tier 3: the measurements, the compute-slope reading 2.1, and by choice the prior-and-task branch 2.2 and the masked-cell branch 2.3 | +0 to about +43 from 2.1, +0 to about +30 from 2.2, unknown from 2.3; not additive with certainty | estimated (§7) | about 230; up to about 680 with 2.2 and 2.3 | about 2 days per branch on one node |
-| C. Compute | tier 3: Kumo-Tabular-Medium's tables per task at TabSil's size, with whatever of B passes | +94 to +147 by analogy, rank 4 to 6; range 0 (TabSil's slope flat) to about +200 (Kumo's S → L change gives +199) | estimated by analogy for another model; TabSil's own slope read first at 2.1 | 3,640 to 3,830 on one node per stage (stage 3 estimated); 2,630 without stage 3; 4,850 to 5,030 with stage 1 on 32 H100 | 19 to 20 days on one node; 13 to 14 with stage 1 on 32 H100; 13.5 without stage 3 |
-| D. A tuned + ensembled entry | a search space over TabSil's inference settings and weights, run under TabArena's tuning protocol (200 random configurations and post-hoc ensembling; read by a subagent, not verified) | +16 to +31 by analogy (rank 7 to 8) | estimated by analogy; a different kind of entry | about 65 for 25 configurations to about 500 for 200 on Lite (estimated: 0.31 H100-h per Lite run, times 8 folds per configuration) | days |
+| B. Priors and tasks only | items 1.2 and 2.2: the real-table corpus, then a short continuation on it with its control. On request, a YCTX or masked-cell branch (§5.6, §6) | unknown | reported for another model (real tables); no calibration (the rest) | about 10; 225 per branch on request | about 1 day, after the corpus work |
+| C. Compute | items 1.1 and 2.1, then tier 3 if 2.1 reads a slope | 2.1: +31 to +43 if TabSil follows Kumo's slope, 0 if not. Tier 3: +75 to +117 (rank 5 or 6) under the same condition. Zero plausible | scenario by analogy | 225 for 2.1; then 1,650 to 1,900 (3A, continued) or 2,630 (3B, anew) | 2.1: about 1.3 days; 3A 8.5 to 10 days, 3B 13.5 days, one node |
+| D. A tuned + ensembled entry | first a screen of 16 members and a #14 + N10 checkpoint ensemble on TabArena-Lite; then a search over TabSil's inference settings and weights under TabArena's tuning protocol (200 random configurations and post-hoc ensembling; read by a subagent, not verified) | the screen: at most about +11 expected from the measured 4 → 8 member step (+11 repo); the search: +16 to +31 | the screen: estimated; the search: scenario by analogy, a different kind of entry | the screen about 2; the search about 65 for 25 configurations to about 500 for 200 (estimated: 0.31 H100-h per Lite run, times 8 folds per configuration) | the screen hours; the search days |
 
-- **Only C has an association that reaches the bar**, and it lands about at the bar (rank 4 to 6), not clearly above it. B's best item, 2.1, is also the cheapest reading of whether C would work for TabSil.
-- **D** was the option with a reported +67 to +89 on the board (RealTabPFN-2.5, TabPFNv2). Applied to TabSil's errors in the crowd at rank 11, the same changes give +16 to +31. It is listed because the earlier plans did not price it.
-- **B is what the request asked for**, and it is planned in full in §5 to §7. On its evidence it does not reach the bar by itself.
+- **Only C has a scenario that reaches the bar**, and it reaches it at rank 5 or 6, not clearly above. Its first item, 2.1, is the cheapest reading of whether TabSil follows the slope.
+- **B and C can run together**: neither bears on the other.
+- **D** was the option with a reported +67 to +89 on the board (RealTabPFN-2.5, TabPFNv2). Applied to TabSil's errors in the crowd at rank 11, the same changes give +16 to +31. Its screen is below one pair's resolution (20 Elo) by its own estimate, so it is not in the tiers (rule 5); it is listed because the earlier plans did not price D.
+- **B is what the request asked for**, and §5 to §7 plan it in full. On its evidence it does not reach the bar by itself.
 
 ## 4. Where TabSil is behind: the per-dataset gap
 
@@ -240,11 +244,11 @@ Realistic changes are not uniform. With a per-dataset spread like that between t
 | 0.985 | +194 (4) | +175, 1.0 | +98, 0.4 |
 | 0.980 | +230 (4) | +203, 1.0 | +139, 0.8 |
 
-**A broad change of about 1.5% (G 0.985) with seed-sized noise reaches rank 5 in every draw.** Per-dataset noise costs Elo on average here, because #14 wins more of its narrow battles than it loses.
+**A broad change of about 1.5% (G 0.985) with seed-sized noise reaches rank 5 in all 10 draws.** Ten draws of an assumed noise model are an illustration, not a probability of success. Per-dataset noise costs Elo on average here, because #14 wins more of its narrow battles than it loses.
 
-### 4.3 Elo bounds and analogies
+### 4.3 Scenarios: the gap closed by property, and other entrants' changes
 
-**Gap closed on the datasets of a property** where #14 is behind Kumo-Tabular-Medium (a share of the log gap; `whatif_buckets.csv`). This bounds a prior part aimed at that property:
+**Gap closed on the datasets of a property** where #14 is behind Kumo-Tabular-Medium (a share of the log gap; `whatif_buckets.csv`). These are scenarios, not bounds: a prior part can act on several properties at once, or beat Kumo-Tabular-Medium on its datasets. They say what a part aimed at one property would have to achieve:
 
 | Datasets | Number | Behind Kumo-M | 25% of the gap | 50% | 100% | At the best top-5 error |
 |---|---|---|---|---|---|---|
@@ -274,14 +278,16 @@ The four weakest properties together (missing values, 21 to 100 features, a mino
 | RealTabPFN-2.5 default → tuned + ensembled | 0.968 | 36 | +31 | 7 |
 | TabPFNv2 default → tuned + ensembled | 0.966 | 25 | +16 | 8 |
 
-A share $f$ of a Kumo step, applied as $f$ times its per-dataset log ratios (the power law in compute behind §11.5 of the formulations): S → M at $f$ = 0.25, 0.5, 0.75 gives +30, +50, +75; M → L gives +32, +60, +94. **These shares price item 2.1 and tier 3** (§7), at today's measured costs (§9; #14's recipe is 150K stage-1 and 10K stage-2 steps, about 820 H100-h):
+**A share of a Kumo step** (`whatif_share.csv`): Kumo's per-dataset log ratios times a share $f$, with $f$ the compute multiplier's doublings over the step's (the power law in compute of formulations §11.5). The multipliers are against #14's recipe at today's measured costs (§9: 150K stage-1 and 10K stage-2 steps, about 822 H100-h). This prices item 2.1 and tier 3 as scenarios:
 
-| Run | Compute against #14's recipe | Share of Kumo's S → M step (2.19 doublings) | Elo | Share of its M → L step (1.69 doublings) | Elo |
+| Run | Compute against #14's recipe | Share of Kumo's S → M step (×4.57) | Elo (rank) | Share of its M → L step (×3.22) | Elo (rank) |
 |---|---|---|---|---|---|
-| 2.1: 250K instead of 150K stage-1 steps, the same stage 2 | ×1.49 (0.57 doublings) | 0.26 | +31 (rank 7) | 0.34 | +43 (rank 7) |
-| Tier 3: 500K / 40K / 12K steps | ×4.4 to ×4.7 (2.1 to 2.2 doublings) | 0.97 to 1.02 | +94 to +97 (rank 6) | 1.27 to 1.33 | +141 to +147 (rank 4) |
+| 2.1: 250K instead of 150K stage-1 steps, the same stage 2 | ×1.49 | 0.26 | +31 (7) | 0.34 | +43 (7) |
+| One doubling of compute | ×2 | 0.46 | +46 (7) | 0.59 | +72 (6) |
+| Tier 3: 500K stage-1 and 40K stage-2 steps, no stage 3 | ×3.17 to ×3.29 | 0.76 to 0.78 | +75 to +78 (6) | 0.99 to 1.02 | +115 to +117 (5) |
 
-The M → L column for tier 3 extrapolates beyond Kumo's own step.
+- **These assume TabSil moves as Kumo-Tabular moved**, dataset by dataset, with the size that Kumo changed held fixed here. TabSil's own records of more training are small and do not separate these scenarios from zero (§3, point 4).
+- With stage 3 (12K steps), tier 3 would be ×4.4 to ×4.7 and +94 to +147 by the same analogy. Stage 3 is not in the plan by default (§7).
 
 ### 4.4 What the existing runs say about the weak properties
 
@@ -297,8 +303,8 @@ For each candidate: the property of real tables it adds, the evidence (controlle
 |---|---|---|---|---|---|
 | `graph_scm_hicard_missing` | 21 or more categories in 10% of the tables; missing values that depend on values, in column groups | measured, two seeds against the v1 prior at equal steps: pooled 0.992 | polish (64 features, missing, rare class), kddcup09 | **+37 in hand** (+21 for the second seed); prior | 0 |
 | `graph_scm_realism` | warped columns, up to 200 categories, correlated blocks, relabel, coarsen | measured, one seed against the two hicard seeds: 1.003; no weak property moved by 0.5% (§4.4) | none moved | 0 (measured; R10 is 1758.8 live against 1817.4 for #14); prior | 450 H100-h for its run (stalls) |
-| `graph_scm_base_realism` (Kumo's every-stage parts from step 0) | the same parts from the start of stage 1, too-easy tables redrawn | not measured (PS1 stopped at 10,500 and 5,000 steps) | — | 0 expected by R10's result for the same parts in stage 2; prior | 9% slower per step |
-| `target_train_rows` (YCTX) | the regression target scaled with the context rows, as at inference | measured, 2 seeds against 3 at 30K stage-1 steps: 0.995 (0.990 to 1.000), 63 of 99 better, seeds disagree (0.993, 1.001). Derived: a scale term of 0.07 to 0.5% of the regression loss (formulations §2) | all 13 regression datasets; the change is broad, not aimed | +0 to about +30 (estimated: the regression-only cut cannot reach rank 5; the 100% regression bound is +52); prior | a flag; no speed risk |
+| `graph_scm_base_realism` (Kumo's every-stage parts from step 0) | the same parts from the start of stage 1, too-easy tables redrawn | not measured (PS1 stopped at 10,500 and 5,000 steps). R10 measured similar parts in stage 2 only | — | unknown; prior | 9% slower per step |
+| `target_train_rows` (YCTX) | the regression target scaled with the context rows, as at inference | measured, 2 seeds against 3 at 30K stage-1 steps: 0.995 (0.990 to 1.000), 63 of 99 better, seeds disagree (0.993, 1.001). Derived: a scale term of 0.07 to 0.5% of the regression loss (formulations §2) | all 13 regression datasets; the change is broad, not aimed | unknown: the stage-1 reading is not resolved and stage 2 has no measurement. The regression datasets alone cannot carry rank 5 (§1.3); closing their whole gap to Kumo-M gives +52 (`whatif_buckets.csv`); prior | a flag; no speed risk |
 | `noise_prob` | noisy copies of 10% of the columns | none; four 20K-step runs with one option each scored 18 to 60 below their control (untrusted readout) | — | unknown, sign against; prior | under 1% of the generation time |
 | The covering split (`CoverClasses`) | — (it keeps every query's class in the context) | derived (formulations §2); measured in tier 1 of the closed plan: holds for 2 classes only | multiclass: anneal (5 classes, rarest 0.9%) | about 0: binary AUC cannot change; multiclass bound at 100% of the gap +19; prior or inference | one branch |
 
@@ -308,11 +314,11 @@ Read in `NVIDIA/structured-data-models` at `924e992` by the closed plan (v2-prio
 
 | Part | Stage in Kumo | Adds | Expected; kind | Cost; speed |
 |---|---|---|---|---|
-| Count and distributional numeric columns (10% of numeric columns, 30% of those rounded) | every stage | counts, heteroscedastic columns | 0 by R10's analogy for Kumo's other numeric parts; no named dataset; prior | inside the SCM draw: generation-speed risk, smoke run needed |
+| Count and distributional numeric columns (10% of numeric columns, 30% of those rounded) | every stage | counts, heteroscedastic columns | unknown; no named dataset; Kumo's ported numeric parts measured 1.003 (R10); prior | inside the SCM draw: generation-speed risk, smoke run needed |
 | Argmax categories | 2 and 3 | classes that are hard functions of the causes | 0, unknown; prior | inside the SCM draw |
-| Heavy-tailed regression targets (20% of targets) | 3 | skewed targets | 0: stage 3 itself measured 1.000; prior | a transform |
-| Small tables replayed in stage 3 | 3 | small tables in late training | 0: stage 3 1.000 | a loader change |
-| A wider column ladder for long tables | 3 | wide and long tables together | 0: TabSil is not behind above 10K rows by more than 2% or above 100 features at all (§4.1) | the table-size rule |
+| Heavy-tailed regression targets (20% of targets) | 3 | skewed targets | unknown; a stage-3 part, and stage 3 itself measured 1.000 and is not in the plan; prior | a transform |
+| Small tables replayed in stage 3 | 3 | small tables in late training | unknown; a stage-3 part (as above) | a loader change |
+| A wider column ladder for long tables | 3 | wide and long tables together | unknown, likely small: TabSil is 2% behind above 10K rows and ahead above 100 features (§4.1) | the table-size rule |
 | Shared hyperparameters within a table, noisy-measurement columns, per-table function preferences, too-easy tables rejected | every stage | — | 0, unknown | inside the SCM draw for the first three |
 
 Kumo's whole prior, against TabICLv2's, "marginally improves" at 100K steps with three seeds (arXiv 2611.23001 §7). **What separates Kumo-Tabular from TabSil is not a prior part; it is 3 to 9 times the tables per task** (§7, tier 3).
@@ -323,7 +329,7 @@ Kumo's whole prior, against TabICLv2's, "marginally improves" at 100K steps with
 |---|---|---|---|---|
 | Tables labeled by fitted tree ensembles (Mitra) | axis-aligned, piecewise-constant targets | controlled within one study, seeds not stated: SCM alone 1000, +ET prior 1063, all six priors 1062, Mitra's own pool (arXiv 2510.21204, Table 6) | unknown, smaller than Mitra's: TabSil's SCM already has tree mechanisms in its function set; no named dataset; prior | a generator that fits an ensemble per table; generation time unknown |
 | A hybrid SCM and realism modules (Mitra-v2; arXiv 2605.18971) | mixed mechanisms, irregular marginals | Mitra-v2: mixture weights changed little, the hybrid SCM not isolated (§2.2, appendix C, read by a subagent); arXiv 2605.18971: controlled at small scale, numbers not opened | 0, unknown; prior | a new generator |
-| **Continued training on real tables (Real-TabPFN, arXiv 2507.03971)** | real marginals and dependencies | TabPFN v2 after 20,000 steps at batch 1 on OpenML and Kaggle tables: normalized AUC 0.954 → 0.976, raw mean AUC 0.929 → 0.932, on 29 AMLB classification datasets; seeds not stated; web-scraped tables lowered it (read by a subagent) | unknown; reported positive for a weaker model; the raw gain is about 4% of the binary error. Kind: prior (real tables) | GPU: under about 20 H100-h. The cost is the corpus and its leakage check against TabArena, the development suite, AMLB, BeyondArena and the task suites, which share OpenML as a source, and the leaderboard's leakage column |
+| **Continued training on real tables (Real-TabPFN, arXiv 2507.03971)** | real marginals and dependencies | TabPFN v2 after 20,000 steps at batch 1 on OpenML and Kaggle tables: normalized AUC 0.954 → 0.976, raw mean AUC 0.929 → 0.932, on 29 AMLB classification datasets; seeds not stated; web-scraped tables lowered it (read by a subagent) | unknown; reported positive for a weaker model; the raw gain is about 4% of the binary error. Kind: prior (real tables) | GPU: about 10 H100-h with a same-steps control (items 1.2, 2.2). The cost is the corpus and its leakage check against TabArena, the development suite, AMLB, BeyondArena and the task suites, which share OpenML as a source, and the leaderboard's leakage column |
 | An adversarially trained generator (APT, arXiv 2502.04573) | tables the current model finds hard | regression MSE 0.340 → 0.306 on 35 datasets against its TabPFN baseline, classification within one standard deviation (read by a subagent) | unknown, reported for TabPFN v1's prior; prior | a second network trained with the model |
 | Drift priors (Drift-Resilient TabPFN, TabPFN-3's dynamic SCM) | mechanisms that move with time | "lower predictive performance on ID tasks" (v2-experiment-plan §1) | 0 or negative; prior | a second-order generator |
 
@@ -350,13 +356,13 @@ The distance between a prior and real tables can be measured on a CPU, and it do
 
 | Rank | Candidate | Expected live Elo | H100-h | In the plan |
 |---|---|---|---|---|
-| 1 | `graph_scm_hicard_missing` | +37, in hand | 0 | tier 0 |
-| 2 | `target_train_rows` in stage 2 | +0 to about +30 | 223 (one branch) | item 2.2, by the user's choice |
-| 3 | Continued training on real tables | unknown, reported positive for another model | under 20 on the GPU; the corpus and the leakage check first | listed, not planned: its cost is the corpus work, and its effect has no estimate for TabSil |
-| 4 | Kumo's parts not ported, Mitra's trees, APT | 0 or unknown; no named dataset | code plus one branch each | not planned |
-| 5 | `graph_scm_realism`, `graph_scm_base_realism`, `noise_prob`, the covering split, drift priors | 0 measured, 0 expected, or negative | — | not planned |
+| 1 | `graph_scm_hicard_missing` | +37.6, measured, in hand | 0 | tier 0 |
+| 2 | Continued training on real tables | unknown; reported positive for another model (about 4% of the binary error) | about 10 with its control, after a CPU check of the corpus and its leakage | items 1.2 and 2.2 |
+| 3 | `target_train_rows` in stage 2 | unknown; no stage-2 calibration | 225 (one branch) | listed: no calibrated effect above a pair's resolution (rule 5); on request (§15) |
+| 4 | Kumo's parts not ported, Mitra's trees, APT | unknown; no named dataset | code plus one branch each | not planned |
+| 5 | `graph_scm_realism` (measured 1.003), `graph_scm_base_realism`, `noise_prob`, the covering split, drift priors | 0 measured, unknown, or negative | — | not planned |
 
-**No prior candidate has an expected effect that a branch can resolve and that reaches the bar.** The best one, YCTX in stage 2, is at the resolution of one pair (§7).
+**No prior candidate has a calibrated expected effect that a branch can resolve and that reaches the bar.** The real-table screen is planned because it is cheap (about 1% of tier 3) and has the one reported positive effect.
 
 ## 6. Task diversity
 
@@ -366,92 +372,92 @@ The derivations are §11 of [v2-task-formulations.md](v2-task-formulations.md): 
 |---|---|---|---|---|---|---|
 | 1 | Missing values that depend on the target and other columns (the hicard prior) | coverage | +37, in hand | prior | 0 | tier 0 |
 | 2 | Further missingness mechanisms | coverage of the 11 missing-value datasets | +0 to about +20 (estimated; the 100% bound for the missing-value datasets is +35) | prior | one branch | not planned: no part named beyond the hicard prior's |
-| 3 | Masked-cell reconstruction | supervision per table; shared representation | unknown sign; at most about 28 to 91 per doubling of effective data | structure and loss | code, then one branch | item 2.3, gated by item 1.1 |
+| 3 | Masked-cell reconstruction | supervision per table; shared representation | unknown sign. Under §11.5's assumption, +46 to +72 per doubling of effective data by the compute analogy; the doubling it buys is unknown | structure and loss | code, then one branch | listed: no calibrated effect (rule 5); on request (§15) |
 | 4 | Several targets per table | supervision per table | unknown; at most the compute the shared stages save | structure | code, then one branch | not planned |
 | 5 | Unlabeled rows as context | coverage on every table | unknown; one controlled positive report (abstract) | structure, prior, inference | the largest code change | not planned: whether the leaderboard counts it is not verified |
-| 6 | More query rows per table | supervision per table | about 0 unless item 1.1 finds $\sigma_w^2/(m \sigma_b^2) \ge 1$ | prior | one branch | gated by item 1.1 |
+| 6 | More query rows per table | supervision per table | about 0 unless $\sigma_w^2/(m \sigma_b^2)$ is near 1 or more, which is not measured (formulations §11.3) | prior | one branch | not planned |
 | 7 | AUC-aligned pairwise loss; a mean output for RMSE | finite capacity; loss | about 0 (checked) | loss | — | not planned |
 | 8 | Forecasting, outlier, treatment-effect, survival, drift and clustering tables | none on TabArena | 0, sign unknown; task tables alone cost 555 to 574 | prior | — | not planned |
 | 9 | Multi-output, ranking, density, time-series anomalies, effect intervals, conformal intervals, Bayesian optimization | none: the weights do not change | exactly 0 | inference | 0 | not planned |
 
-**Which tasks enter which tier at what share.** None enters as task-shaped tables: at any share $w$ the limit is the ordinary answer on recognizable tables, and the only channel that can lower the TabArena error is supervision per table (formulations §10, §11). The masked-cell head (rank 3) enters tier 2 as item 2.3 at a loss weight to be fixed in its code review, only if item 1.1 finds training noise-limited (§7), since otherwise more targets per pass have nothing to act on. The task tables of the closed branch are not used.
+**Which tasks enter which tier at what share.** None enters. As task-shaped tables, at any share $w$ the limit is the ordinary answer on recognizable tables (formulations §10, §11). As extra targets per table, a task acts only through the training term, its effect depends on how much extra effective data it buys, and that is not measured for any task (§11.5). So no task has a calibrated expected effect above a branch's resolution, and by rule 5 none is run. The masked-cell head (rank 3) is the one a user who wants the supervision channel tested could ask for: code (a head, its loss, the masking), a smoke run, and one branch of 225 H100-h, read first on the reference validation loss at equal steps. The task tables of the closed branch are not used.
 
 ## 7. Tiers
 
-Every run has its expected effect, the resolution of its design, and the decision each outcome leads to (rule 5). The resolution of one branch against the two existing seeds is **0.6% pooled** (G on TabArena 3-split plus the development suite; the branch rule's threshold is 0.9944, from ν 0.003) and **about 20 Elo on TabArena-Lite** (the two hicard seeds are 1817 and 1800 live). No rule adopts on "not worse". A result without an effect starts no run.
+Every run has its expected effect, the resolution of its design, and the decision each outcome leads to (rule 5). Every gain above tier 0 is a scenario by analogy or unknown, and each row says which. The resolution of one branch against the two existing seeds is **0.6% pooled** (G on TabArena 3-split plus the development suite; the branch rule's threshold is 0.9944, from ν 0.003) and **about 20 live Elo on TabArena-Lite** (the two hicard seeds are 1817 and 1800 live).
+
+**The adoption rule of every run** (no rule adopts on "not worse"): an arm is adopted only if (i) its pooled G against its control is at most 0.9944 with the 95% CI below 1, (ii) neither task is worse than the control by more than 0.5%, and (iii) its live Elo (`gap_report.py`) is at least 20 above the control's, taking the better seed where the control is two runs. A result without an effect starts no run.
 
 ### Tier 0: nothing trained (0 H100-h)
 
 | What | Adds | Evidence |
 |---|---|---|
-| #14's weights (`277916ec…`, not released) | the base: 1816.9 live, rank 11; +37 over v1.1 | measured; one seed (the second seed of the prior is 1800.3) |
-| This pull request: the gap analysis, the derivations and their checks | no Elo; the expected effects of §4 to §6 | CPU |
+| #14's weights (`277916ec…`, not released) | the base: 1816.9 live, rank 11; +37.6 over v1.1 | measured; one seed (the second seed of the prior is 1800.3) |
+| This pull request: the gap analysis, the derivations and their checks | no Elo; the scenarios of §4 to §6 | CPU |
 
 Whether #14's weights are released or submitted is an open decision from before (v2-experiment-plan, phase 5) and is not part of this plan.
 
-### Tier 1: no training (about 4 H100-h)
+### Tier 1: no training (about 3 H100-h)
 
 | # | What | Expected | Resolution | Decision by outcome | H100-h |
 |---|---|---|---|---|---|
-| 1.1 | Gradient-noise statistics of #14's weights on stage-2 prior tables: the per-query gradient's variance within and between tables ($\sigma_w^2$, $\sigma_b^2$) and the noise scale $\mathrm{tr}\Sigma / \lVert G \rVert^2$ at batch 256 (formulations §11.3) | a measurement; no Elo | the ratio $r = \sigma_w^2/(m \sigma_b^2)$ at stage 2's query counts, and the noise scale against 256 tables | $r \ge 1$ or a noise scale above 256 tables: gradient noise limits training, and item 2.3 goes to the user with its code. Otherwise the supervision items of §6 (ranks 3, 4 and 6) are dropped | about 1 (one GPU, a few hundred tables; a probe script like `v2_eff/step_probe.py`, code needed) |
-| 1.2 | The 250K-step stage 1 converted to a `save_pretrained` folder or a Hub tag `stage1-250k` (CPU, as `stage1-150k` was), then read with the context capped at 1,024 rows on TabArena 3-split and the development suite, against `stage1-150k`'s capped runs | G about 0.98 to 0.99 on small tables, level elsewhere (estimated from v2-experiment-plan §1.2) | the noise of two stage-1 runs, 0.1 to 0.5% pooled | G pooled at most 0.995: item 2.1 runs. Above: 2.1 does not run, and tier 3 goes to the user with TabSil's stage-1 slope read as flat | about 3 |
+| 1.1 | The 250K-step stage 1 converted to a `save_pretrained` folder or a Hub tag `stage1-250k` (CPU, as `stage1-150k` was), then read with the context capped at 1,024 rows on TabArena 3-split and the development suite, against `stage1-150k`'s capped runs | G about 0.98 to 0.99 on small tables, level elsewhere (estimated from v2-experiment-plan §1.2) | the noise of two stage-1 runs, 0.1 to 0.5% pooled | **G at most 0.995 pooled with its CI below 1**: item 2.1 runs. **Otherwise**: 2.1 does not run, and the compute lever goes back to the user with TabSil's stage-1 slope read as flat | about 3 |
+| 1.2 | The real-table corpus, on a CPU: OpenML and Kaggle tables, deduplicated against TabArena's 51 datasets, the development suite (AMLB, CTR23), BeyondArena and the task suites by dataset ids, names, shapes, feature names and row hashes, as Real-TabPFN did; every exclusion recorded | — | — | **No overlap left and a corpus of at least 50 tables**: item 2.2 runs. **Otherwise**: B ends, with what was found | 0 (agent time for the corpus) |
 | 1.3 | The live board re-read and `gap_report.py` run on its current revision | — | — | the bar restated | 0 |
 
-Item 1.2 costs 1.3% of item 2.1, and item 1.1 under 1% of item 2.3 (rule 7).
+Item 1.1 costs 1.3% of item 2.1, the nearest a check of a stage-1 checkpoint can be made (rule 7).
 
-### Tier 2: stage-2 branches from stage-1 weights that exist
-
-Setup for all three: 10K steps of stage 2 at batch 256 on one 8xH100 node at **micro batch 1**, the setup of #14's run and N10 in all but the GPU count, so that every step holds the same table sizes as the controls; the GPU count changes which tables a step draws, as a seed does (v2-experiment-results, "What a larger micro batch changes"). Cost: 21.5 H100-h per 1K steps measured (`bf797ac1…`), 223 with the start, validation and checkpoints. The control is the mean of #14's run and N10 (`paired_report.py --a runs:/<#14>+runs:/<N10>`). Evaluation: TabArena-Lite, TabArena 3-split and the development suite, about 2.5 H100-h, then `gap_report.py` for the live Elo.
+### Tier 2: branches from weights that exist
 
 | # | What | Expected effect | Resolution | Decision by outcome | H100-h |
 |---|---|---|---|---|---|
-| 2.1 | **Stage 2 from the 250K-step stage 1**, `graph_scm_hicard_missing`, seed 0. The question: does more stage-1 training carry through stage 2, and at what slope? | G about 0.985 to 1.000 pooled; +0 to about +43 live Elo. Estimated: a flat slope gives 0; Kumo's slope gives 0.26 of its S → M step (+31) to 0.34 of its M → L step (+43) (§4.3) | 0.6% pooled; about 20 Elo per pair. A Kumo-like slope (G 0.987 by the S → M share, 0.993 by the M → L share; its Elo +31 to +43) is above both | **G ≤ 0.990 with its CI below 1**: TabSil's stage-1 compute carries through stage 2 at about three quarters of the slope of Kumo's S → M step or more; tier 3 goes to the user priced with the measured slope, and 2.1's weights become the candidate. **0.990 < G ≤ 0.9944**: a smaller slope, at most about that of Kumo's M → L step; tier 3 is priced again with it and goes back to the user (rule 9). **Otherwise**: no slope shown; tier 3's stage-1 part has no TabSil evidence, and tier 3 goes back to the user with dropping it as the first option | 223 + 2.5 |
-| 2.2 | **By the user's choice only:** the prior-and-task branch: `graph_scm_hicard_missing` with `target_train_rows`, from `stage1-150k`, seed 2 | +0 to about +30 live Elo (estimated; §5.1). By rule 5 it is not in the plan by default: its expected effect is at the resolution of one pair | as 2.1 | G ≤ 0.9944 pooled with its CI below 1, and at least +20 live Elo over the controls' mean: the option goes into tier 3's stage 2. Otherwise: priors and tasks stop | 223 + 2.5 |
-| 2.3 | **Gated by item 1.1:** a masked-cell head with its loss, from `stage1-150k` on the hicard prior: hidden cells of the query rows enter as missing cells, which the cell encoder already marks, and a head predicts them from the row's in-context output and the column's summary | unknown sign; at most about 28 to 91 Elo per doubling of effective data (formulations §11.5); the doubling it buys is read first on the reference validation loss at equal steps | as 2.1 | as 2.2 | code (a head, its loss, the masking), a smoke run of 0.5, then 223 + 2.5 |
+| 2.1 | **Stage 2 from the 250K-step stage 1**, 10K steps on `graph_scm_hicard_missing`, seed 0, one 8xH100 node at micro batch 1 (the setup of #14's run and N10 in all but the GPU count, so every step holds the same table sizes; the GPU count changes which tables a step draws, as a seed does: v2-experiment-results, "What a larger micro batch changes"). Control: the mean of #14's run and N10. The question: does more stage-1 training carry through stage 2? | **Scenario:** +31 (by Kumo's S → M step) to +43 (by its M → L step), G 0.987 to 0.993, if TabSil follows Kumo's slope; 0 if its slope is flat (§4.3) | 0.6% pooled; about 20 Elo per pair. The scenarios are above both | **Adopted by the rule**: the slope is TabSil's own; tier 3 goes to the user priced with it, and 2.1's weights become the candidate. **Not adopted, G at most 0.9944**: a slope at most that of Kumo's M → L step; tier 3 is priced again with it and goes back to the user (rule 9). **Otherwise**: no slope shown; tier 3 goes back to the user with dropping it as the first option | 223 (21.5 per 1K steps measured, `bf797ac1…`, with the start, validation and checkpoints) + 2.5 |
+| 2.2 | **A short continuation on real tables**, if 1.2 passes: 2,000 steps at batch 32 on one H100 from #14's weights, tables drawn from the corpus (rows subsampled to 400 to 2,048 as in the closed plan's pilot, columns to at most 100, the dataset's own target), at stage 3's learning rate. Control: the same steps on `graph_scm_hicard_missing` tables from #14's weights | **Unknown.** Reported for another model: TabPFN v2's raw AUC 0.929 → 0.932 on 29 small classification datasets, about 4% of the binary error, seeds not stated (Real-TabPFN, read by a subagent) | as 2.1 | **Adopted by the rule**: the real-table step is added at the end of whatever weights the plan ends with, and the corpus and its leakage record go with the submission. **Otherwise**: B ends | about 10: two runs of about 2.3 each (the closed plan's pilot, 2,000 steps at batch 32 on one GPU, `v2-prior-task-results` "Cost"), two evaluations of 2.5. Code: a loader of real tables (needed) |
 
-- 2.1 and 2.2 do not bear on each other and may run side by side on two nodes. Neither starts beside tier 1, whose items decide them (rule 8).
-- A prior or setup used at scale for the first time gets a smoke run first (rule 6): 2.2 and 2.3 change the prior options and the model, so each has a 300-step smoke run on one GPU (about 0.5 H100-h) that checks the step time and the data wait before the branch.
+- 2.1 and 2.2 do not bear on each other and may run side by side. Neither starts beside tier 1, whose items decide them (rule 8).
+- 2.2 is a first use of a setup, so its own first 100 steps are the smoke run (rule 6): a data wait above 5% of the step stops it for a fix.
+- **Listed and not run (rule 5):** the YCTX branch (§5.6, rank 3) and the masked-cell branch (§6, rank 3), with no calibrated expected effect; each is 225 H100-h (plus code and a smoke run for the masked cells) on the user's request.
 
-### Tier 3: the compute lever (only if the user puts it in scope)
+### Tier 3: the compute lever (only if the user puts it in scope and R2 allows)
 
-Kumo-Tabular-Medium's tables per task at TabSil's size: 500K / 40K / 12K steps against v1's 150K / 10K / 2K (per task 64M, 5.1M and 1.5M tables; TabSil alternates the tasks, so N steps at batch 256 are N × 128 tables per task, as Kumo's per-task models at batch 128). From scratch, v1's stage-1 recipe and prior; stage 2 on `graph_scm_hicard_missing` with whatever of tier 2 passed. One node per stage.
+Kumo-Tabular-Medium's stage-1 and stage-2 tables per task at TabSil's size: 500K and 40K steps against v1's 150K and 10K (64M and 5.1M tables per task: TabSil alternates the tasks, so N steps at batch 256 are N × 128 tables per task, as Kumo's per-task models have at batch 128). Stage 2 on `graph_scm_hicard_missing`. **No stage 3 by default.** One node per stage.
 
 | # | What | Expected effect | Resolution | Decision by outcome | H100-h; wall time |
 |---|---|---|---|---|---|
-| 3.0 | Timing jobs for the setups not yet measured: stage 3 on one node (110 steps); stage 1 on 32 H100 with today's code if the user wants the shorter wall time | — | — | a projected cost more than 30% above this table goes back to the user (rule 9) | about 10; and 5 |
-| 3.1 | Stage 1, 500K steps, one node, micro batch 4, `gc_freeze` on | the capped readout better than the 250K run's by the slope 2.1 measured | the stage-1 seed noise, 0.1 to 0.5% pooled | **R3a**: not better than the 250K run by more than 0.5% pooled at the capped readout: stop before stage 2 (saves about 1,700 to 1,850) | 1,950 (3.74 measured, `7266d800…`, plus 3 to 4% as in phase 1B); about 10 days |
-| 3.2 | Stage 2, 40K steps, one node, micro batch 2 | +94 to +147 over #14 with 3.3, by analogy (§4.3) | 0.6% pooled; about 20 Elo per pair | **R3b**: the live Elo of the result (`gap_report.py`) at most at rank 7 or G pooled above 0.985 against #14: stop before stage 3 (saves about 1,000 to 1,200). Otherwise stage 3 | 648 (16.2 measured, L20); about 3.4 days |
-| 3.3 | Stage 3, 12K steps, one node | at most +23 (Kumo's report); TabSil's 2K-step stage 3 measured 1.000 | as 3.2 | **R3c**: the final candidate is the better of 3.2 and 3.3 by the pooled rule; then the submission | 1,020 to 1,200 (estimated: 85 to 100 per 1K steps from a one-GPU run, `5df481cb…`; not measured on one node); 5 to 6 days |
+| 3.0 | Smoke and timing for what is used for the first time: 300 steps of the continued stage 1 (3A), which checks the loss after its new warmup | — | — | a projected cost more than 30% above this table, or a validation loss after the new warmup above the 250K run's own at its step 25K (0.2135 and 0.0546, v2-scaling), goes back to the user (rule 9) | about 3 |
+| 3.1 | Stage 1 to 500K steps. **3A:** the 250K-step stage 1 continued for 250K steps, with a 1% warmup and a cosine to 0. **3B:** a new stage 1 of 500K steps. One node, micro batch 4, `gc_freeze` on | the capped readout ahead of the 250K end | the stage-1 seed noise, 0.1 to 0.5% pooled | **R3a**: the capped readout of the 500K end at most 0.995 pooled against the 250K end, with its CI below 1: stage 2. **Otherwise**: stop before stage 2 (saves 648 to 892) | 3A: 975 to 1,025 (3.74 per 1K steps measured, `7266d800…`, plus 3 to 4% as in phase 1B), about 5 days. 3B: 1,950 to 2,050, about 10 days |
+| 3.2 | Stage 2, 40K steps, one node, micro batch 1 (as 2.1 and the controls) or 2 (cheaper; L20's setup) | **Scenario:** +44 to +74 over 2.1; +75 to +117 over #14, rank 5 or 6 (§4.3) | 0.6% pooled; about 20 Elo per pair | **R3b**: the adoption rule against 2.1's weights, and the bar read with `gap_report.py` on the board's revision of the day. At or above Kumo-Tabular-Medium + 25: the candidate goes to the user for release and submission | 892 at micro batch 1 (21.5 per 1K steps measured), about 4.5 days; 648 at micro batch 2 (16.2 measured, L20), about 3.4 days |
+| 3.3 | **Not by default:** stage 3, 12K steps | at most +23 (reported by Kumo); TabSil's 2K-step stage 3 measured 1.000 | as 3.2 | runs only if R3b's result is below the bar by at most 23, so that stage 3 could decide the rank; then a timing job on one node first (stage 3 has not been measured there) and the adoption rule against 3.2's weights | 1,020 to 1,200 (estimated: 85 to 100 per 1K steps from a one-GPU run, `5df481cb…`), 5 to 6 days |
 | 3.4 | Release evaluation and the public submission (§1.4) | the rank on the board | the board's CI | the user's release decision | evaluations about 5 |
 
-- **Total:** 3,640 to 3,830 H100-h, 19 to 20 days on one node (the stages run in sequence). Without stage 3: about 2,630, 13.5 days. With stage 1 on 32 H100 (6.31 H100-h per 1K steps, v1's record with older code; today's code not measured there): 4,850 to 5,030, 13 to 14 days.
-- **A cheaper start, not measured for this model:** stage 1 continued from the 250K-step checkpoint for 250K more steps with a new warmup, about 975 H100-h less and 5 days shorter. Whether a re-warmed continuation equals one schedule of 500K steps is not known for TabSil.
+- **Totals without stage 3:** 3A 1,650 (micro batch 2) to 1,900 (micro batch 1) H100-h, 8.5 to 9.5 days; 3B 2,630 to 2,950, 13.5 to 14.5 days. Stage 3, if R3b calls for it, adds 1,020 to 1,200 and 5 to 6 days.
+- **3A or 3B.** 3A reuses the 975 H100-h already spent on the 250K-step run. Whether two cosine schedules back to back equal one schedule of 500K steps is not known for TabSil, and neither is the forecast that would justify the new schedule of 3B. R3a reads either against the 250K end.
 - **Reading points inside a stage need another schedule.** With a cosine to 0, a checkpoint in the middle of a stage is not an end point (as L20's step 5,000 is not). A warmup-stable-decay schedule would give end points on the way (code needed, not measured for this model). The plan reads at the end of each stage only.
-- **Kumo-Tabular-L's tables** (1M / 60K / 18K) are a further step: about 6,430 to 6,700 H100-h and 33 to 35 days on one node; +199 by Kumo's S → L analogy. Not planned.
+- **Kumo-Tabular-L's tables** (1M stage-1 and 60K stage-2 steps) are a further step: about 4,900 to 5,400 H100-h and 25 to 27 days on one node without stage 3; +199 by Kumo's S → L analogy, which also had stage 3. Not planned.
 
 ## 8. Reading points and the stop threshold
 
 | Point | When | What is read |
 |---|---|---|
 | R0 | the user approves | the board re-read (1.3); the budget, threshold and scope set |
-| R1 | tier 1 is done | 1.1 and 1.2: whether 2.1 and 2.3 run |
-| R2 | tier 2's branches are evaluated | 2.1's slope; 2.2's and 2.3's gains; the live Elo of the best weights; whether tier 3 runs |
-| R3a, R3b, R3c | the end of each stage of tier 3 | §7 |
+| R1 | tier 1 is done | 1.1 and 1.2: whether 2.1 and 2.2 run |
+| R2 | tier 2's branches are evaluated | 2.1's slope, 2.2's gain, the live Elo of the best weights; whether tier 3 runs |
+| R3a, R3b | the ends of tier 3's stage 1 and stage 2 | §7; R3b also decides whether stage 3 is put to the user |
 | R4 | the submission is on the board | the rank |
 
 **The threshold is the user's** (rule 3). Three candidates, with what each implies today:
 
 | Threshold | Rule at every reading point | What it implies with today's numbers |
 |---|---|---|
-| (a) The bar | stop when the measured live Elo plus the expected gain of what is left, with its evidence, is below Kumo-Tabular-Medium + 25 | B alone ends at R2 whatever 2.1 shows, since its best case is about +43 (+107 needed). Tier 3 runs only if 2.1 reads a slope that puts tier 3's forecast at the bar |
-| (b) +40 per tier | stop when a tier adds less than +40 live Elo measured (the size the user judged not worth runs on 2026-11-28) | 2.1 must show about the slope of Kumo's M → L step or more (+43 by that analogy); at the slope of its S → M step 2.1 shows +31, and the plan ends at R2 with about 230 H100-h spent |
-| (c) The resolution | stop when a tier's gain cannot be told from the noise: less than 20 live Elo, or a pooled G above 0.9944 | the most permissive: tier 3 runs if 2.1 shows anything resolvable |
+| (a) The bar | stop when the measured live Elo plus the scenario of what is left, with its kind of evidence stated, is below Kumo-Tabular-Medium + 25 | without tier 3 the plan ends at R2 whatever tier 2 shows, since 2.1's scenario is at most +43 (+132 needed with the margin). Tier 3 runs only if 2.1's measured slope puts tier 3's scenario at the bar |
+| (b) +40 per tier | stop when a tier adds less than +40 live Elo measured (the size the user judged not worth runs on 2026-11-28) | 2.1 has to show about the slope of Kumo's M → L step (+43 by that analogy); at the slope of its S → M step it shows +31, and the plan ends at R2 with about 240 H100-h spent |
+| (c) The resolution | stop when a tier's gain cannot be told from the noise: below the adoption rule of §7 | the most permissive: tier 3 runs if 2.1 is adopted |
 
 **Chosen threshold: the user sets** (§15).
 
-**Between the points** the plan goes back to the user with dropping the item as an option (rule 9) when an item's projected cost is more than 30% above this plan's, or when its expected gain falls: 1.2 reads the 250K stage 1 as flat, 2.1 reads no slope, or a re-read of the board moves the bar by more than the margin.
+**Between the points** the plan goes back to the user with dropping the item as an option (rule 9) when an item's projected cost is more than 30% above this plan's, or when its expected gain falls: 1.1 reads the 250K stage 1 as flat, 2.1 reads no slope, R3a reads the longer stage 1 as level, or a re-read of the board moves the bar by more than the margin.
 
-**Every status report begins with four lines** (rule 11): the live Elo and rank of the best weights so far against the bar; where the plan is expected to end, with the kind of evidence; the H100-h spent, counted from the job records; what is left of the plan and of the cap. A lower estimate of the plan's own budget is not reported as a result.
+**Every status report begins with four lines** (rule 11): the live Elo and rank of the best weights so far against the bar; where the plan is expected to end, with the kind of evidence (measured, scenario, unknown); the H100-h spent, counted from the job records; what is left of the plan and of the cap. A lower estimate of the plan's own budget is not reported as a result.
 
 ## 9. Costs and their bases
 
@@ -466,31 +472,43 @@ Kumo-Tabular-Medium's tables per task at TabSil's size: 500K / 40K / 12K steps a
 | A smoke run of 300 steps | about 0.5 on one GPU, about 3 on 8 H100 | measured (v2-experiment-results, phase 1B) |
 | TabArena-Lite, 3-split and the development suite, one set of weights | about 2.5 | measured (phase 1A) |
 | One TabArena-Lite run, one H100 | 0.31 | measured (v2-prior-task-results, "TabArena-Lite of the fine-tuned weights") |
+| 2,000 steps at batch 32 on one H100, tables of 400 to 2,048 rows | about 2.3 | measured: the closed plan's pilot (v2-prior-task-results, "Cost") |
+| #14's recipe at today's costs (the base of the compute multipliers of §4.3) | about 822 | 150K stage-1 steps at 4.0 and 10K stage-2 steps at micro batch 1 at 22.3 per 1K steps |
 
-Checks that cost under 1% of what they inform (rule 7): 1.1 before 2.3 (under 1%), 1.2 before 2.1 (1.3%, the nearest the check can be made), the smoke runs before 2.2 and 2.3, 3.0 before tier 3 (0.4%). None is skipped.
+| Plan | H100-h |
+|---|---|
+| Tiers 1 and 2 (1.1, 2.1, 2.2 with its control) | about 240 |
+| Tier 3A, without stage 3 | 1,650 to 1,900 |
+| Tier 3B, without stage 3 | 2,630 to 2,950 |
+| Stage 3, only if R3b calls for it | 1,020 to 1,200 more |
+| **Every item, with 3A, without stage 3** | **about 1,900 to 2,150** |
+| **Every item, with 3B, without stage 3** | **about 2,870 to 3,190** |
+| Stage 3 on top, with its timing job | 1,030 to 1,210 more |
+
+Checks that cost under 1% of what they inform (rule 7): 1.1 before 2.1 (1.3%, the nearest a check of a stage-1 checkpoint can be made), 2.2's first 100 steps as its smoke run, 3.0 before tier 3 (about 0.2%). None is skipped.
 
 ## 10. Order and code
 
-1. **Code, no GPU:** the conversion of the 250K checkpoint (1.2); the gradient-noise probe (1.1). 2.2 needs no code (a registered prior and an existing training option). 2.3 needs a head that predicts hidden cells from the row's in-context output and the column's summary, its loss and the masking, with tests and a review, before its smoke run.
+1. **Code, no GPU:** the conversion of the 250K checkpoint (1.1); the real-table corpus with its leakage check (1.2); a loader of real tables for the training script (2.2), with tests. 2.1 needs no code.
 2. **Tier 1.** Its items are independent and run together. Then R1.
-3. **Tier 2**, after R1: 2.1, and 2.2 if the user asked for it, side by side; 2.3 if R1 opened it. Then R2.
-4. **Tier 3**, after R2 and only if the user put it in scope: 3.0, then 3.1 to 3.3 in sequence, each read at its end. Then the submission.
+3. **Tier 2**, after R1: 2.1 and 2.2 side by side, each if R1 opened it. Then R2.
+4. **Tier 3**, after R2 and only if the user put it in scope: 3.0, then 3.1 and 3.2, each read at its end; 3.3 only if R3b calls for it and the user agrees. Then the submission.
 
-No run starts beside the step whose result bears on it (rule 8). The prior code of 2.2 and 2.3 goes to dev-v2. Nothing is adopted or released by the plan; every adoption is put to the user.
+No run starts beside the step whose result bears on it (rule 8). The code goes to dev-v2. Nothing is adopted or released by the plan; every adoption is put to the user.
 
 ## 11. The twelve rules
 
 | Rule of the retrospective | Where this plan meets it |
 |---|---|
 | 1. The approval question holds the expected gain in the user's unit next to the cost | §15: each question has the expected live Elo next to the H100-h; the tier table of the summary; §3's options |
-| 2. A tier that trains nothing; every tier states what it adds | tiers 0 and 1 train nothing; each row of the summary's tier table has "adds +X, evidence: …" |
+| 2. A tier that trains nothing; every tier states what it adds | tiers 0 and 1 train nothing; each row of the summary's tier table states what it adds over the tier below and the kind of that number: tier 3 adds +44 to +74 over 2.1 as a scenario |
 | 3. The gain below which the rest is not run, and the reading points, fixed before the first run | §8: the reading points and three candidate thresholds; the number is left to the user (§15) |
 | 4. A premise that the evidence speaks against goes back to the user first | §3: "the request assumes …; the evidence says …; options", with the compute lever priced |
-| 5. Expected effect, resolution and decision by outcome for every run; nothing adopted on "not worse" | §7: the three entries in every row. Candidates below the resolution of their run are listed and not run (§5.6, §6); 2.2 runs only by the user's choice, with the reason stated |
-| 6. Costs measured on the setup that runs; a timing job above 100 H100-h; a smoke run for a new prior or setup | §9: every cost names its run or is marked an estimate; 3.0 times stage 3 on one node before it is used; 2.2 and 2.3 have smoke runs |
-| 7. A check under 1% of the run it informs comes before the decision | §9, last paragraph |
-| 8. No run beside the phase whose result bears on it | §10. 2.1 bears on tier 3, so tier 3 waits for R2 |
-| 9. A cost above 130% or a falling expected gain reopens the decision, with "drop" as an option | §8, "Between the points"; 2.1's and 3.0's decision entries |
+| 5. Expected effect, resolution and decision by outcome for every run; nothing adopted on "not worse" | §7: the three entries in every row and one adoption rule for all (G at most 0.9944 with its CI below 1, no task 0.5% worse, +20 live Elo). Candidates without a calibrated effect above a pair's resolution are listed and not run (§5.6, §6). 2.2's effect is unknown; it runs as a screen of about 10 H100-h behind a CPU check, and the summary says so. Stage 3 runs only where it could decide the rank |
+| 6. Costs measured on the setup that runs; a timing job above 100 H100-h; a smoke run for a new prior or setup | §9: every cost names its run or is marked an estimate. 2.1 and 3.2 run on measured setups; 3.0 smokes the continued stage 1 (3A); 2.2's first 100 steps are its smoke run; stage 3, if it runs, is timed on one node first |
+| 7. A check under 1% of the run it informs comes before the decision | §9, last paragraph: 1.1 before 2.1, 3.0 before tier 3 |
+| 8. No run beside the phase whose result bears on it | §10: 1.1 and 1.2 before tier 2; 2.1 bears on tier 3, so tier 3 waits for R2 |
+| 9. A cost above 130% or a falling expected gain reopens the decision, with "drop" as an option | §8, "Between the points"; the decision entries of 1.1, 2.1, 3.0 and R3a |
 | 10. "Recommended" only with its expected gain and not below the user's bar; every question has an option to stop | no option of this plan is marked recommended; every question of §15 has "stop" or "skip" |
 | 11. A status report begins with the outlook | §8, the four lines; this document starts with the outlook |
 | 12. A plan above 500 H100-h is read by an agent that did not write it | §14, dated before any run |
@@ -529,19 +547,54 @@ Not published, and so not used: the training compute of Causilo, LimiX-2, Seldon
 
 ## 14. Review
 
-Pending: rule 12's reading by an agent that did not write the plan is run on the draft pull request before it is marked ready, and recorded here with its date and what changed.
+Rule 12 asks for a reading by an agent that did not write the plan, before its first run, with one question: what is the expected gain, and is the cheapest way to it in the plan? On **2026-11-28** a Codex agent (the Codex plugin's rescue agent) read the draft of pull request #54 at commit `70798a6`. It was given the paths of the plan, of its sources in the pull request, of the retrospective's rules and of the findings, the question, and nothing else. It could run the gap script and the checks on a CPU and did. No run of this plan existed then or exists now. Its answer, as it gave it (lightly shortened):
+
+> **Verdict: the plan has reproducible arithmetic, but not a defensible top-five forecast or a demonstrated cheapest route.**
+>
+> **Expected gain.** The measured gain is already available: about +21 to +37 live Elo over v1.1, depending on the hicard seed. No new training is needed for it. #14 is 1816.9, rank 11, against Kumo-M's 1924.3 in the same fit; the gap is 107.4, or 132.4 with §1.4's 25-Elo margin. Item 2.1's 0–43 Elo is a conditional analogy, not a measured expectation. Tier 3's +94–147 is a scenario, not an evidence-supported range. Kumo's comparisons change parameters as well as training, while TabSil's proposed size stays fixed. A zero gain remains plausible. The evidence gives no expected value and no probability of reaching fifth.
+>
+> **Numbers.** Reproduced: the baseline; §4.3's transplants (+96/+115/+199, tuning +31/+16); the property-gap tables; the +37.6 single-insertion gain and the 4.5 from the four named datasets; the crowd statistics (35.4%/52.4%); the seed log-ratio sd (0.00953); §4.2's noise table; the reduction (0.728% overall, 1.256% binary). All s11a–s11g checks pass; they validate their toy calculations, not their transport to TabSil. Formulations §11.5's 28–91 Elo per doubling uses the old 40 Elo per 1% conversion, not live Elo; it is neither a live-Elo estimate nor a proven upper bound, and matching prior validation loss does not establish matching real-data error. §4.3's +27–58 are conditional "match Kumo-M" scenarios, not bounds on a prior's possible gain. §§5.1–5.2 read unresolved or different-stage results as zero expected gain. YCTX's 0–30 has no reproducible stage-2 calibration. Item 1.1 does not justify item 2.3's gate: high within-table variance alone does not show that training is noise-limited, and auxiliary representation learning can help independently of that ratio. Ten synthetic draws all succeeding at G ≈ 0.985 give no reliable success probability.
+>
+> **Cheaper routes and rules.** §7 mentions continuing the existing 250K checkpoint but does not compare it properly; it would save about 975 H100-h against restarting at 500K. Stage 3 costs 1,020–1,200 H100-h, TabSil's measured effect there is G = 1.000 and another model's ceiling is 23 Elo, roughly the stated 20-Elo resolution; I would omit it by default unless the forecast becomes resolvable. The real-table continuation (under 20 GPU-hours, reported AUC 0.929 → 0.932) needs a leakage and corpus feasibility gate before the 223-hour unresolved YCTX branch. A small >8-member / checkpoint-ensemble screen should be priced before option D's 65–500-hour search. Rule 2 is unmet: tier 3 reports its gain over #14, not its increment over tier 2. Rule 5 is unmet by optional 2.2 and by the uncalibrated 2.3 and 3.3. No explicit "not worse" adoption, but R3c should spell out its superiority test. Rule 6 remains conditional: timing and smoke gates must price the actual modified setups. Rule 12 is still pending in §14. The maximum listed branches total about 4,510 H100-h before tier 1, more than §15's 4,300.
+>
+> **Required changes.** Separate measured gains, conditional scenarios and unknowns, in live Elo throughout. Compare continuation, no stage 3, and the cheap inference and real-data screens explicitly. Remove unresolved branches, or give them resolvable forecasts and exact adoption rules. Correct the incremental gains and the budget, record this review, and get the user's threshold before launch.
+
+What changed after it (the review read the draft as it stood before these changes, so its numbers are the draft's):
+
+| Point of the review | Change |
+|---|---|
+| Scenarios were written as expectations | Every gain above tier 0 is labeled measured, scenario by analogy, or unknown, in the summary, §3, §4.3 and §7. The summary says that the evidence gives no expected value and no probability of rank 5, and that zero is plausible |
+| §11.5's 28 to 91 Elo per doubling used the old conversion | Formulations §11.5 now gives live Elo by the share analogy, +46 to +72 per doubling (`whatif_share.csv`, a new output of `gap_report.py`), and calls the equivalence an assumption, not a bound |
+| §4.3's property results are scenarios, not bounds | Said so in §3 and §4.3, with the best-top-5 column next to Kumo-M's |
+| Unmeasured parts read as 0 | §5.1 and §5.2 mark them unknown; YCTX is unknown with no stage-2 calibration |
+| The gradient-noise item did not justify the masked-cell gate | Both left the tiers. The masked-cell branch is listed for the user's request (§6, §15) |
+| Ten draws are no probability | §4.2 says "in all 10 draws", an illustration of a noise model |
+| The continuation was not compared | Tier 3 has 3A, continued from the 250K stage 1 (1,650 to 1,900 H100-h, 8.5 to 9.5 days), next to 3B, anew (2,630 to 2,950, 13.5 to 14.5 days), read alike at R3a |
+| Stage 3 by default | Off by default; it runs only if R3b's result is within Kumo's reported stage-3 gain (23) of the bar, after a timing job |
+| A real-table screen before a YCTX branch | Items 1.2 (the corpus and its leakage check, CPU) and 2.2 (about 10 H100-h with its same-steps control) are in the tiers; the YCTX branch left them |
+| A cheap member and checkpoint-ensemble screen before option D | Option D now starts with it (about 2 H100-h, at most about +11 expected from the measured 4 → 8 member step); it stays outside the tiers, below a pair's resolution |
+| Rule 2: tier 3's increment | The summary's tier table gives +44 to +74 over 2.1 (scenario) |
+| Rule 5 and R3c | One adoption rule for every run (§7); no optional branch is left in the tiers without its rule |
+| Rule 6 | Each first use of a setup has its smoke or timing step named (3.0, 2.2's first 100 steps, stage 3's timing job) |
+| The budget | Recomputed: about 1,900 to 2,150 H100-h for every item with 3A, 2,870 to 3,190 with 3B; stage 3 on top 1,030 to 1,210 |
+| The user's threshold before launch | §15; asked in the chat; left blank here until answered |
+
+Not changed:
+
+| Point of the review | Why not |
+|---|---|
+| The analogy scenarios as such | They are the only quantitative link from compute to the live rank in the records. Without them the compute option would go to the user unpriced, which is the retrospective's first cause. They are kept, labeled as scenarios, with zero named as plausible |
 
 ## 15. For the user to decide
 
-Every question has its expected gain next to its cost, an option to stop, and no option marked recommended (rules 1 and 10).
+Every question has its gain next to its cost with the kind of that number, an option to stop, and no option marked recommended (rules 1 and 10).
 
-1. **Whether the compute lever is in scope.** In scope: tier 3 runs after R2 if 2.1 reads a slope: +94 to +147 live Elo by analogy (rank 4 to 6) for 3,640 to 3,830 H100-h and 19 to 20 days (2,630 and 13.5 days without stage 3). Not in scope: the plan ends at R2, with at most about +43 from 2.1 for about 230 H100-h. Or stop now: #14's weights at rank 11, 0 H100-h. **The user sets.**
-2. **The budget cap.** About 4 (tier 1 only), about 230 (tiers 1 and 2.1), about 680 (with 2.2 and 2.3), or about 3,900 to 4,300 (with tier 3), or 0. **The user sets.**
+1. **Whether the compute lever is in scope.** In scope: item 2.1 (225 H100-h; scenario +31 to +43), and tier 3 if 2.1 reads a slope: 3A 1,650 to 1,900 H100-h and 8.5 to 9.5 days, or 3B 2,630 to 2,950 and 13.5 to 14.5 days; scenario +75 to +117 over #14 (rank 5 or 6), zero plausible. Not in scope: the plan ends at R2 with 2.1 and 2.2 at most. Or stop now: #14's weights at rank 11, 0 H100-h. **The user sets.**
+2. **The budget cap.** 0; about 13 (tier 1 and the real-table screen 2.2); about 240 (tiers 1 and 2); about 2,150 (with 3A); about 3,190 (with 3B); stage 3 on top about 1,200. **The user sets.**
 3. **The stop threshold** of §8: the bar, +40 per tier, the resolution, or another number. **The user sets.**
 4. **The margin above Kumo-Tabular-Medium** for the bar: 25 live Elo in this plan, about the difference between two seeds. **The user sets.**
-5. **Item 2.2**, the prior-and-task branch the request asked for: +0 to about +30 for 223 H100-h, at the resolution of one pair, so outside the tiers unless the user asks for it.
-6. **Option D**, a tuned + ensembled entry: +16 to +31 by analogy for about 65 to 500 H100-h, a different kind of entry. Not planned unless the user asks.
-7. **Open from before:** whether #14's weights are released or submitted (v2-experiment-plan, phase 5).
+5. **Outside the tiers, on request only:** the YCTX branch (225 H100-h, unknown); the masked-cell branch (code, a smoke run, 225 H100-h, unknown); option D (a screen of about 2 H100-h, at most about +11 expected; then a search of 65 to 500 H100-h, +16 to +31 by analogy, a different kind of entry).
+6. **Open from before:** whether #14's weights are released or submitted (v2-experiment-plan, phase 5).
 
 ## Appendix: the 51 datasets
 

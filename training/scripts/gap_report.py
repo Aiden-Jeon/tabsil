@@ -148,6 +148,22 @@ TRANSPLANTS = (
     ),
     ("TabPFNv2 (default)", "TabPFNv2 (tuned + ensemble)", "TabPFNv2 default -> tuned + ensemble"),
 )
+# - a share of a Kumo-Tabular step (its per-dataset log ratios times the share), for a compute
+#   multiplier m over the run's recipe: share = log m / log (the step's compute ratio), the power
+#   law in compute (v2-task-formulations.md §11.5). The multipliers are v2-top5-plan.md's, from the
+#   costs of its §9 at today's prices against #14's recipe (150K stage-1 and 10K stage-2 steps,
+#   about 822 H100-h): 2.1 (250K stage-1 steps, the same stage 2) 1.49; one doubling 2; tier 3
+#   without stage 3 (500K / 40K steps) 3.17 to 3.29. (label, before, after, compute ratio)
+KUMO_STEPS = (
+    ("Kumo-Tabular S -> M", "Kumo-Tabular-Small (default)", "Kumo-Tabular-Medium (default)", 4.57),
+    ("Kumo-Tabular M -> L", "Kumo-Tabular-Medium (default)", "Kumo-Tabular (default)", 3.22),
+)
+COMPUTE_MULTIPLIERS = (
+    ("2.1", 1.49),
+    ("one doubling", 2.0),
+    ("tier 3 low", 3.17),
+    ("tier 3 high", 3.29),
+)
 # - on the datasets of a property bucket where the run is behind Kumo-Tabular-Medium, a share of
 #   the log gap closed (1: Kumo-Tabular-Medium's error), or the best top-5 error
 CLOSE_FRACTIONS = (0.25, 0.5, 1.0)
@@ -637,6 +653,32 @@ def transplant_whatif(pool: pd.DataFrame, errors: pd.DataFrame, name: str, pairs
     return pd.DataFrame(rows)
 
 
+def share_whatif(pool, errors, name, steps=KUMO_STEPS, multipliers=COMPUTE_MULTIPLIERS):
+    """`name`'s errors times a share of each Kumo step's per-dataset ratios, the share set by a
+    compute multiplier over the run's recipe (a scenario by analogy, not a forecast)."""
+    base, _ = pool_elo(pool)
+    rows = []
+    for label, before, after, ratio in steps:
+        if before not in errors.index or after not in errors.index:
+            continue
+        log_ratio = np.log(errors.loc[after] / errors.loc[before])
+        for run, multiplier in multipliers:
+            share = math.log(multiplier) / math.log(ratio)
+            elo, rank = pool_elo(scaled(pool, name, np.exp(share * log_ratio)))
+            rows.append(
+                {
+                    "step": label,
+                    "run": run,
+                    "compute multiplier": multiplier,
+                    "share of the step": share,
+                    "G": float(np.exp(share * log_ratio.mean())),
+                    "elo gain": float(elo[name] - base[name]),
+                    "rank": int(rank[name]),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def close_gap(run: pd.Series, target: pd.Series, mask: pd.Series, fraction: float) -> pd.Series:
     """`run` with a `fraction` of its log gap to `target` closed on the datasets in `mask` where
     it is behind (fraction 1: the target's error there)."""
@@ -958,6 +1000,7 @@ def main(argv: list[str] | None = None) -> None:
         planning["crowd"] = crowd(pool, primary, exclude=list(runs))
         planning["noise"] = noise_whatif(pool, primary)
         planning["transplant"] = transplant_whatif(pool, board, primary)
+        planning["share"] = share_whatif(pool, board, primary)
         planning["buckets"] = bucket_whatif(
             pool, primary, buckets, pool.loc[kumo_name], best_filled
         )
@@ -1088,6 +1131,11 @@ def write_planning(out_dir: Path, planning: dict, primary: str, runs: list[str])
         ),
         "transplant": (
             f"Another entrant's change, dataset by dataset, applied to {primary} (an analogy):",
+            ".3f",
+        ),
+        "share": (
+            f"A share of a Kumo-Tabular step applied to {primary}, set by a compute multiplier "
+            "over its recipe (a scenario by analogy):",
             ".3f",
         ),
         "buckets": (
