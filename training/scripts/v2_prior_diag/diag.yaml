@@ -5,6 +5,9 @@
 # From the repository root:
 #   databricks air run -f training/scripts/v2_prior_diag/diag.yaml --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR
 # One diagnostic: --override "env_variables.DIAG_ARGS=d3_contamination"
+# Other weights: --override "env_variables.DIAG_MODEL=runs:/<MLflow run id>/model/final.pt"
+# The diagnostics that are not run by default (README.md) are named in DIAG_ARGS; those that read
+# benchmark data (d4_missing, fev_arms, adbench_arms) use arms.yaml.
 experiment_name: tabsil
 mlflow_run_name: tabsil-v2-prior-diag
 environment:
@@ -18,11 +21,12 @@ compute:
 code_source:
   type: snapshot
   snapshot:
-    # the tabsil package (imported through PYTHONPATH) and this folder, relative to the
-    # repository root
+    # the two packages (imported through PYTHONPATH; tabsil-train loads weights given as
+    # runs:/ or hf://) and this folder, relative to the repository root
     root_path: ../../..
     include_paths:
       - src
+      - training/src
       - training/scripts/v2_prior_diag
 env_variables:
   DIAG_OUT: /tmp/v2_prior_diag
@@ -30,8 +34,11 @@ env_variables:
   DIAG_MODEL: aiden-jeon/tabsil@v1.1
   DIAG_TIMEOUT: "1500"  # seconds per diagnostic
   DIAG_ARGS: ""
+  # arms of d1_forecast and d3_contamination (arms.py); the defaults are those of the first report
+  D1_ARMS: default,plain
+  D3_ARMS: density
 max_retries: 0
 timeout_minutes: 60
 command: >-
-  PYTHONPATH=$CODE_SOURCE_PATH/src
+  PYTHONPATH=$CODE_SOURCE_PATH/src:$CODE_SOURCE_PATH/training/src
   python $CODE_SOURCE_PATH/training/scripts/v2_prior_diag/run_all.py $DIAG_ARGS

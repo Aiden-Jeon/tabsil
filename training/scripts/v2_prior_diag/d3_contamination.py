@@ -11,6 +11,12 @@ Outlier kinds (`D3_KINDS`, comma-separated):
 Context contamination 0, 2, 5, 10, 20% of 600 rows. Test: 300 inliers + 30 outliers of the same
 kind. Reported: AUROC of TabSil (-log density, 3 column orders) and of IsolationForest, and the
 mean log density of the test inliers and outliers.
+
+`D3_ARMS` (comma-separated scorer names of `arms.outlier_scorers`, default `density`) adds other
+scores of the same rows: the density under small random contexts, the probability of a
+reference-row class, and the density after the highest-scoring context rows are dropped. With
+`density` the file of the first report is written (`d3_contamination.csv`); every arm's AUROC and
+mean score of the test inliers and outliers go to `d3_contamination_arms.csv`.
 """
 
 from __future__ import annotations
@@ -21,16 +27,17 @@ import time
 
 import numpy as np
 import pandas as pd
+from arms import outlier_scorers
 from common import DEVICE, OUT, load_model
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import roc_auc_score
-
-from tabsil import TabSilUnsupervised
 
 D, N_CTX, N_IN, N_OUT = 6, 600, 300, 30
 SEEDS = range(3)
 FRACTIONS = (0.0, 0.02, 0.05, 0.1, 0.2)
 KINDS = os.environ.get("D3_KINDS", "global,local,cluster,curve").split(",")
+ARMS = [a.strip() for a in os.environ.get("D3_ARMS", "density").split(",") if a.strip()]
+N_PERMUTATIONS = 3
 
 
 def inliers(n, rng, W1, W2):
@@ -60,48 +67,79 @@ def outliers(kind, n, rng, ref, center_rng):
     raise ValueError(kind)
 
 
+def tables(kind: str, frac: float, seed: int):
+    """(context rows, test rows, test labels) of one cell."""
+    rng = np.random.default_rng(seed)
+    W1, W2 = rng.normal(size=(2, 4)), rng.normal(size=(4, D))
+    ref = inliers(5000, np.random.default_rng(100 + seed), W1, W2)
+    # draw order: context inliers, context outliers, shuffle, test inliers, test
+    # outliers (the order of the reported run)
+    n_bad = int(round(frac * N_CTX))
+    ctx_good = inliers(N_CTX - n_bad, rng, W1, W2)
+    ctx_bad = outliers(kind, n_bad, rng, ref, np.random.default_rng(200 + seed))
+    ctx = np.vstack([ctx_good, ctx_bad])
+    ctx = ctx[rng.permutation(len(ctx))]
+    test_good = inliers(N_IN, rng, W1, W2)
+    test_bad = outliers(kind, N_OUT, rng, ref, np.random.default_rng(200 + seed))
+    return ctx, np.vstack([test_good, test_bad]), np.r_[np.zeros(N_IN), np.ones(N_OUT)]
+
+
 def main() -> None:
     weights, borders = load_model()
-    rows = []
+    scorers = outlier_scorers(weights, borders, DEVICE, n_permutations=N_PERMUTATIONS)
+    unknown = sorted(set(ARMS) - set(scorers))
+    if unknown:
+        sys.exit(f"unknown D3_ARMS {unknown}; choose from {list(scorers)}")
+    rows, arm_rows = [], []
     t0 = time.time()
     for kind in KINDS:
         for frac in FRACTIONS:
             for seed in SEEDS:
-                rng = np.random.default_rng(seed)
-                W1, W2 = rng.normal(size=(2, 4)), rng.normal(size=(4, D))
-                ref = inliers(5000, np.random.default_rng(100 + seed), W1, W2)
-                # draw order: context inliers, context outliers, shuffle, test inliers, test
-                # outliers (the order of the reported run)
-                n_bad = int(round(frac * N_CTX))
-                ctx_good = inliers(N_CTX - n_bad, rng, W1, W2)
-                ctx_bad = outliers(kind, n_bad, rng, ref, np.random.default_rng(200 + seed))
-                ctx = np.vstack([ctx_good, ctx_bad])
-                ctx = ctx[rng.permutation(len(ctx))]
-                test_good = inliers(N_IN, rng, W1, W2)
-                test_bad = outliers(kind, N_OUT, rng, ref, np.random.default_rng(200 + seed))
-                test = np.vstack([test_good, test_bad])
-                lab = np.r_[np.zeros(N_IN), np.ones(N_OUT)]
-                scorer = TabSilUnsupervised(
-                    weights, borders, device=DEVICE, n_permutations=3, random_state=seed
-                )
-                ld = scorer.fit(ctx).log_density(test)
-                iso = IsolationForest(random_state=seed).fit(ctx)
-                rows.append(
-                    dict(
-                        kind=kind,
-                        frac=frac,
-                        seed=seed,
-                        auroc_tabsil=roc_auc_score(lab, -ld),
-                        auroc_iforest=roc_auc_score(lab, -iso.score_samples(test)),
-                        inlier_logdens=ld[:N_IN].mean(),
-                        outlier_logdens=ld[N_IN:].mean(),
-                    )
-                )
+                ctx, test, lab = tables(kind, frac, seed)
+                for name in ARMS:
+                    t1 = time.time()
+                    scores = scorers[name](ctx, test, seed)
+                    seconds = time.time() - t1
+                    for arm, s in scores.items():
+                        arm_rows.append(
+                            dict(
+                                kind=kind,
+                                frac=frac,
+                                seed=seed,
+                                arm=arm,
+                                auroc=roc_auc_score(lab, s),
+                                inlier_score=s[:N_IN].mean(),
+                                outlier_score=s[N_IN:].mean(),
+                                seconds=seconds,
+                            )
+                        )
+                    if name == "density":
+                        ld = -scores["density"]
+                        iso = IsolationForest(random_state=seed).fit(ctx)
+                        rows.append(
+                            dict(
+                                kind=kind,
+                                frac=frac,
+                                seed=seed,
+                                auroc_tabsil=roc_auc_score(lab, -ld),
+                                auroc_iforest=roc_auc_score(lab, -iso.score_samples(test)),
+                                inlier_logdens=ld[:N_IN].mean(),
+                                outlier_logdens=ld[N_IN:].mean(),
+                            )
+                        )
             print(f"{kind} {frac} done {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
-    df = pd.DataFrame(rows)
-    df.to_csv(os.path.join(OUT, "d3_contamination.csv"), index=False)
-    summary = df.groupby(["kind", "frac"]).mean(numeric_only=True).drop(columns="seed")
-    print(summary.round(3).to_string())
+            # progress so far, so that a timeout keeps the finished cells
+            pd.DataFrame(arm_rows).to_csv(
+                os.path.join(OUT, "d3_contamination_arms.csv"), index=False
+            )
+    if rows:
+        df = pd.DataFrame(rows)
+        df.to_csv(os.path.join(OUT, "d3_contamination.csv"), index=False)
+        summary = df.groupby(["kind", "frac"]).mean(numeric_only=True).drop(columns="seed")
+        print(summary.round(3).to_string())
+    arms = pd.DataFrame(arm_rows)
+    wide = arms.pivot_table(index=["kind", "frac"], columns="arm", values="auroc", sort=False)
+    print(f"\nAUROC by arm (mean of {len(SEEDS)} seeds)\n{wide.round(3).to_string()}")
 
 
 if __name__ == "__main__":

@@ -16,12 +16,25 @@ os.makedirs(OUT, exist_ok=True)
 MODEL = os.environ.get("DIAG_MODEL", "aiden-jeon/tabsil@v1.1")
 
 
+# `MODEL` specs that the training package's loader reads (`tabsil_train.hub.load_model`)
+TRAINING_SPECS = ("runs:/", "hf://")
+
+
 @functools.cache
 def load_model() -> tuple[torch.nn.Module, torch.Tensor]:
-    """(model, regression borders) of `MODEL`, loaded once per process."""
-    from tabsil.hub import model_or_pretrained
+    """(model, regression borders) of `MODEL`, loaded once per process. `MODEL` is a Hub repo id
+    or a local folder (`tabsil.hub`), or a file a training run logged to MLflow
+    (`runs:/<run id>/model/final.pt`), a Hub repo as `hf://owner/name@revision` or a `.pt` file:
+    those go through `tabsil_train.hub.load_model`, which needs `training/src` on the path. A
+    download is kept under `OUT/checkpoints` and reused by the next diagnostic of the job."""
+    if MODEL.startswith(TRAINING_SPECS) or MODEL.endswith(".pt"):
+        from tabsil_train.hub import load_model as load_spec
 
-    model, borders = model_or_pretrained(MODEL, MODEL, "regression")
+        model, borders = load_spec(MODEL, "regression", os.path.join(OUT, "checkpoints"))
+    else:
+        from tabsil.hub import model_or_pretrained
+
+        model, borders = model_or_pretrained(MODEL, MODEL, "regression")
     if "classification" not in model.tasks:
         raise ValueError(f"{MODEL} does not serve classification")
     return model, borders

@@ -9,14 +9,18 @@ the trend's rise over the horizon in units of the noise sd (0 = control). Metric
 - the largest forecast minus the largest context value (the summary also gives its maximum over
   seeds)
 
-Two inference arms (`ARMS`) separate the model from the 0.1.1 inference recipe, which can also
-keep forecasts inside the context range: the target-power members clip their distribution to the
-train target range (`_clipped_inverse` in `tabsil.inference.ensemble`), and the "quantile" and
-"robust" feature kinds saturate a running index beyond the train rows.
+The inference arms (`D1_ARMS`, comma-separated names of `arms.FORECAST_ARMS`, each optionally
+with `+trend`) separate the model from the 0.1.1 inference recipe, which can also keep forecasts
+inside the context range: the target-power members clip their distribution to the train target
+range (`_clipped_inverse` in `tabsil.inference.ensemble`), and the "quantile" and "robust" feature
+kinds saturate a running index beyond the train rows. The two arms of the first report are the
+default:
 - default: the weights' saved inference settings (0.1.1: 8 members, numeric-cycle kinds, half of
   them with the target power transform)
 - plain: 2 members, both "standard" and without the target power transform (members 0 and 1 of
   the default cycle), so nothing in the recipe bounds the forecast
+`arms.py` has the others: the two changes one at a time with 8 members, and a straight-line trend
+fitted outside the model.
 """
 
 from __future__ import annotations
@@ -27,13 +31,14 @@ import time
 
 import numpy as np
 import pandas as pd
+from arms import ArmForecaster
 from common import DEVICE, OUT, load_model
 
 from tabsil import TabSilForecaster
 
 L, H = 365, 56
 SEEDS = range(4)
-ARMS = {"default": {}, "plain": {"n_estimators": 2, "member_kinds": ("standard",)}}
+ARMS = [a.strip() for a in os.environ.get("D1_ARMS", "default,plain").split(",") if a.strip()]
 
 
 def series(kind: str, strength: float, rng):
@@ -62,8 +67,8 @@ def design(t):
 
 def main() -> None:
     model, borders = load_model()
-    for arm, kwargs in ARMS.items():
-        run_arm(arm, TabSilForecaster(model, borders, device=DEVICE, **kwargs))
+    for arm in ARMS:
+        run_arm(arm, ArmForecaster(model, borders, arm, device=DEVICE))
 
 
 def run_arm(arm: str, fc: TabSilForecaster) -> None:

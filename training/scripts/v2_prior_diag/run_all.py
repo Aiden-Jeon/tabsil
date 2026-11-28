@@ -1,8 +1,9 @@
-"""Run the v2 prior diagnostics (all three, or the names given) one after another and log each
-one's outputs (`DIAG_OUT`: CSV, stdout, stderr) under `diag/` of the MLflow run (the platform's
-run, `MLFLOW_RUN_ID`, on AI Runtime) as soon as it ends, so a later failure or the job timeout does
-not lose them. Each diagnostic gets at most `DIAG_TIMEOUT` seconds. A failed diagnostic does not
-stop the others, but the script exits non-zero at the end."""
+"""Run the v2 prior diagnostics (the three of `DEFAULT`, or the names given) one after another and
+log each one's outputs (`DIAG_OUT`: CSV, stdout, stderr) under `diag/` of the MLflow run (the
+platform's run, `MLFLOW_RUN_ID`, on AI Runtime) as soon as it ends, so a later failure or the job
+timeout does not lose them. Each diagnostic gets at most `DIAG_TIMEOUT` seconds. A failed
+diagnostic does not stop the others, but the script exits non-zero at the end. The settings that
+the diagnostics read from the environment (`SETTINGS`) are logged as parameters."""
 
 from __future__ import annotations
 
@@ -14,7 +15,12 @@ from pathlib import Path
 import mlflow
 
 HERE = Path(__file__).resolve().parent
-DIAGNOSTICS = ("d1_forecast", "d2_calibration", "d3_contamination")
+DEFAULT = ("d1_forecast", "d2_calibration", "d3_contamination")
+DIAGNOSTICS = (*DEFAULT, "d2_rare_class", "d4_missing", "d5_overlap", "fev_arms", "adbench_arms")
+SETTINGS = (
+    "D1_ARMS", "D3_ARMS", "D3_KINDS", "D4_PARTS", "D4_TABLES", "D4_BASELINES", "FEV_ARM",
+    "FEV_TASKS", "FEV_WINDOWS", "ADBENCH_ARMS", "ADBENCH_DATASETS",
+)  # fmt: skip
 
 
 def run(name: str, out_dir: Path, timeout: float) -> int:
@@ -44,7 +50,11 @@ def main(names: list[str]) -> None:
     failed = []
     with mlflow.start_run(run_id=os.environ.get("MLFLOW_RUN_ID")):
         mlflow.log_params(
-            {"diagnostics": ",".join(names), "model": os.environ.get("DIAG_MODEL", "default")}
+            {
+                "diagnostics": ",".join(names),
+                "model": os.environ.get("DIAG_MODEL", "default"),
+                **{k: os.environ[k] for k in SETTINGS if os.environ.get(k)},
+            }
         )
         for name in names:
             if run(name, out_dir, timeout):
@@ -56,4 +66,4 @@ def main(names: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or list(DIAGNOSTICS))
+    main(sys.argv[1:] or list(DEFAULT))

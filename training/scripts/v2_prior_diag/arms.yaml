@@ -1,0 +1,49 @@
+# The diagnostics of this folder that read benchmark data, on Databricks AI Runtime, 1x H100:
+# d4_missing (the imputation suite's tables), fev_arms (fev-bench with a forecast arm) and
+# adbench_arms (ADBench with outlier arms). DIAG_ARGS names the diagnostic; its settings are the
+# variables below (README.md in this folder). From the repository root:
+#   databricks air run -f training/scripts/v2_prior_diag/arms.yaml --override mlflow_experiment_directory=$MLFLOW_EXPERIMENT_DIR \
+#     --override "env_variables.DIAG_ARGS=fev_arms" --override "env_variables.FEV_ARM=plain8"
+# A quick check: --override "env_variables.FEV_TASKS=ecdc_ili" --override "env_variables.FEV_WINDOWS=2"
+experiment_name: tabsil
+mlflow_run_name: tabsil-v2-arms
+environment:
+  version: databricks_ai_v6
+  # as eval_fev.yaml (fev 0.10.0 needs datasets<5, which needs huggingface-hub<2) and
+  # eval_impute.yaml (openml brings liac-arff, the ARFF parser of the imputation tables)
+  dependencies:
+    - fev==0.10.0
+    - openml>=0.15
+    - huggingface-hub>=0.34
+    - scipy
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+code_source:
+  type: snapshot
+  snapshot:
+    # the two packages (imported through PYTHONPATH) and this folder, relative to the repository
+    # root
+    root_path: ../../..
+    include_paths:
+      - src
+      - training/src
+      - training/scripts/v2_prior_diag
+env_variables:
+  DIAG_OUT: /tmp/v2_prior_diag
+  DIAG_MODEL: aiden-jeon/tabsil@v1.1
+  DIAG_TIMEOUT: "13200"  # seconds per diagnostic, below the job's timeout
+  DIAG_ARGS: fev_arms
+  FEV_ARM: default
+  FEV_TASKS: ""
+  FEV_WINDOWS: ""
+  ADBENCH_ARMS: iforest
+  ADBENCH_DATASETS: ""
+  D4_PARTS: gaussian,suite
+  D4_TABLES: ""
+  D4_BASELINES: "0"
+max_retries: 0
+timeout_minutes: 240
+command: >-
+  PYTHONPATH=$CODE_SOURCE_PATH/src:$CODE_SOURCE_PATH/training/src
+  python $CODE_SOURCE_PATH/training/scripts/v2_prior_diag/run_all.py $DIAG_ARGS
