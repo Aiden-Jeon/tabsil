@@ -206,3 +206,17 @@ def test_the_split_what_if_takes_the_after_errors_on_the_named_datasets_only():
     ]
     assert table.loc[0, "elo gain over before"] == 0.0
     assert table.iloc[-1]["elo"] == pytest.approx(table.loc[1, "elo"])  # d2, d3 equal anyway
+
+
+def test_the_crowd_counts_the_top_entrants_within_a_relative_width():
+    pool = pd.DataFrame(
+        {"d0": [0.100, 0.1005, 0.15, 0.9], "d1": [0.200, 0.30, 0.2010, 0.9]},
+        index=["run", "a", "b", RF],
+    )
+    table = gap.crowd(pool, "run", top=2, widths=(0.01,))
+    # a is within 1% of the run on d0 only, b on d1 only: 2 of the 4 (dataset, entrant) pairs
+    assert table.loc[0, "share of pairs"] == pytest.approx(0.5)
+    assert (
+        gap.crowd(pool, "run", exclude=("a",), top=1, widths=(0.01,)).loc[0, "share of pairs"]
+        == 0.5
+    )

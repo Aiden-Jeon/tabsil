@@ -560,6 +560,23 @@ def reduction_to_rank(pool: pd.DataFrame, name: str, mask: pd.Series) -> float |
 # ---------------------------------------------------------------- output tables
 
 
+def crowd(
+    pool: pd.DataFrame, name: str, exclude=(), top: int = 15, widths=(0.01, 0.02)
+) -> pd.DataFrame:
+    """The share of (dataset, entrant) pairs, over the `top` board entrants with the highest Elo
+    (`name` and the other inserted runs in `exclude` left out), whose error is within each
+    relative width of `name`'s error on that dataset."""
+    elo, _ = pool_elo(pool)
+    skip = {name, *exclude}
+    others = [m for m in elo.sort_values(ascending=False).index if m not in skip][:top]
+    log_ratio = np.log(pool.loc[others] / pool.loc[name])
+    rows = [
+        {"entrants": top, "within": w, "share of pairs": float((log_ratio.abs() < w).mean().mean())}
+        for w in widths
+    ]
+    return pd.DataFrame(rows)
+
+
 def noise_whatif(
     pool: pd.DataFrame,
     name: str,
@@ -938,6 +955,7 @@ def main(argv: list[str] | None = None) -> None:
     if not args.no_planning:
         board = fill_missing(errors)
         best_filled = pool.loc[top5].min(axis=0)
+        planning["crowd"] = crowd(pool, primary, exclude=list(runs))
         planning["noise"] = noise_whatif(pool, primary)
         planning["transplant"] = transplant_whatif(pool, board, primary)
         planning["buckets"] = bucket_whatif(
@@ -1057,6 +1075,11 @@ def write_planning(out_dir: Path, planning: dict, primary: str, runs: list[str])
     for key, frame in planning.items():
         frame.to_csv(out_dir / f"whatif_{key}.csv", index=False, float_format="%.4f")
     sections = {
+        "crowd": (
+            f"How close the top entrants are to {primary}: the share of (dataset, entrant) pairs "
+            "within a relative error width:",
+            ".3f",
+        ),
         "noise": (
             f"Every row changes the errors of {primary} only and refits the live pool. A cut x of "
             "every error with per-dataset noise: log ratio = -x + sd * N(0, 1), "
