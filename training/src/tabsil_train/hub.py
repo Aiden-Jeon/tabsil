@@ -161,16 +161,25 @@ def weights_digest(model: nn.Module, borders: torch.Tensor | None = None) -> str
 
 
 def hub_init_checkpoint(spec: str, config: TrainConfig, path: Path) -> Path:
-    """The weights and regression borders of a Hub repo (`repo@revision`) or a local
-    `save_pretrained` folder, written to `path` as a `save_checkpoint` file for `init_from` and
+    """The weights and regression borders of a Hub repo (`repo@revision`), a local
+    `save_pretrained` folder, or such a folder logged to MLflow (`runs:/<run_id>/<folder>`, for
+    weights kept off the Hub), written to `path` as a `save_checkpoint` file for `init_from` and
     then checked against the config, so that a model that does not match stops the script before
-    the MLflow run is opened (the file stays at `path`)."""
+    the MLflow run is opened (the file stays at `path`).
+
+    A `runs:/` folder is downloaded next to `path`, into a folder of its own (`<path stem>_source`),
+    so that the processes of one node, which each pass their own `path`, never write one file."""
     # The checkpoint check belongs to the training loop. It is imported here, where a training run
     # starts from Hub weights, and not at the top: evaluation and the Hub upload import this module
     # to load models and must not load the training loop
     from tabsil_train.training.loop import check_checkpoint
 
-    model, borders = hub.from_pretrained(spec)
+    source = spec
+    if spec.startswith(RUNS_PREFIX):
+        source = download_artifact(spec, path.parent / f"{path.stem}_source")
+        if not source.is_dir():
+            raise SystemExit(f"--init-hub {spec} is not a save_pretrained folder")
+    model, borders = hub.from_pretrained(source)
     if borders is None:
         raise SystemExit(f"--init-hub {spec} has no regression borders")
     save_checkpoint(path, model, borders)
