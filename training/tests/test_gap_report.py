@@ -220,3 +220,26 @@ def test_the_crowd_counts_the_top_entrants_within_a_relative_width():
         gap.crowd(pool, "run", exclude=("a",), top=1, widths=(0.01,)).loc[0, "share of pairs"]
         == 0.5
     )
+
+
+def test_the_gate_is_the_first_scale_that_reaches_the_bar():
+    small, medium, large = (
+        "Kumo-Tabular-Small (default)",
+        "Kumo-Tabular-Medium (default)",
+        "Kumo-Tabular (default)",
+    )
+    rng = np.random.default_rng(2)
+    columns = [f"d{i}" for i in range(12)]
+    board = pd.DataFrame(
+        {c: [0.30, 0.26, 0.24, 0.40, 0.31] + list(rng.uniform(0.27, 0.35, 3)) for c in columns},
+        index=[small, medium, large, RF, "m4", "m5", "m6", "m7"],
+    )
+    board.loc[medium] = board.loc[small] * rng.uniform(0.8, 0.95, len(columns))
+    pool = pd.concat([board, (board.loc[[small]] * 1.02).rename(index={small: "run"})])
+    table = gap.gate_whatif(
+        pool, board, "run", steps=(("S -> M", small, medium, 4.57),), gate=(1.49, 3.23, (0.0,))
+    )
+    assert len(table) == 1
+    row = table.iloc[0]
+    assert row["scale of the step's slope"] > 0
+    assert row["2.1 then shows"] <= row["needed over the run"]

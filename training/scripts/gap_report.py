@@ -164,6 +164,10 @@ COMPUTE_MULTIPLIERS = (
     ("tier 3 low", 3.17),
     ("tier 3 high", 3.29),
 )
+# The R2 gate (v2-top5-plan.md §8): the live Elo that item 2.1 has to measure so that a Kumo step's
+# shape, scaled to that measurement, reaches the bar at tier 3's compute. (2.1's multiplier, tier
+# 3's multiplier, the margins above Kumo-Tabular-Medium)
+GATE = (1.49, 3.23, (0.0, 25.0))
 # - on the datasets of a property bucket where the run is behind Kumo-Tabular-Medium, a share of
 #   the log gap closed (1: Kumo-Tabular-Medium's error), or the best top-5 error
 CLOSE_FRACTIONS = (0.25, 0.5, 1.0)
@@ -679,6 +683,50 @@ def share_whatif(pool, errors, name, steps=KUMO_STEPS, multipliers=COMPUTE_MULTI
     return pd.DataFrame(rows)
 
 
+def gate_whatif(pool, errors, name, steps=KUMO_STEPS, gate=GATE, grid=0.02):
+    """For each Kumo step's shape and margin: the smallest scale k of the step's slope at which
+    tier 3's share reaches Kumo-Tabular-Medium + margin (a grid of `grid`, then bisection to 0.001;
+    Elo moves in steps as battles flip, so the first crossing is taken), and the gain item 2.1
+    then shows."""
+    base, _ = pool_elo(pool)
+    kumo = base[REFERENCES[KUMO_MEDIUM]]
+    m21, m3, margins = gate
+    rows = []
+    for label, before, after, ratio in steps:
+        if before not in errors.index or after not in errors.index:
+            continue
+        log_ratio = np.log(errors.loc[after] / errors.loc[before])
+
+        def gain(share, log_ratio=log_ratio):
+            elo, _ = pool_elo(scaled(pool, name, np.exp(share * log_ratio)))
+            return float(elo[name] - base[name])
+
+        s21, s3 = math.log(m21) / math.log(ratio), math.log(m3) / math.log(ratio)
+        for margin in margins:
+            target = kumo + margin - base[name]
+            low, high = 0.0, None
+            for k in np.arange(grid, 5.0 + grid, grid):
+                if gain(s3 * k) >= target:
+                    high = float(k)
+                    break
+                low = float(k)
+            if high is None:
+                continue
+            while high - low > 1e-3:
+                mid = (low + high) / 2
+                low, high = (low, mid) if gain(s3 * mid) >= target else (mid, high)
+            rows.append(
+                {
+                    "shape": label,
+                    "margin": margin,
+                    "needed over the run": target,
+                    "scale of the step's slope": high,
+                    "2.1 then shows": gain(s21 * high),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def close_gap(run: pd.Series, target: pd.Series, mask: pd.Series, fraction: float) -> pd.Series:
     """`run` with a `fraction` of its log gap to `target` closed on the datasets in `mask` where
     it is behind (fraction 1: the target's error there)."""
@@ -1001,6 +1049,7 @@ def main(argv: list[str] | None = None) -> None:
         planning["noise"] = noise_whatif(pool, primary)
         planning["transplant"] = transplant_whatif(pool, board, primary)
         planning["share"] = share_whatif(pool, board, primary)
+        planning["gate"] = gate_whatif(pool, board, primary)
         planning["buckets"] = bucket_whatif(
             pool, primary, buckets, pool.loc[kumo_name], best_filled
         )
@@ -1137,6 +1186,11 @@ def write_planning(out_dir: Path, planning: dict, primary: str, runs: list[str])
             f"A share of a Kumo-Tabular step applied to {primary}, set by a compute multiplier "
             "over its recipe (a scenario by analogy):",
             ".3f",
+        ),
+        "gate": (
+            f"The R2 gate: what item 2.1 has to show over {primary} so that a Kumo step's shape, "
+            "scaled to it, reaches the bar at tier 3's compute:",
+            ".2f",
         ),
         "buckets": (
             f"Gap closed on the datasets of a property bucket where {primary} is behind "
