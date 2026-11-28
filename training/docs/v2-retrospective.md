@@ -1,6 +1,6 @@
 # v2 retrospective
 
-Status: written on 2026-11-28, after the user stopped the v2 plan ([v2-experiment-plan.md](v2-experiment-plan.md) §7, decisions 12 and 13). It reviews that plan (2026-11-26), the two documents it replaced ([v2-task-priors.md](v2-task-priors.md), [v2-scaling.md](v2-scaling.md)), the redesign of 2026-11-27 and the execution, against [v2-experiment-results.md](v2-experiment-results.md). Nothing was trained or evaluated for it, and it proposes no new experiment. The phase-1B verdict is PR #49, which was open when this was written. The 1B numbers below are that PR's.
+Status: written on 2026-11-28, after the user stopped the v2 plan ([v2-experiment-plan.md](v2-experiment-plan.md) §7, decisions 12 and 13). It reviews that plan (2026-11-26), the two documents it replaced ([v2-task-priors.md](v2-task-priors.md), [v2-scaling.md](v2-scaling.md)), the redesign of 2026-11-27 and the execution, against [v2-experiment-results.md](v2-experiment-results.md). Nothing was trained or evaluated for it, and it proposes no new experiment. The phase-1B verdict is in the results ("Phase 1B", PR #49, merged on 2026-11-28), and the 1B numbers below are from there.
 
 The plan, every recommendation and the coordination of the runs were made by AI agents (Claude Code sessions). One session wrote the plan ("the planning session"). A second one dispatched the work to worker chats, supervised them and put the recommendations to the user ("the coordinating session"). This document reviews their judgment. The user's decisions are recorded as facts. It was written from the records by an agent that took no part in the plan.
 
@@ -149,7 +149,7 @@ What had been spent at the points where the course could change:
 | Stage-2 prior `graph_scm_hicard_missing` | 0.991, "medium" | Two seeds against `stage2-10k`, pooled: 0.992 (0.980-1.000). Development suite 0.996 (0.988-1.002). Without polish_companies_bankruptcy 0.997. Elo 1768 → 1788, 1808 on Lite and 1782 → 1787, 1804 on 3 splits | results, phase 1A |
 | Kumo's other stage-2 parts (R10) | no number | 1.003 (0.999-1.008) against the two hicard runs. Not adopted | results, phase 1A |
 | Stage-2 length (L20) | under 1%, "medium" | not measured | results, "L20" |
-| Target standardized with the train rows (YCTX) | "medium, not measured here" | 0.995 (0.990-1.000) against C's three seeds, pooled. Its two seeds disagree: 0.993 and 1.001 against the control seed of the same number. Not resolved | PR #49 (results, "Phase 1B") |
+| Target standardized with the train rows (YCTX) | "medium, not measured here" | 0.995 (0.990-1.000) against C's three seeds, pooled. Its two seeds disagree: 0.993 and 1.001 against the control seed of the same number. Not resolved | results, "Phase 1B" (PR #49) |
 | Kumo's optimizer split (OPTK) | "weak" | 1.003 (0.999-1.008) pooled, 1.007 on the development suite. Its reference classification loss is above all three C seeds at every validation step. Not resolved | PR #49 |
 | Every-stage prior parts (PS1) | "expected to be neutral" | not measured | — |
 | Model size | "medium that it matters, direction unknown" | not run. XS costs 0.66-0.83 of M per step, where the plan had 0.29 | results, "GPU cost" |
@@ -338,7 +338,7 @@ Each rule names what it comes from and how it is checked.
 
 ## Open at the end
 
-- **The 1B verdict** is PR #49, open and not merged when this was written. Its numbers are used above. If it changes before it is merged, the 1B rows here follow it.
+- **Left without an answer by the stop:** whether a longer stage 2 helps (L20), what PS1 does, and whether YCTX and OPTK combine (results, "L20" and "Phase 1B").
 - **The v2 candidate** is the weights of phase 1A. They have not been evaluated with the release protocol of phase 5, and whether they are released is not decided (plan §4, phase 5).
 - **L20's checkpoint of step 5,000** is in its MLflow run (`893293ed…`). No resume is planned.
 - **Not verified:** the bar the user would have set on 2026-11-26. The records show it only as the stop at +20 to +40 Elo. Of the worker chats, the questions to the user and the user's messages were read, and the rest through their PRs and their mails to the coordinating session.
