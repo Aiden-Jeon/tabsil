@@ -54,7 +54,7 @@ How to read it:
 | 13:45 | N10 starts on 32 H100, 37 minutes after the plan's commit, in the same minute as phase 0's first jobs | job records |
 | 13:46 | The user says GPU jobs need no approval each and are queued when capacity is short | coordinating session |
 
-Three v2 plans were written in eight hours, each by an agent and each checking the one before. The third was the first to be run. Nobody but its author had read it when stage-2 runs planned at 614 H100-h were approved on it.
+Three v2 plans were written in eight hours, each by an agent and each checking the one before. The third was the first to be run. The records show no review of it by anyone but its author before stage-2 runs planned at 614 H100-h were approved on it, 28 minutes after its commit.
 
 ### What the task prompt asked for
 
