@@ -555,7 +555,7 @@ the posterior predictive distribution of the cell given the visible cells of its
 
 ## 8. New task candidates
 
-A candidate is listed with what it is, whether it can be put as classification or regression tables, a public benchmark, and earlier work with prior-fitted networks. The last column is the kind of change by the short derivations below. Sources marked † were read for this document; the others were read by a subagent and are not verified.
+On 2026-11-28 the user chose the four tasks of sections 3 to 6 for the plan and added no new task, so the candidates below stay at their short derivations. A candidate is listed with what it is, whether it can be put as classification or regression tables, a public benchmark, and earlier work with prior-fitted networks. The last column is the kind of change by the short derivations below. Sources marked † were read for this document; the others were read by a subagent and are not verified.
 
 | Candidate | As classification or regression tables | Benchmark | Earlier work | Kind of change |
 |---|---|---|---|---|
